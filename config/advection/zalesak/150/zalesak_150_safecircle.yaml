@@ -1,0 +1,18 @@
+TEST:
+  FROM_TEMP: false
+  SAVE_NAME: zalesak_150_safecircle
+  SETTING: zalesak
+
+MESH:
+  GRID_SIZE: 100
+  RESOLUTION: 1.50
+
+GEOMS:
+  FACET_ALGO: safe_circle
+  THRESHOLD: 1.0e-10
+  DO_C0: false
+
+ADVECTION:
+  DO_ADVECT: true
+  DT: 0.01
+  T_TOTAL: 2

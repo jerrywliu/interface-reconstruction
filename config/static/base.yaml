@@ -1,0 +1,17 @@
+TEST:
+  FROM_TEMP: false
+  # SAVE_NAME: vortex_50_ccorner
+  # SETTING: vortex
+
+MESH:
+  GRID_SIZE: 100
+  # RESOLUTION: 0.50
+
+GEOMS:
+  # FACET_ALGO: circular+corner
+  THRESHOLD: 1.0e-10
+  DO_C0: false
+
+ADVECTION:
+  DO_ADVECT: false
+  
