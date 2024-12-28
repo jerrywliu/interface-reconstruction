@@ -17,3 +17,5 @@ Jerry Liu, jwl50@stanford.edu
 ```bash
 $ python3 run.py --config ${setting}_${resolution}_${algo}
 ```
+
+python3 run.py --config advection/zalesak/50/zalesak_50_linear
