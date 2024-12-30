@@ -1,10 +1,12 @@
 import os
 
+from main.structs.meshes.merge_mesh import MergeMesh
+
 from util.plotting.plt_utils import plotAreas, plotPartialAreas
 from util.plotting.vtk_utils import writePartialCells, writeFacets
 
 
-def runReconstruction(m, facet_algo, do_c0, iter, output_dirs):
+def runReconstruction(m: MergeMesh, facet_algo, do_c0, iter, output_dirs):
     """
     Run interface reconstruction based on specified algorithm.
 
@@ -45,7 +47,7 @@ def runReconstruction(m, facet_algo, do_c0, iter, output_dirs):
     return reconstructed_facets
 
 
-def _run_no_merge(m, facet_algo, iter, output_dirs):
+def _run_no_merge(m: MergeMesh, facet_algo, iter, output_dirs):
     """
     Run reconstruction for algorithms that operate on individual cells.
     These algorithms reconstruct interfaces without merging cells.
@@ -70,7 +72,7 @@ def _run_no_merge(m, facet_algo, iter, output_dirs):
     return [p.getFacet() for p in m.merged_polys.values()]
 
 
-def _run_with_merge(m, facet_algo, do_c0, iter, output_dirs):
+def _run_with_merge(m: MergeMesh, facet_algo, do_c0, iter, output_dirs):
     """
     Run reconstruction for algorithms that merge cells.
     These algorithms first merge neighboring cells, then fit interfaces.
