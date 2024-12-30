@@ -1,6 +1,7 @@
 TEST:
   FROM_TEMP: false
-  SAVE_NAME: line_lvira
+  # SAVE_NAME: line_lvira
+  SAVE_NAME: line_youngs
   SETTING: line
 
 MESH:
@@ -8,7 +9,8 @@ MESH:
   RESOLUTION: 0.5
 
 GEOMS:
-  FACET_ALGO: LVIRA
+  # FACET_ALGO: LVIRA
+  FACET_ALGO: Youngs
   THRESHOLD: 1.0e-10
   DO_C0: false
 

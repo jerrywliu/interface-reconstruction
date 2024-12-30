@@ -1,14 +1,3 @@
-# from main.structs.meshes.merge_mesh import MergeMesh
-# from util.config import read_yaml, override_yaml
-# from util.initialize_points import makeFineCartesianGrid
-# from util.initialize_areas import initializeAreas
-# from util.initialize_velocity import initializeVelocity
-# # from util.write_facets import writeFacets
-# from util.plot_plt import plotAreas, plotPartialAreas, plotInitialAreaCompare
-# from util.plot_vtk import writeMesh, writePartialCells, writeFacets
-# from util.util import writeToPickle, setupOutputDirs
-# from util.metrics import trueFinalAreas, L2ErrorFractions, LinfErrorFractions
-
 import argparse
 import os
 
@@ -107,6 +96,11 @@ def main(
             output_dirs=output_dirs,
             t_total=(t_total if do_advect else None),
         )
+
+        # Run initial reconstruction
+        print("Initial interface reconstruction")
+        reconstructed_facets = runReconstruction(m, facet_algo, do_c0, 0, output_dirs)
+
     else:
         print("Loading from checkpoint...")
         checkpoint_data = checkpointer.load_iteration(resume_iter)
@@ -114,10 +108,6 @@ def main(
             raise ValueError(f"No checkpoint found for iteration {resume_iter}")
         m = checkpoint_data["state"]
         config = checkpointer.load_config()
-
-    # Run initial reconstruction
-    print("Initial interface reconstruction")
-    reconstructed_facets = runReconstruction(m, facet_algo, do_c0, 0, output_dirs)
 
     # Run advection if enabled
     if do_advect:
