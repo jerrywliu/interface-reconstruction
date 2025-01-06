@@ -6,7 +6,9 @@ from util.plotting.plt_utils import plotAreas, plotPartialAreas
 from util.plotting.vtk_utils import writePartialCells, writeFacets
 
 
-def runReconstruction(m: MergeMesh, facet_algo, do_c0, iter, output_dirs):
+def runReconstruction(
+    m: MergeMesh, facet_algo, do_c0, iter, output_dirs, algo_kwargs=None
+):
     """
     Run interface reconstruction based on specified algorithm.
 
@@ -34,9 +36,13 @@ def runReconstruction(m: MergeMesh, facet_algo, do_c0, iter, output_dirs):
     plotPartialAreas(m, os.path.join(output_dirs["plt_partial"], f"{iter}.png"))
 
     if facet_algo in no_merge_algos:
-        reconstructed_facets = _run_no_merge(m, facet_algo, iter, output_dirs)
+        reconstructed_facets = _run_no_merge(
+            m, facet_algo, iter, output_dirs, algo_kwargs
+        )
     else:
-        reconstructed_facets = _run_with_merge(m, facet_algo, do_c0, iter, output_dirs)
+        reconstructed_facets = _run_with_merge(
+            m, facet_algo, do_c0, iter, output_dirs, algo_kwargs
+        )
 
     # Write final reconstructed facets
     writeFacets(
@@ -47,7 +53,7 @@ def runReconstruction(m: MergeMesh, facet_algo, do_c0, iter, output_dirs):
     return reconstructed_facets
 
 
-def _run_no_merge(m: MergeMesh, facet_algo, iter, output_dirs):
+def _run_no_merge(m: MergeMesh, facet_algo, iter, output_dirs, algo_kwargs=None):
     """
     Run reconstruction for algorithms that operate on individual cells.
     These algorithms reconstruct interfaces without merging cells.
@@ -62,7 +68,7 @@ def _run_no_merge(m: MergeMesh, facet_algo, iter, output_dirs):
     elif facet_algo == "LVIRA":
         m.runLVIRA()
     elif facet_algo == "safe_linear":
-        m.runSafeLinear()
+        m.runSafeLinear(**algo_kwargs)  #
     elif facet_algo == "safe_circle":
         m.runSafeCircle()
     elif facet_algo == "safe_linear_corner":
@@ -72,7 +78,9 @@ def _run_no_merge(m: MergeMesh, facet_algo, iter, output_dirs):
     return [p.getFacet() for p in m.merged_polys.values()]
 
 
-def _run_with_merge(m: MergeMesh, facet_algo, do_c0, iter, output_dirs):
+def _run_with_merge(
+    m: MergeMesh, facet_algo, do_c0, iter, output_dirs, algo_kwargs=None
+):
     """
     Run reconstruction for algorithms that merge cells.
     These algorithms first merge neighboring cells, then fit interfaces.

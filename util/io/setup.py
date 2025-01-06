@@ -26,6 +26,7 @@ def setupOutputDirs(save_name):
         "plt": os.path.join(base_dir, "plt"),
         "plt_areas": os.path.join(base_dir, "plt", "areas"),
         "plt_partial": os.path.join(base_dir, "plt", "partial_areas"),
+        "metrics": os.path.join(base_dir, "metrics"),
     }
 
     # Create all directories

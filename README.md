@@ -19,4 +19,4 @@ $ python3 run.py --config ${setting}_${resolution}_${algo}
 ```
 
 python3 run.py --config advection/zalesak/50/zalesak_50_linear
-python3 -m experiments.static.lines --config static/line --num_lines 10
+python3 -m experiments.static.lines --config static/line --num_lines 10 --facet_algo [Youngs/LVIRA/safe_linear] --save_name [line_youngs/line_lvira/line_safelinear]

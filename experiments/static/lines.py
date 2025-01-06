@@ -43,14 +43,18 @@ def main(
     # Generate lines with different slopes
     angles = np.linspace(0, 2 * np.pi, num_lines + 1)[:-1]
 
+    # Initialize mesh
+    print("Generating mesh...")
+    opoints = makeFineCartesianGrid(grid_size, resolution)
+    m = MergeMesh(opoints, threshold)
+    # Write it once
+    writeMesh(m, os.path.join(output_dirs["vtk"], f"mesh.vtk"))
+
     for i, angle in enumerate(angles):
         print(f"Processing line {i+1}/{num_lines}")
 
-        # Initialize mesh
-        print("Generating mesh...")
-        opoints = makeFineCartesianGrid(grid_size, resolution)
+        # Re-initialize mesh
         m = MergeMesh(opoints, threshold)
-        writeMesh(m, os.path.join(output_dirs["vtk"], f"mesh_line{i}.vtk"))
 
         # Calculate line endpoints
         x1, y1 = 50.2, 50.3
@@ -69,7 +73,16 @@ def main(
 
         # Run reconstruction
         print(f"Reconstructing line {i+1}")
-        reconstructed_facets = runReconstruction(m, facet_algo, do_c0, i, output_dirs)
+        reconstructed_facets = runReconstruction(
+            m,
+            facet_algo,
+            do_c0,
+            i,
+            output_dirs,
+            algo_kwargs={
+                "fit_1neighbor": True
+            },  # Fit 1-neighbor to handle boundary cells
+        )
 
         # Calculate Hausdorff distance
         # For each cell, calculate the true LinearFacet and compare with reconstructed
@@ -86,6 +99,10 @@ def main(
         print(
             f"Average Hausdorff distance for line {i+1}: {avg_hausdorff/cnt_hausdorff:.3f}"
         )
+
+        # Save metric to file
+        with open(os.path.join(output_dirs["metrics"], "hausdorff.txt"), "a") as f:
+            f.write(f"{avg_hausdorff/cnt_hausdorff}\n")
 
 
 if __name__ == "__main__":
