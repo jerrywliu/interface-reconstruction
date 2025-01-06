@@ -1,14 +1,14 @@
 TEST:
   FROM_TEMP: false
-  SAVE_NAME: line_youngs
-  SETTING: line
+  SAVE_NAME: circle_safecircle
+  SETTING: circle
 
 MESH:
   GRID_SIZE: 100
   RESOLUTION: 0.5
 
 GEOMS:
-  FACET_ALGO: Youngs
+  FACET_ALGO: safe_circle
   THRESHOLD: 1.0e-10
   DO_C0: false
 
