@@ -122,7 +122,7 @@ def main(
             do_c0=do_c0,
             output_dirs=output_dirs,
             checkpointer=checkpointer,
-            checkpoint_freq=50,  # TODO: make this a config setting
+            checkpoint_freq=300,  # TODO: make this a config setting
             resume_iter=resume_iter,
         )
 

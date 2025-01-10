@@ -1,11 +1,11 @@
 TEST:
   FROM_TEMP: false
-  SAVE_NAME: x+o_150_ccorner
+  SAVE_NAME: x+o_100_ccorner
   SETTING: xpluso
 
 MESH:
   GRID_SIZE: 100
-  RESOLUTION: 1.5
+  RESOLUTION: 1
 
 GEOMS:
   FACET_ALGO: circular+corner
