@@ -99,7 +99,14 @@ def main(
 
         # Run initial reconstruction
         print("Initial interface reconstruction")
-        reconstructed_facets = runReconstruction(m, facet_algo, do_c0, 0, output_dirs)
+        reconstructed_facets = runReconstruction(
+            m=m,
+            facet_algo=facet_algo,
+            do_c0=do_c0,
+            iter=0,
+            output_dirs=output_dirs,
+            algo_kwargs={},  # TODO JL 3/13/25 add algo_kwargs for safe_linear (maybe for static tests?)
+        )
 
     else:
         print("Loading from checkpoint...")

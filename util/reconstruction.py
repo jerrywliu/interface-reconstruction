@@ -7,7 +7,7 @@ from util.plotting.vtk_utils import writePartialCells, writeFacets
 
 
 def runReconstruction(
-    m: MergeMesh, facet_algo, do_c0, iter, output_dirs, algo_kwargs=None
+    m: MergeMesh, facet_algo, do_c0, iter, output_dirs, algo_kwargs={}
 ):
     """
     Run interface reconstruction based on specified algorithm.
@@ -18,6 +18,7 @@ def runReconstruction(
         do_c0: Boolean for C0 continuity enforcement
         iter: Current iteration number
         output_dirs: Dictionary of output directories
+        algo_kwargs: Dictionary of algorithm-specific keyword arguments
 
     Returns:
         reconstructed_facets: List of reconstructed facets
@@ -53,7 +54,7 @@ def runReconstruction(
     return reconstructed_facets
 
 
-def _run_no_merge(m: MergeMesh, facet_algo, iter, output_dirs, algo_kwargs=None):
+def _run_no_merge(m: MergeMesh, facet_algo, iter, output_dirs, algo_kwargs={}):
     """
     Run reconstruction for algorithms that operate on individual cells.
     These algorithms reconstruct interfaces without merging cells.
@@ -68,7 +69,7 @@ def _run_no_merge(m: MergeMesh, facet_algo, iter, output_dirs, algo_kwargs=None)
     elif facet_algo == "LVIRA":
         m.runLVIRA()
     elif facet_algo == "safe_linear":
-        m.runSafeLinear(**algo_kwargs)  #
+        m.runSafeLinear(**algo_kwargs)
     elif facet_algo == "safe_circle":
         m.runSafeCircle()
     elif facet_algo == "safe_linear_corner":

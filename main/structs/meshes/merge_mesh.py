@@ -1,3 +1,8 @@
+from typing import Dict
+import math
+import numpy as np
+from matplotlib.patches import Polygon as plt_polygon
+
 from main.structs.meshes.base_mesh import BaseMesh
 from main.structs.polys.base_polygon import BasePolygon
 from main.structs.polys.neighbored_polygon import NeighboredPolygon
@@ -20,12 +25,14 @@ from main.structs.facets.base_facet import (
     advectPoint,
 )
 
-from typing import Dict
-import math
-import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.patches import Polygon as plt_polygon
-from matplotlib.collections import PatchCollection
+"""
+A class for meshes that merge cells.
+Assumes a perturbed Cartesian grid of quads. Polygons are stored in a 2D list of NeighboredPolygon objects.
+
+This class is used for the algorithms that merge cells:
+- Linear corner
+- Circular corner
+"""
 
 
 class MergeMesh(BaseMesh):

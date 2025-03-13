@@ -3,6 +3,8 @@ import os
 
 ARC_RESOLUTION = 8
 
+# TODO JL 3/12/25: edit this to visualize facets as VTK if necessary
+
 """
 #Write facet objects as vtk files
 def writeFacets(facets, savename):
@@ -79,21 +81,22 @@ def writeFacets(facets, savename):
     g.close()
 """
 
+
 def writeFacets(facets, path):
-    base_path = '/'.join(path.split('/')[:-1])
+    base_path = "/".join(path.split("/")[:-1])
     if not os.path.exists(base_path):
         os.makedirs(base_path, exist_ok=True)
 
     vtkappend = vtk.vtkAppendPolyData()
 
     for facet in facets:
-        if facet.name == 'linear':
+        if facet.name == "linear":
             line = vtk.vtkLineSource()
             line.SetPoint1(facet.pLeft[0], facet.pLeft[1], 0)
             line.SetPoint2(facet.pRight[0], facet.pRight[1], 0)
             line.Update()
             vtkappend.AddInputData(line.GetOutput())
-        elif facet.name == 'arc':
+        elif facet.name == "arc":
             arc = vtk.vtkArcSource()
             arc.SetPoint1(facet.pLeft[0], facet.pLeft[1], 0)
             arc.SetPoint2(facet.pRight[0], facet.pRight[1], 0)
@@ -101,7 +104,7 @@ def writeFacets(facets, path):
             arc.SetResolution(ARC_RESOLUTION)
             arc.Update()
             vtkappend.AddInputData(arc.GetOutput())
-        elif facet.name == 'corner':
+        elif facet.name == "corner":
             # Left
             if facet.centerLeft is None and facet.radiusLeft is None:
                 line = vtk.vtkLineSource()
@@ -134,14 +137,13 @@ def writeFacets(facets, path):
                 vtkappend.AddInputData(arc.GetOutput())
         else:
             print(f"Unknown facet type: {facet.name}")
-    
+
     vtkappend.Update()
     writer = vtk.vtkXMLPolyDataWriter()
     writer.SetFileName(path)
     writer.SetInputConnection(vtkappend.GetOutputPort())
     writer.Update()
     writer.Write()
-
 
 
 def writeFacets2():
@@ -164,12 +166,18 @@ def writeFacets2():
 
     # Create the first line (between Origin and P0)
     line0 = vtkLine()
-    line0.GetPointIds().SetId(0, 0)  # the second 0 is the index of the Origin in linesPolyData's points
-    line0.GetPointIds().SetId(1, 1)  # the second 1 is the index of P0 in linesPolyData's points
+    line0.GetPointIds().SetId(
+        0, 0
+    )  # the second 0 is the index of the Origin in linesPolyData's points
+    line0.GetPointIds().SetId(
+        1, 1
+    )  # the second 1 is the index of P0 in linesPolyData's points
 
     # Create the second line (between Origin and P1)
     line1 = vtkLine()
-    line1.GetPointIds().SetId(0, 0)  # the second 0 is the index of the Origin in linesPolyData's points
+    line1.GetPointIds().SetId(
+        0, 0
+    )  # the second 0 is the index of the Origin in linesPolyData's points
     line1.GetPointIds().SetId(1, 2)  # 2 is the index of P1 in linesPolyData's points
 
     # Create a vtkCellArray container and store the lines in it

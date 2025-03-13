@@ -1,6 +1,6 @@
 TEST:
   FROM_TEMP: false
-  SAVE_NAME: vortex_32_ccorner
+  SAVE_NAME: vortex_32_safecirclec0
   SETTING: vortex
 
 MESH:
@@ -8,9 +8,9 @@ MESH:
   RESOLUTION: 0.32
 
 GEOMS:
-  FACET_ALGO: circular+corner
+  FACET_ALGO: safe_circle
   THRESHOLD: 1.0e-10
-  DO_C0: false
+  DO_C0: true
 
 ADVECTION:
   DO_ADVECT: true

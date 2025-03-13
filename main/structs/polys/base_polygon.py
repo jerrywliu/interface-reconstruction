@@ -70,14 +70,22 @@ class BasePolygon:
     def getMaxArea(self):
         return self.max_area
 
-    def isFull(self):
-        return self.fraction > 1 - self.fraction_tolerance
+    def isFull(self, tolerance=None):
+        if tolerance is None:
+            return self.fraction > 1 - self.fraction_tolerance
+        else:
+            return self.fraction > 1 - tolerance
 
-    def isEmpty(self):
-        return self.fraction < self.fraction_tolerance
+    def isEmpty(self, tolerance=None):
+        if tolerance is None:
+            return self.fraction < self.fraction_tolerance
+        else:
+            return self.fraction < tolerance
 
-    def isMixed(self):
-        return not (self.isFull() or self.isEmpty())
+    def isMixed(self, tolerance=None):
+        return not (
+            self.isFull(tolerance=tolerance) or self.isEmpty(tolerance=tolerance)
+        )
 
     def diffFromMixed(self):
         if self.isMixed():
@@ -255,10 +263,6 @@ class BasePolygon:
                     )
                 ):
                     # Linear: set facet
-                    # intersects = getPolyLineIntersects(self.points, l1, l2)
-                    # facet = LinearFacet(intersects[0], intersects[-1])
-                    # Use same slope but refit facet to match area fraction
-                    # print(f"Success: {abs(self.getFraction() - getPolyLineArea(self.points, l1, l2)/self.getMaxArea())}")
                     normal = [
                         (-l2[1] + l1[1]) / getDistance(l1, l2),
                         (l2[0] - l1[0]) / getDistance(l1, l2),
@@ -272,7 +276,6 @@ class BasePolygon:
                     intersects = getPolyLineIntersects(self.points, l1, l2)
                     facet = LinearFacet(intersects[0], intersects[-1], name="linear")
                 else:
-                    # print(f"Fail: {abs(self.getFraction() - getPolyLineArea(self.points, l1, l2)/self.getMaxArea())}, {getPolyLineArea(self.points, l1, l2)/self.getMaxArea()}, {self.points}")
                     if default_to_youngs:
                         facet = self.runYoungs(ret=True)
                     else:
@@ -291,7 +294,6 @@ class BasePolygon:
                 )
                 # Linear
                 intersects = getPolyLineIntersects(self.points, l1, l2)
-                # print(f"How close to linearity threshold?: {self.getFraction()}, {getPolyLineArea(self.points, l1, l2)/self.getMaxArea()}, {getPolyLineArea(self.points, intersects[0], intersects[-1])/self.getMaxArea()}, l1: {l1}, l2: {l2}, intersects[0]: {intersects[0]}, intersects[1]: {intersects[1]}, {self.points}")
                 facet = LinearFacet(
                     intersects[0], intersects[-1], name="default_linear"
                 )  # TODO change name to linear?

@@ -145,6 +145,7 @@ class NeighboredPolygon(BasePolygon):
                                 arcintersects[-1],
                             )
                         )
+                        print(self)
                 except:
                     pass
                     # l1 = facetline1

@@ -1,14 +1,14 @@
 TEST:
   FROM_TEMP: false
-  SAVE_NAME: vortex_32_ccorner
+  SAVE_NAME: vortex_128_safelinear
   SETTING: vortex
 
 MESH:
   GRID_SIZE: 100
-  RESOLUTION: 0.32
+  RESOLUTION: 1.28
 
 GEOMS:
-  FACET_ALGO: circular+corner
+  FACET_ALGO: safe_linear
   THRESHOLD: 1.0e-10
   DO_C0: false
 

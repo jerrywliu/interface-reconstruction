@@ -3,19 +3,20 @@
 # Settings
 # settings=("vortex" "x+o" "zalesak")
 # settings=("x+o" "zalesak" "vortex")
-settings=("x+o")
+settings=("vortex")
 # Resolutions
 # resolutions=(50 100)
 # resolutions=(50 100 150)
-resolutions=(100)
+resolutions=(32 64 128)
 # resolutions=(32 64 128)
 # Algos
 # algos=("youngs" "lvira" "linear" "circular" "lcorner" "ccorner")
 # algos=("youngs" "lvira" "linear" "circular")
 # algos=("safecircle")
 # algos=("safelinear" "safelinearcorner")
-algos=("safelinearcorner")
-
+# algos=("safelinearcorner")
+# algos=("youngs" "lvira")
+algos=("circular")
 for resolution in "${resolutions[@]}"; do
     for setting in "${settings[@]}"; do
         for algo in "${algos[@]}"; do
