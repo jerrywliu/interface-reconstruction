@@ -1913,7 +1913,7 @@ class MergeMesh(BaseMesh):
                 merge_id = self._get_merge_id(x, y)
                 if merge_id is None:
                     # Full/empty cells
-                    patch = plt_polygon(np.array(self.polys[x][y].points), True)
+                    patch = plt_polygon(np.array(self.polys[x][y].points))
                     self._plt_patches.append(patch)
                     adjusted_fraction = self.polys[x][y].getFraction()
                     self._plt_patchareas.append(adjusted_fraction)
@@ -1924,7 +1924,7 @@ class MergeMesh(BaseMesh):
                     # Mixed merged cell
                     # plt
                     merged_cell = self.merged_polys[merge_id]
-                    patch = plt_polygon(np.array(merged_cell.points), True)
+                    patch = plt_polygon(np.array(merged_cell.points))
                     self._plt_patches.append(patch)
                     adjusted_fraction = merged_cell.getFraction()
                     self._plt_patchareas.append(adjusted_fraction)

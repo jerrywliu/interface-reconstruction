@@ -58,7 +58,7 @@ class BaseMesh:
                     ]
                 )
                 self.polys[x][y] = poly
-                patch = plt_polygon(np.array(poly.points), True)
+                patch = plt_polygon(np.array(poly.points))
                 self._plt_patches.append(patch)
 
         if fractions is None:
