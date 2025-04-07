@@ -42,7 +42,11 @@ Randomly oriented circles:
 ./experiments/static/run_circles.sh
 ```
 
-TODO Randomly oriented ellipses (circles)
+Randomly oriented ellipses:
+```
+./experiments/static/run_ellipses.sh
+```
+
 
 TODO Randomly generated polygons (corners)
 

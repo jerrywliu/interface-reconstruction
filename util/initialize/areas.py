@@ -45,6 +45,8 @@ def initializePoly(m: BaseMesh, poly):
 
 # theta is angle from positive x-axis to major axis
 def initializeEllipse(m: BaseMesh, major_axis, minor_axis, theta, center):
+    ELLIPSE_FRAC_TOL = 1e-6
+
     areas = [[0] * len(m.polys[0]) for _ in range(len(m.polys))]
 
     circle_to_ellipse = np.array(
@@ -80,7 +82,8 @@ def initializeEllipse(m: BaseMesh, major_axis, minor_axis, theta, center):
             areas[x][y] = intersectarea * major_axis * minor_axis
             areas[x][y] /= poly.getMaxArea()
             if areas[x][y] > 1:
-                print(f"Error in initializeEllipse: {areas[x][y]}")
+                if areas[x][y] > 1 + ELLIPSE_FRAC_TOL:
+                    print(f"Error in initializeEllipse: {areas[x][y]}")
                 areas[x][y] = 1
 
     return areas
