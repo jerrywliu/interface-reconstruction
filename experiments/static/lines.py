@@ -1,6 +1,7 @@
 import argparse
 import os
 import numpy as np
+import matplotlib.pyplot as plt
 
 from main.structs.meshes.merge_mesh import MergeMesh
 from main.structs.facets.base_facet import LinearFacet, hausdorffLinearFacets
@@ -14,13 +15,16 @@ from util.initialize.areas import initializeLine
 from util.plotting.plt_utils import plotAreas, plotPartialAreas
 from util.plotting.vtk_utils import writeMesh
 
+# Global seed for reproducibility
+RANDOM_SEED = 42
+
 
 def main(
     config_setting,
     resolution=None,
     facet_algo=None,
     save_name=None,
-    num_lines=5,
+    num_lines=25,
     **kwargs,
 ):
     # Read config
@@ -50,6 +54,11 @@ def main(
     # Write it once
     writeMesh(m, os.path.join(output_dirs["vtk"], f"mesh.vtk"))
 
+    # Random number generator for reproducibility
+    rng = np.random.default_rng(RANDOM_SEED)
+
+    hausdorff_distances = []
+
     for i, angle in enumerate(angles):
         print(f"Processing line {i+1}/{num_lines}")
 
@@ -57,7 +66,7 @@ def main(
         m = MergeMesh(opoints, threshold)
 
         # Calculate line endpoints
-        x1, y1 = 50.2, 50.3
+        x1, y1 = rng.uniform(50, 51), rng.uniform(50, 51)
         x2 = x1 + 0.2  # Small x displacement
         y2 = y1 + np.tan(angle) * (x2 - x1)
 
@@ -97,12 +106,65 @@ def main(
                 avg_hausdorff += hausdorffLinearFacets(true_facet, reconstructed_facet)
                 cnt_hausdorff += 1
         print(
-            f"Average Hausdorff distance for line {i+1}: {avg_hausdorff/cnt_hausdorff:.3f}"
+            f"Average Hausdorff distance for line {i+1}: {avg_hausdorff/cnt_hausdorff:.3e}"
         )
 
         # Save metric to file
         with open(os.path.join(output_dirs["metrics"], "hausdorff.txt"), "a") as f:
             f.write(f"{avg_hausdorff/cnt_hausdorff}\n")
+
+        hausdorff_distances.append(avg_hausdorff / cnt_hausdorff)
+
+    return hausdorff_distances
+
+
+def run_parameter_sweep(config_setting, num_lines=25):
+    MIN_ERROR = 1e-14
+
+    # Define parameter ranges
+    resolutions = [0.32, 0.50, 0.64, 1.00, 1.28, 2.00]
+    facet_algos = ["Youngs", "LVIRA", "linear"]
+    save_names = [
+        "line_youngs",
+        "line_lvira",
+        "line_linear",
+    ]
+
+    # Store results
+    results = {algo: [] for algo in facet_algos}
+
+    # Run experiments
+    for resolution in resolutions:
+        print(f"\nRunning experiments for resolution {resolution}")
+        for algo, save_name in zip(facet_algos, save_names):
+            print(f"Testing {algo} algorithm...")
+            hausdorff = main(
+                config_setting=config_setting,
+                resolution=resolution,
+                facet_algo=algo,
+                save_name=save_name,
+                num_lines=num_lines,
+            )
+            results[algo].append(max(np.mean(np.array(hausdorff)), MIN_ERROR))
+
+    # Create summary plot
+    plt.figure(figsize=(10, 6))
+    for algo in facet_algos:
+        plt.plot(resolutions, results[algo], marker="o", label=algo)
+
+    plt.xscale("log")
+    plt.xlabel("Resolution")
+    plt.yscale("log")
+    plt.ylabel("Average Hausdorff Distance")
+    plt.title("Line Reconstruction Performance")
+    plt.legend()
+    plt.grid(True, which="both", ls="-", alpha=0.2)
+
+    # Save plot
+    plt.savefig("line_reconstruction_summary.png", dpi=300, bbox_inches="tight")
+    plt.close()
+
+    return results
 
 
 if __name__ == "__main__":
@@ -112,15 +174,24 @@ if __name__ == "__main__":
     parser.add_argument("--facet_algo", type=str, help="facet_algo", required=False)
     parser.add_argument("--save_name", type=str, help="save_name", required=False)
     parser.add_argument(
-        "--num_lines", type=int, help="number of lines to test", default=5
+        "--num_lines", type=int, help="number of lines to test", default=25
+    )
+    parser.add_argument(
+        "--sweep", action="store_true", help="run parameter sweep", default=False
     )
 
     args = parser.parse_args()
 
-    main(
-        config_setting=args.config,
-        resolution=args.resolution,
-        facet_algo=args.facet_algo,
-        save_name=args.save_name,
-        num_lines=args.num_lines,
-    )
+    if args.sweep:
+        results = run_parameter_sweep(args.config, args.num_lines)
+        print("\nParameter sweep results:")
+        for algo, values in results.items():
+            print(f"{algo}: {values}")
+    else:
+        main(
+            config_setting=args.config,
+            resolution=args.resolution,
+            facet_algo=args.facet_algo,
+            save_name=args.save_name,
+            num_lines=args.num_lines,
+        )

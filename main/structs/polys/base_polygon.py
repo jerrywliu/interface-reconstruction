@@ -37,6 +37,9 @@ class BasePolygon:
         # 3x3 stencil of fractions for Young's
         self.stencil = None
 
+        # Adjacent polygons
+        self.adjacent_polys = []
+
     # TODO set fraction to 0 or 1 if within threshold?
     def setArea(self, area):
         self.fraction = area / self.max_area

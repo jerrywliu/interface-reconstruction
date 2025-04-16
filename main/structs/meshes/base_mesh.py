@@ -61,6 +61,19 @@ class BaseMesh:
                 patch = plt_polygon(np.array(poly.points))
                 self._plt_patches.append(patch)
 
+        # Set adjacent polys
+        for x in range(len(self.polys)):
+            for y in range(len(self.polys[0])):
+                poly = self.polys[x][y]
+                if x > 0:
+                    poly.adjacent_polys.append(self.polys[x - 1][y])
+                if y > 0:
+                    poly.adjacent_polys.append(self.polys[x][y - 1])
+                if x < len(self.polys) - 1:
+                    poly.adjacent_polys.append(self.polys[x + 1][y])
+                if y < len(self.polys[0]) - 1:
+                    poly.adjacent_polys.append(self.polys[x][y + 1])
+
         if fractions is None:
             self._plt_patchareas = np.array([])
             self._plt_patchpartialareas = np.array([])

@@ -62,11 +62,12 @@ def runAdvection(
 
         # Advect facets
         advected_facets = m.advectMergedFacets(velocity, t, dt, checkSize=2)
+        # Save advected facets
         writeFacets(
             advected_facets, os.path.join(output_dirs["vtk_advected"], f"{iter}.vtp")
         )
 
-        # Run reconstruction
+        # Run reconstruction (and save facets and partial cells)
         reconstructed_facets = runReconstruction(
             m, facet_algo, do_c0, iter, output_dirs
         )

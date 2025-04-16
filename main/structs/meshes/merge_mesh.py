@@ -56,6 +56,19 @@ class MergeMesh(BaseMesh):
                 )
                 self.polys[x][y] = poly
 
+        # Set adjacent polys
+        for x in range(len(self.polys)):
+            for y in range(len(self.polys[0])):
+                poly = self.polys[x][y]
+                if x > 0:
+                    poly.adjacent_polys.append(self.polys[x - 1][y])
+                if y > 0:
+                    poly.adjacent_polys.append(self.polys[x][y - 1])
+                if x < len(self.polys) - 1:
+                    poly.adjacent_polys.append(self.polys[x + 1][y])
+                if y < len(self.polys[0]) - 1:
+                    poly.adjacent_polys.append(self.polys[x][y + 1])
+
         # List of merged polys, index in list is used as id.
         # Each element is a list of (x, y)s corresponding to the Cartesian coordinates of the polys to be merged.
         self.merge_ids_to_coords = []
@@ -200,6 +213,7 @@ class MergeMesh(BaseMesh):
                 self._merge([merge_id, neighbor_ids[0]])
 
     def _helper_createMergedPolys(self, merge_coords_list):
+        # Merge polys by coordinates
         merge_coords = merge_coords_list.copy()
         if len(merge_coords) == 1:
             merge_points = self.polys[merge_coords[0][0]][merge_coords[0][1]].points
@@ -227,6 +241,21 @@ class MergeMesh(BaseMesh):
             list(map(lambda x: self.polys[x[0]][x[1]].getArea(), merge_coords_list))
         )
         ret_poly.setArea(total_area)
+
+        # Set adjacent polys
+        adjacent_polys = []
+        for merge_coord in merge_coords_list:
+            for neighbor in self.polys[merge_coord[0]][merge_coord[1]].adjacent_polys:
+                if neighbor not in adjacent_polys:
+                    adjacent_polys.append(neighbor)
+                    # Update neighbor's adjacent polys
+                    neighbor.adjacent_polys.remove(
+                        self.polys[merge_coord[0]][merge_coord[1]]
+                    )
+                    neighbor.adjacent_polys.append(ret_poly)
+
+        ret_poly.adjacent_polys = adjacent_polys
+
         return ret_poly
 
     # Resets self.merged_polys according to the latest values in self.merge_ids_to_coords
