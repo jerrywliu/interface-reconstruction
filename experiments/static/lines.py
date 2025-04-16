@@ -164,6 +164,11 @@ def run_parameter_sweep(config_setting, num_lines=25):
     plt.savefig("line_reconstruction_summary.png", dpi=300, bbox_inches="tight")
     plt.close()
 
+    # Dump results to file
+    with open("line_reconstruction_results.txt", "w") as f:
+        f.write(f"Resolutions: {resolutions}\n")
+        f.write(f"Results: {results}\n")
+
     return results
 
 

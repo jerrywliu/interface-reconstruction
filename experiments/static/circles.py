@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from main.structs.meshes.merge_mesh import MergeMesh
-from main.geoms.geoms import getDistance
+from util.metrics import calculate_facet_gaps
 
 from util.config import read_yaml
 from util.io.setup import setupOutputDirs
@@ -16,52 +16,6 @@ from util.plotting.vtk_utils import writeMesh
 
 # Global seed for reproducibility
 RANDOM_SEED = 42
-
-
-def calculate_facet_gaps(m, reconstructed_facets):
-    """Calculate the minimum distance between left facet endpoint and neighboring facets' endpoints.
-
-    Args:
-        m: MergeMesh object
-        reconstructed_facets: List of reconstructed facets for each cell
-
-    Returns:
-        avg_gap: Average minimum gap distance across all mixed cells
-    """
-    total_gap = 0
-    cnt_gap = 0
-
-    # Create a map from cell index to its reconstructed facet
-    merged_polys = list(m.merged_polys.values())
-
-    for i, (poly, facet) in enumerate(
-        zip(m.merged_polys.values(), reconstructed_facets)
-    ):
-        if not facet:  # Skip if no facet
-            continue
-
-        # Get left endpoint of current facet
-        left_endpoint = facet.pLeft
-
-        # Find all neighboring mixed cells that have facets
-        min_gap = float("inf")
-        for neighbor in poly.adjacent_polys:
-            if neighbor in merged_polys:
-                # Get neighbor facet
-                i = merged_polys.index(neighbor)
-                neighbor_facet = reconstructed_facets[i]
-                assert neighbor_facet == neighbor.getFacet()
-                # Calculate distance to both endpoints of neighbor's facet
-                dist_left = getDistance(left_endpoint, neighbor_facet.pLeft)
-                dist_right = getDistance(left_endpoint, neighbor_facet.pRight)
-                # Update minimum gap
-                min_gap = min(min_gap, dist_left, dist_right)
-
-        if min_gap != float("inf"):
-            total_gap += min_gap
-            cnt_gap += 1
-
-    return total_gap / cnt_gap if cnt_gap > 0 else 0
 
 
 def main(
@@ -199,7 +153,7 @@ def run_parameter_sweep(config_setting, num_circles=25, radius=10.0):
                 radius=radius,
             )
             curvature_results[algo].append(max(np.mean(np.array(errors)), MIN_ERROR))
-            gap_results[algo].append(np.mean(np.array(gaps)))
+            gap_results[algo].append(max(np.mean(np.array(gaps)), MIN_ERROR))
 
     # Create summary plots
     # Curvature error plot
@@ -209,6 +163,7 @@ def run_parameter_sweep(config_setting, num_circles=25, radius=10.0):
 
     plt.xscale("log")
     plt.xlabel("Resolution")
+    plt.yscale("log")
     plt.ylabel("Average Curvature Error")
     plt.title(f"Circle Reconstruction Performance (Radius = {radius})")
     plt.legend()
@@ -223,12 +178,19 @@ def run_parameter_sweep(config_setting, num_circles=25, radius=10.0):
 
     plt.xscale("log")
     plt.xlabel("Resolution")
+    plt.yscale("log")
     plt.ylabel("Average Facet Gap")
     plt.title(f"Circle Reconstruction Facet Gaps (Radius = {radius})")
     plt.legend()
     plt.grid(True, which="both", ls="-", alpha=0.2)
     plt.savefig("circle_reconstruction_gaps.png", dpi=300, bbox_inches="tight")
     plt.close()
+
+    # Dump results to file
+    with open("circle_reconstruction_results.txt", "w") as f:
+        f.write(f"Resolutions: {resolutions}\n")
+        f.write(f"Curvature Results: {curvature_results}\n")
+        f.write(f"Gap Results: {gap_results}\n")
 
     return curvature_results, gap_results
 

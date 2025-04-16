@@ -249,9 +249,13 @@ class MergeMesh(BaseMesh):
                 if neighbor not in adjacent_polys:
                     adjacent_polys.append(neighbor)
                     # Update neighbor's adjacent polys
-                    neighbor.adjacent_polys.remove(
-                        self.polys[merge_coord[0]][merge_coord[1]]
-                    )
+                    # TODO JL 4/16/25: this try catch is a hack to fix a bug where the neighbor is not in the adjacent_polys list. Need to figure out why this is happening.
+                    try:
+                        neighbor.adjacent_polys.remove(
+                            self.polys[merge_coord[0]][merge_coord[1]]
+                        )
+                    except:
+                        breakpoint()
                     neighbor.adjacent_polys.append(ret_poly)
 
         ret_poly.adjacent_polys = adjacent_polys

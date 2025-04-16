@@ -2,6 +2,7 @@ import argparse
 import os
 import numpy as np
 import math
+import matplotlib.pyplot as plt
 
 from main.structs.meshes.merge_mesh import MergeMesh
 from main.geoms.geoms import getArea, getPolyLineArea
@@ -23,7 +24,7 @@ def main(
     resolution=None,
     facet_algo=None,
     save_name=None,
-    num_squares=5,
+    num_squares=25,
     **kwargs,
 ):
     # Read config
@@ -54,6 +55,10 @@ def main(
 
     # Random number generator for reproducibility
     rng = np.random.default_rng(RANDOM_SEED)
+
+    # Store metrics for all squares
+    area_errors = []
+    edge_alignment_errors = []
 
     for i, side_length in enumerate(side_lengths):
         print(f"Processing square {i+1}/{num_squares}")
@@ -161,8 +166,8 @@ def main(
         area_error = abs(total_area - side_length**2) / side_length**2
         avg_edge_error = edge_alignment_error / cnt_edges
 
-        print(f"Area error for square {i+1}: {area_error:.3f}")
-        print(f"Average edge alignment error for square {i+1}: {avg_edge_error:.3f}")
+        print(f"Area error for square {i+1}: {area_error:.3e}")
+        print(f"Average edge alignment error for square {i+1}: {avg_edge_error:.3e}")
 
         # Save metrics to file
         with open(os.path.join(output_dirs["metrics"], "area_error.txt"), "a") as f:
@@ -173,6 +178,95 @@ def main(
         ) as f:
             f.write(f"{avg_edge_error}\n")
 
+        area_errors.append(area_error)
+        edge_alignment_errors.append(avg_edge_error)
+
+    return area_errors, edge_alignment_errors
+
+
+def run_parameter_sweep(config_setting, num_squares=25):
+    MIN_ERROR = 1e-14
+
+    # Define parameter ranges
+    # resolutions = [0.32, 0.50, 0.64, 1.00, 1.28, 2.00]
+    resolutions = [0.50]
+    facet_algos = [
+        "Youngs",
+        "LVIRA",
+        "linear",
+        "safe_linear_corner",
+        "linear+corner",
+        "safe_circle",
+        "circular",
+    ]
+    save_names = [
+        "square_youngs",
+        "square_lvira",
+        "square_linear",
+        "square_safelinearcorner",
+        "square_linear+corner",
+        "square_safecircle",
+        "square_mergecircle",
+    ]
+
+    # Store results
+    area_results = {algo: [] for algo in facet_algos}
+    edge_results = {algo: [] for algo in facet_algos}
+
+    # Run experiments
+    for resolution in resolutions:
+        print(f"\nRunning experiments for resolution {resolution}")
+        for algo, save_name in zip(facet_algos, save_names):
+            print(f"Testing {algo} algorithm...")
+            area_errors, edge_errors = main(
+                config_setting=config_setting,
+                resolution=resolution,
+                facet_algo=algo,
+                save_name=save_name,
+                num_squares=num_squares,
+            )
+            area_results[algo].append(max(np.mean(np.array(area_errors)), MIN_ERROR))
+            edge_results[algo].append(max(np.mean(np.array(edge_errors)), MIN_ERROR))
+
+    # Create summary plots
+    # Area error plot
+    plt.figure(figsize=(10, 6))
+    for algo in facet_algos:
+        plt.plot(resolutions, area_results[algo], marker="o", label=algo)
+
+    plt.xscale("log")
+    plt.xlabel("Resolution")
+    plt.yscale("log")
+    plt.ylabel("Average Area Error")
+    plt.title("Square Reconstruction Performance")
+    plt.legend()
+    plt.grid(True, which="both", ls="-", alpha=0.2)
+    plt.savefig("square_reconstruction_area.png", dpi=300, bbox_inches="tight")
+    plt.close()
+
+    # Edge alignment error plot
+    plt.figure(figsize=(10, 6))
+    for algo in facet_algos:
+        plt.plot(resolutions, edge_results[algo], marker="o", label=algo)
+
+    plt.xscale("log")
+    plt.xlabel("Resolution")
+    plt.yscale("log")
+    plt.ylabel("Average Edge Alignment Error")
+    plt.title("Square Reconstruction Edge Alignment")
+    plt.legend()
+    plt.grid(True, which="both", ls="-", alpha=0.2)
+    plt.savefig("square_reconstruction_edge.png", dpi=300, bbox_inches="tight")
+    plt.close()
+
+    # Dump results to file
+    with open("square_reconstruction_results.txt", "w") as f:
+        f.write(f"Resolutions: {resolutions}\n")
+        f.write(f"Area Results: {area_results}\n")
+        f.write(f"Edge Results: {edge_results}\n")
+
+    return area_results, edge_results
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Square reconstruction tests.")
@@ -181,15 +275,28 @@ if __name__ == "__main__":
     parser.add_argument("--facet_algo", type=str, help="facet_algo", required=False)
     parser.add_argument("--save_name", type=str, help="save_name", required=False)
     parser.add_argument(
-        "--num_squares", type=int, help="number of squares to test", default=5
+        "--num_squares", type=int, help="number of squares to test", default=25
+    )
+    parser.add_argument(
+        "--sweep", action="store_true", help="run parameter sweep", default=False
     )
 
     args = parser.parse_args()
 
-    main(
-        config_setting=args.config,
-        resolution=args.resolution,
-        facet_algo=args.facet_algo,
-        save_name=args.save_name,
-        num_squares=args.num_squares,
-    )
+    if args.sweep:
+        area_results, edge_results = run_parameter_sweep(args.config, args.num_squares)
+        print("\nParameter sweep results:")
+        print("\nArea Error:")
+        for algo, values in area_results.items():
+            print(f"{algo}: {values}")
+        print("\nEdge Alignment Error:")
+        for algo, values in edge_results.items():
+            print(f"{algo}: {values}")
+    else:
+        main(
+            config_setting=args.config,
+            resolution=args.resolution,
+            facet_algo=args.facet_algo,
+            save_name=args.save_name,
+            num_squares=args.num_squares,
+        )
