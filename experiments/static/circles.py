@@ -159,30 +159,41 @@ def run_parameter_sweep(config_setting, num_circles=25, radius=10.0):
     # Curvature error plot
     plt.figure(figsize=(10, 6))
     for algo in facet_algos:
-        plt.plot(resolutions, curvature_results[algo], marker="o", label=algo)
+        plt.plot(
+            [1 / r for r in resolutions],
+            curvature_results[algo],
+            marker="o",
+            label=algo,
+        )
 
-    plt.xscale("log")
-    plt.xlabel("Resolution")
+    plt.xscale("log", base=2)
+    plt.xlabel("1/Resolution")
     plt.yscale("log")
     plt.ylabel("Average Curvature Error")
     plt.title(f"Circle Reconstruction Performance (Radius = {radius})")
     plt.legend()
     plt.grid(True, which="both", ls="-", alpha=0.2)
+    # Set x-axis ticks to powers of 2
+    plt.xticks([1 / r for r in resolutions], [f"1/{r:.2f}" for r in resolutions])
     plt.savefig("circle_reconstruction_curvature.png", dpi=300, bbox_inches="tight")
     plt.close()
 
     # Facet gap plot
     plt.figure(figsize=(10, 6))
     for algo in facet_algos:
-        plt.plot(resolutions, gap_results[algo], marker="o", label=algo)
+        plt.plot(
+            [1 / r for r in resolutions], gap_results[algo], marker="o", label=algo
+        )
 
-    plt.xscale("log")
-    plt.xlabel("Resolution")
+    plt.xscale("log", base=2)
+    plt.xlabel("1/Resolution")
     plt.yscale("log")
     plt.ylabel("Average Facet Gap")
-    plt.title(f"Circle Reconstruction Facet Gaps (Radius = {radius})")
+    plt.title("Circle Reconstruction Facet Gaps")
     plt.legend()
     plt.grid(True, which="both", ls="-", alpha=0.2)
+    # Set x-axis ticks to powers of 2
+    plt.xticks([1 / r for r in resolutions], [f"1/{r:.2f}" for r in resolutions])
     plt.savefig("circle_reconstruction_gaps.png", dpi=300, bbox_inches="tight")
     plt.close()
 

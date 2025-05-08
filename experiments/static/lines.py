@@ -150,18 +150,18 @@ def run_parameter_sweep(config_setting, num_lines=25):
     # Create summary plot
     plt.figure(figsize=(10, 6))
     for algo in facet_algos:
-        plt.plot(resolutions, results[algo], marker="o", label=algo)
+        plt.plot([1 / r for r in resolutions], results[algo], marker="o", label=algo)
 
-    plt.xscale("log")
-    plt.xlabel("Resolution")
+    plt.xscale("log", base=2)
+    plt.xlabel("1/Resolution")
     plt.yscale("log")
     plt.ylabel("Average Hausdorff Distance")
     plt.title("Line Reconstruction Performance")
     plt.legend()
     plt.grid(True, which="both", ls="-", alpha=0.2)
-
-    # Save plot
-    plt.savefig("line_reconstruction_summary.png", dpi=300, bbox_inches="tight")
+    # Set x-axis ticks to powers of 2
+    plt.xticks([1 / r for r in resolutions], [f"1/{r:.2f}" for r in resolutions])
+    plt.savefig("line_reconstruction_hausdorff.png", dpi=300, bbox_inches="tight")
     plt.close()
 
     # Dump results to file

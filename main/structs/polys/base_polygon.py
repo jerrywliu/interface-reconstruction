@@ -227,15 +227,18 @@ class BasePolygon:
         self,
         ret=False,
         check_threshold=False,
-        default_to_youngs=True,
+        default_to_youngs=False,
+        default_to_lvira=True,
         fit_1neighbor=False,
     ):
         assert self.has3x3Stencil()
         orientation = self.findSafeOrientation(fit_1neighbor=fit_1neighbor)
         if orientation is None:
-            # Default to Youngs
+            # Default to PLIC
             if default_to_youngs:
                 facet = self.runYoungs(ret=True)
+            elif default_to_lvira:
+                facet = self.runLVIRA(ret=True)
             else:
                 facet = None
         else:
@@ -281,6 +284,8 @@ class BasePolygon:
                 else:
                     if default_to_youngs:
                         facet = self.runYoungs(ret=True)
+                    elif default_to_lvira:
+                        facet = self.runLVIRA(ret=True)
                     else:
                         facet = None
             else:
@@ -307,12 +312,22 @@ class BasePolygon:
             if facet is not None:
                 self.setFacet(facet)
 
-    def runSafeCircle(self, ret=False):
+    def runSafeCircle(
+        self,
+        ret=False,
+        default_to_youngs=False,
+        default_to_lvira=True,
+    ):
         assert self.has3x3Stencil()
         orientation = self.findSafeOrientation(fit_1neighbor=False)
         if orientation is None:
-            # Default to Youngs
-            facet = self.runYoungs(ret=True)
+            # Default to PLIC
+            if default_to_youngs:
+                facet = self.runYoungs(ret=True)
+            elif default_to_lvira:
+                facet = self.runLVIRA(ret=True)
+            else:
+                facet = None
         else:
             left_neighbor: BasePolygon = orientation[0]
             right_neighbor: BasePolygon = orientation[1]
@@ -353,14 +368,24 @@ class BasePolygon:
                         BasePolygon.optimization_threshold,
                     )
                     if arccenter is None or arcradius is None or arcintersects is None:
-                        facet = self.runYoungs(ret=True)
+                        if default_to_youngs:
+                            facet = self.runYoungs(ret=True)
+                        elif default_to_lvira:
+                            facet = self.runLVIRA(ret=True)
+                        else:
+                            facet = None
                     else:
                         # Arc
                         facet = ArcFacet(
                             arccenter, arcradius, arcintersects[0], arcintersects[-1]
                         )
                 except:
-                    facet = self.runYoungs(ret=True)
+                    if default_to_youngs:
+                        facet = self.runYoungs(ret=True)
+                    elif default_to_lvira:
+                        facet = self.runLVIRA(ret=True)
+                    else:
+                        facet = None
 
         if ret:
             return facet

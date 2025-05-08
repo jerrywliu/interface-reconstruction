@@ -203,15 +203,21 @@ class BaseMesh:
                     mixed_poly.set3x3Stencil(self.get3x3Stencil(x, y))
                     mixed_poly.runLVIRA()
 
-    # Whenever orientation is unambiguous, run linear fit. Default to Youngs
-    def runSafeLinear(self):
+    # Whenever orientation is unambiguous, run linear fit. Default to PLIC
+    def runSafeLinear(
+        self,
+        default_to_youngs=False,
+        default_to_lvira=True,
+    ):
         for x in range(len(self.polys)):
             for y in range(len(self.polys[0])):
                 if self.polys[x][y].isMixed():
                     mixed_poly: BasePolygon = self.polys[x][y]
                     mixed_poly.set3x3Stencil(self.get3x3Stencil(x, y))
                     mixed_poly.runSafeLinear(
-                        check_threshold=False, default_to_youngs=True
+                        check_threshold=False,
+                        default_to_youngs=default_to_youngs,
+                        default_to_lvira=default_to_lvira,
                     )
 
     # Whenever orientation is unambiguous, run circle fit. Default to Youngs
