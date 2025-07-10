@@ -17,3 +17,6 @@
 
 # Sweep
 python3 -m experiments.static.circles --config static/circle --sweep
+
+# Plot only
+python3 -m experiments.static.circles --config static/circle --plot_only --results_file results/static/circle_reconstruction_results.txt

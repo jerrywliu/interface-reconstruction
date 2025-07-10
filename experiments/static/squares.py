@@ -108,7 +108,7 @@ def main(
             do_c0,
             i,
             output_dirs,
-            algo_kwargs=None,
+            algo_kwargs={},
         )
 
         # Calculate error metrics
@@ -246,7 +246,7 @@ def run_parameter_sweep(config_setting, num_squares=25):
     plt.title("Square Reconstruction Performance")
     plt.legend()
     plt.grid(True, which="both", ls="-", alpha=0.2)
-    plt.savefig("square_reconstruction_area.png", dpi=300, bbox_inches="tight")
+    plt.savefig("results/static/square_reconstruction_area.png", dpi=300, bbox_inches="tight")
     plt.close()
 
     # Edge alignment error plot
@@ -261,11 +261,11 @@ def run_parameter_sweep(config_setting, num_squares=25):
     plt.title("Square Reconstruction Edge Alignment")
     plt.legend()
     plt.grid(True, which="both", ls="-", alpha=0.2)
-    plt.savefig("square_reconstruction_edge.png", dpi=300, bbox_inches="tight")
+    plt.savefig("results/static/square_reconstruction_edge.png", dpi=300, bbox_inches="tight")
     plt.close()
 
     # Dump results to file
-    with open("square_reconstruction_results.txt", "w") as f:
+    with open("results/static/square_reconstruction_results.txt", "w") as f:
         f.write(f"Resolutions: {resolutions}\n")
         f.write(f"Area Results: {area_results}\n")
         f.write(f"Edge Results: {edge_results}\n")

@@ -70,6 +70,114 @@ from util.plotting.vtk_utils import writeMesh
 RANDOM_SEED = 42
 
 
+def create_performance_plot(resolutions, results, title="Line Static Reconstruction", 
+                           ylabel="Average Hausdorff Distance", save_path="results/static/line_reconstruction_hausdorff.png"):
+    """
+    Create a performance comparison plot from results data.
+    
+    Args:
+        resolutions: List of resolution values
+        results: Dictionary of algorithm results
+        title: Plot title
+        ylabel: Y-axis label
+        save_path: Path to save the plot
+    """
+    # Set up matplotlib for better looking plots
+    plt.rcParams.update({
+        'font.size': 12,
+        'font.family': 'serif',
+        'mathtext.fontset': 'cm',
+        'axes.linewidth': 1.5,
+        'xtick.major.width': 1.5,
+        'ytick.major.width': 1.5,
+        'xtick.minor.width': 1.0,
+        'ytick.minor.width': 1.0,
+        'lines.linewidth': 2.5,
+        'lines.markersize': 8,
+    })
+    
+    plt.figure(figsize=(8, 6))
+    
+    # Convert resolutions to integers (100*r) and flip x-axis
+    x_values = [int(100 * r) for r in resolutions]
+    
+    # Plot algorithms with better labels and styling
+    for algo, values in results.items():
+        if algo == "safe_linear":
+            plt.plot(x_values, values, marker='o', label="Ours (no merging)", 
+                    linewidth=2.5, markersize=8, linestyle='-')
+        elif algo == "linear":
+            plt.plot(x_values, values, marker='s', label="Ours (with merging)", 
+                    linewidth=2.5, markersize=8, linestyle='--')
+        else:
+            plt.plot(x_values, values, marker='o', label=algo, 
+                    linewidth=2.5, markersize=8)
+
+    plt.xscale("log", base=2)
+    plt.xlabel(r"Resolution", fontsize=14)
+    plt.yscale("log")
+    plt.ylabel(ylabel, fontsize=14)
+    plt.title(title, fontsize=16, fontweight='bold')
+    plt.legend(fontsize=12, frameon=True, fancybox=True, shadow=False, loc='center left', bbox_to_anchor=(0.02, 0.4))
+    plt.grid(True, which="both", ls="-", alpha=0.3)
+    
+    # Set x-axis ticks to show resolution values as integers
+    plt.xticks(x_values, [str(x) for x in x_values])
+    
+    # Add minor grid
+    plt.grid(True, which="minor", ls=":", alpha=0.2)
+    
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.close()
+
+
+def load_results_from_file(file_path):
+    """
+    Load results from a summary results file.
+    
+    Args:
+        file_path: Path to the results file
+        
+    Returns:
+        tuple: (resolutions, results_dict)
+    """
+    with open(file_path, 'r') as f:
+        content = f.read()
+    
+    # Parse the file content
+    lines = content.strip().split('\n')
+    
+    # Extract resolutions
+    resolutions_line = lines[0]
+    resolutions_str = resolutions_line.split('Resolutions: ')[1]
+    resolutions = eval(resolutions_str)  # Safe for this specific format
+    
+    # Extract results
+    results_line = lines[1]
+    results_str = results_line.split('Results: ')[1]
+    results = eval(results_str)  # Safe for this specific format
+    
+    return resolutions, results
+
+
+def plot_from_results_file(file_path="results/static/line_reconstruction_results.txt"):
+    """
+    Load results from file and create performance plot.
+    
+    Args:
+        file_path: Path to the results file (default: line_reconstruction_results.txt)
+    """
+    try:
+        resolutions, results = load_results_from_file(file_path)
+        create_performance_plot(resolutions, results)
+        print(f"Plot created from {file_path}")
+    except FileNotFoundError:
+        print(f"Error: File {file_path} not found")
+    except Exception as e:
+        print(f"Error loading results: {e}")
+
+
 def main(
     config_setting,
     resolution=None,
@@ -200,24 +308,10 @@ def run_parameter_sweep(config_setting, num_lines=25):
             results[algo].append(max(np.mean(np.array(hausdorff)), MIN_ERROR))
 
     # Create summary plot
-    plt.figure(figsize=(10, 6))
-    for algo in facet_algos:
-        plt.plot([1 / r for r in resolutions], results[algo], marker="o", label=algo)
-
-    plt.xscale("log", base=2)
-    plt.xlabel("1/Resolution")
-    plt.yscale("log")
-    plt.ylabel("Average Hausdorff Distance")
-    plt.title("Line Reconstruction Performance")
-    plt.legend()
-    plt.grid(True, which="both", ls="-", alpha=0.2)
-    # Set x-axis ticks to powers of 2
-    plt.xticks([1 / r for r in resolutions], [f"1/{r:.2f}" for r in resolutions])
-    plt.savefig("line_reconstruction_hausdorff.png", dpi=300, bbox_inches="tight")
-    plt.close()
+    create_performance_plot(resolutions, results)
 
     # Dump results to file
-    with open("line_reconstruction_results.txt", "w") as f:
+    with open("results/static/line_reconstruction_results.txt", "w") as f:
         f.write(f"Resolutions: {resolutions}\n")
         f.write(f"Results: {results}\n")
 
@@ -236,10 +330,19 @@ if __name__ == "__main__":
     parser.add_argument(
         "--sweep", action="store_true", help="run parameter sweep", default=False
     )
+    parser.add_argument(
+        "--plot_only", action="store_true", help="load results and create plot only", default=False
+    )
+    parser.add_argument(
+        "--results_file", type=str, help="path to results file for plotting", 
+        default="results/static/line_reconstruction_results.txt"
+    )
 
     args = parser.parse_args()
 
-    if args.sweep:
+    if args.plot_only:
+        plot_from_results_file(args.results_file)
+    elif args.sweep:
         results = run_parameter_sweep(args.config, args.num_lines)
         print("\nParameter sweep results:")
         for algo, values in results.items():

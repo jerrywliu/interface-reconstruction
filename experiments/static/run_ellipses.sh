@@ -17,3 +17,6 @@
 
 # Sweep
 python3 -m experiments.static.ellipses --config static/circle --sweep
+
+# Plot only
+python3 -m experiments.static.ellipses --config static/circle --plot_only --results_file results/static/ellipse_reconstruction_results.txt

@@ -13,3 +13,6 @@
 
 # Sweep
 python3 -m experiments.static.lines --config static/line --sweep
+
+# Plot only
+python3 -m experiments.static.lines --config static/line --plot_only --results_file results/static/line_reconstruction_results.txt
