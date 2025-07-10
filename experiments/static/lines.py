@@ -1,3 +1,54 @@
+"""
+Line Reconstruction Experiment
+
+This module performs line reconstruction experiments to evaluate the performance of different
+interface reconstruction algorithms on straight line interfaces.
+
+EXPERIMENT OVERVIEW:
+- Tests reconstruction of straight lines with varying orientations (0 to 2π)
+- Compares different facet reconstruction algorithms: Youngs, LVIRA, linear, and safe_linear
+- Evaluates performance using Hausdorff distance between true and reconstructed facets
+- Supports both single experiments and comprehensive parameter sweeps
+
+PARAMETER SWEEP FUNCTIONALITY:
+When run with --sweep flag, performs a comprehensive parameter sweep across:
+
+1. Mesh Resolution (6 values):
+   - Fine resolutions: [0.32, 0.50, 0.64]
+   - Coarse resolutions: [1.00, 1.28, 2.00]
+   - Tests convergence behavior as resolution increases
+
+2. Facet Reconstruction Algorithms (4 algorithms):
+   - Youngs: Classic Youngs' method for interface reconstruction
+   - LVIRA: Least Squares Volume-of-Fluid Interface Reconstruction Algorithm  
+   - linear: Our linear reconstruction method with cell merging
+   - safe_linear: Linear reconstruction method without cell merging (faster but potentially less accurate)
+
+ALGORITHM DIFFERENCES:
+- safe_linear: Skips cell merging for faster execution, but may be less accurate
+- linear: Performs cell merging to improve accuracy at the cost of computational speed
+
+SWEEP EXECUTION:
+- For each (resolution, algorithm) combination:
+  - Tests 25 different line orientations (angles 0 to 2π)
+  - Calculates Hausdorff distances between true and reconstructed facets
+  - Averages results across all orientations
+- Generates performance plots and results files
+- Creates 6×4 grid of experiments (6 resolutions × 4 algorithms)
+
+USAGE:
+Single experiment:
+    python lines.py --config <config> [--resolution <res>] [--facet_algo <algo>]
+
+Parameter sweep:
+    python lines.py --config <config> --sweep [--num_lines <n>]
+
+OUTPUTS:
+- line_reconstruction_hausdorff.png: Performance comparison plot
+- line_reconstruction_results.txt: Raw numerical results
+- Individual experiment outputs in specified save directories
+"""
+
 import argparse
 import os
 import numpy as np
@@ -123,11 +174,12 @@ def run_parameter_sweep(config_setting, num_lines=25):
 
     # Define parameter ranges
     resolutions = [0.32, 0.50, 0.64, 1.00, 1.28, 2.00]
-    facet_algos = ["Youngs", "LVIRA", "linear"]
+    facet_algos = ["Youngs", "LVIRA", "safe_linear", "linear"]
     save_names = [
         "line_youngs",
         "line_lvira",
-        "line_linear",
+        "line_safelinear",
+        "line_mergelinear",
     ]
 
     # Store results

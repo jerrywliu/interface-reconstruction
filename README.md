@@ -1,4 +1,4 @@
-# Interface reconstruction
+# Interface Reconstruction
 
 An example implementation in Python of an interface reconstruction method, using linear/circular elements and cusps.
 
@@ -9,86 +9,115 @@ Jerry Liu, jwl50@stanford.edu
 ## Table of Contents
 
 - [Algorithms](#algorithms)
-- [Static experiments](#static-experiments)
-- [Advection experiments](#advection-experiments)
+- [Static Experiments](#static-experiments)
+- [Advection Experiments](#advection-experiments)
+- [TODO](#todo)
 
 ## Algorithms
 
 Our algorithms consist of two main features:
-- Circular facets
-- Corner facets (either linear or circular), which requires merging cells
+- **Circular facets**
+- **Corner facets** (either linear or circular), which requires merging cells
 
-We currently support the following algorithms:
-- Baselines:
-  - Youngs
-  - ELVIRA
-- Our algorithms:
-  - No merging.
-    - "Safe" linear
-    - "Safe" circular
-  - With merging.
-    - Linear+corners
-    - Circular+corners
+### Supported Algorithms
 
-## Static experiments
+#### Baselines
+- **Youngs**
+- **LVIRA**
 
-Randomly oriented lines:
+#### Our Algorithms
+
+**Without Cell Merging (Faster)**
+- **safe_linear**: Linear reconstruction method without cell merging
+- **safe_circle**: Circular reconstruction method without cell merging
+
+**With Cell Merging (More Accurate)**
+- **linear**: Linear reconstruction method with cell merging
+- **circular**: Circular reconstruction method with cell merging
+
+## Static Experiments
+
+These experiments test interface reconstruction on various geometric shapes with different algorithms and mesh resolutions.
+
+### Lines
+```bash
+./experiments/static/run_lines.sh
 ```
-./experiments/static/run_lines.sh 
-```
+Tests reconstruction of straight lines with varying orientations (0 to 2π).
 
-Randomly oriented circles:
-```
+### Circles
+```bash
 ./experiments/static/run_circles.sh
 ```
+Tests reconstruction of circles with varying centers and fixed radius.
 
-Randomly oriented ellipses:
-```
+### Ellipses
+```bash
 ./experiments/static/run_ellipses.sh
 ```
+Tests reconstruction of ellipses with varying aspect ratios (1.5 to 3.0).
 
-
-TODO Randomly generated polygons (corners)
-
-TODO Pac-man (circular corners)
-
-## Advection experiments
-
-Zalesak:
+### Squares
+```bash
+./experiments/static/run_squares.sh
 ```
+Tests reconstruction of squares with varying orientations.
+
+### TODO
+- Randomly generated polygons (corners)
+- Pac-man (circular corners)
+
+## Advection Experiments
+
+### Zalesak's Disk
+```bash
 python3 run.py --config advection/zalesak/50/zalesak_50_ccorner
 python3 run.py --config advection/zalesak/100/zalesak_100_ccorner
 ```
 
-x+o:
-```
-python3 run.py --config advection/x+o/50/x+o_50_safecircle # Works
+### x+o Problem
+```bash
+# Working configuration
+python3 run.py --config advection/x+o/50/x+o_50_safecircle
+
+# Other configurations
 python3 run.py --config advection/x+o/50/x+o_50_circular
-python3 run.py --config advection/x+o/50/x+o_50_ccorner # Producing circular facets with inverted curvature and incorrect corners... TODO
+python3 run.py --config advection/x+o/50/x+o_50_ccorner  # TODO: Producing circular facets with inverted curvature and incorrect corners
 python3 run.py --config advection/x+o/100/x+o_100_ccorner
-python3 run.py --config advection/x+o/150/x+o_150_ccorner # Mostly ok, but need to adjust corner threshold. Some corners failing and reforming. TODO
+python3 run.py --config advection/x+o/150/x+o_150_ccorner  # TODO: Mostly ok, but need to adjust corner threshold. Some corners failing and reforming
 ```
 
-Vortex:
-Algos: safecirclec0, safecircle, safelinear
-Resolutions: 32, 64, 128
-```
+### Vortex Problem
+**Algorithms**: safecirclec0, safecircle, safelinear  
+**Resolutions**: 32, 64, 128
+
+```bash
 python3 run.py --config advection/vortex/32/vortex_32_safecirclec0
 python3 run.py --config advection/vortex/50/vortex_50_safecircle
 python3 run.py --config advection/vortex/100/vortex_100_safecircle
 ```
 
 ## TODO
-Mainly two lingering bugs with the full algorithm.
-- Corners: sometimes fail to generate, other times generate in completely wrong places. Maybe because of 1. threshold used to generate corner, 2. failing to find a proper facet to extend (resolution issue).
-- Circles: very rarely (usually low resolution) will choose the wrong curvature solution. Likely because of heuristics I use to choose the orientation.
 
-C0 doesn't seem to work with merge-less algorithms: e.g. safe-circle.
+Mainly two lingering bugs with the full algorithm:
 
-Fixes:
-- Corner threshold.
-- findOrientation() in MergeMesh needs to be fixed.
+### Known Issues
+1. **Corners**: Sometimes fail to generate, other times generate in completely wrong places
+   - Possible causes: threshold used to generate corner, failing to find a proper facet to extend (resolution issue)
+2. **Circles**: Very rarely (usually low resolution) will choose the wrong curvature solution
+   - Likely because of heuristics used to choose the orientation
 
-Checkpointing: a bug relating to circular references within MergeMesh. Likely because of neighbor storing.
+### C0 Issues
+- C0 doesn't seem to work with merge-less algorithms (e.g., safe-circle)
 
-<div align="right"><a href="#table-of-contents">back to top </a></div>
+### Fixes Needed
+- Corner threshold adjustment
+- `findOrientation()` in MergeMesh needs to be fixed
+
+### Checkpointing Bug
+- Bug relating to circular references within MergeMesh
+- Likely because of neighbor storing
+
+---
+
+<div align="right"><a href="#table-of-contents">back to top</a></div>

@@ -1,3 +1,59 @@
+"""
+Ellipse Reconstruction Experiment
+
+This module performs ellipse reconstruction experiments to evaluate the performance of different
+interface reconstruction algorithms on elliptical interfaces.
+
+EXPERIMENT OVERVIEW:
+- Tests reconstruction of ellipses with varying aspect ratios (1.5 to 3.0)
+- Compares different facet reconstruction algorithms: Youngs, LVIRA, safe_linear, linear, safe_circle, and circular
+- Evaluates performance using curvature error and facet gap measurements
+- Supports both single experiments and comprehensive parameter sweeps
+
+PARAMETER SWEEP FUNCTIONALITY:
+When run with --sweep flag, performs a comprehensive parameter sweep across:
+
+1. Mesh Resolution (6 values):
+   - Fine resolutions: [0.32, 0.50, 0.64]
+   - Coarse resolutions: [1.00, 1.28, 2.00]
+   - Tests convergence behavior as resolution increases
+
+2. Facet Reconstruction Algorithms (6 algorithms):
+   - Youngs: Classic Youngs' method for interface reconstruction
+   - LVIRA: Least Squares Volume-of-Fluid Interface Reconstruction Algorithm  
+   - safe_linear: Linear reconstruction method without cell merging (faster but potentially less accurate)
+   - linear: Our linear reconstruction method with cell merging
+   - safe_circle: Circular reconstruction method without cell merging (faster but potentially less accurate)
+   - circular: Circular reconstruction method with cell merging for improved accuracy
+
+ALGORITHM DIFFERENCES:
+- safe_linear: Skips cell merging for faster execution, but may be less accurate
+- linear: Performs cell merging to improve accuracy at the cost of computational speed
+- safe_circle: Skips cell merging for faster execution, but may be less accurate
+- circular: Performs cell merging for better accuracy in circular reconstructions
+
+SWEEP EXECUTION:
+- For each (resolution, algorithm) combination:
+  - Tests 25 different ellipse aspect ratios (1.5 to 3.0)
+  - Calculates curvature errors and facet gaps
+  - Averages results across all ellipse configurations
+- Generates performance plots and results files
+- Creates 6×6 grid of experiments (6 resolutions × 6 algorithms)
+
+USAGE:
+Single experiment:
+    python ellipses.py --config <config> [--resolution <res>] [--facet_algo <algo>]
+
+Parameter sweep:
+    python ellipses.py --config <config> --sweep [--num_ellipses <n>]
+
+OUTPUTS:
+- ellipse_reconstruction_curvature.png: Curvature error comparison plot
+- ellipse_reconstruction_gaps.png: Facet gap comparison plot
+- ellipse_reconstruction_results.txt: Raw numerical results
+- Individual experiment outputs in specified save directories
+"""
+
 import argparse
 import os
 import numpy as np
@@ -154,10 +210,11 @@ def run_parameter_sweep(config_setting, num_ellipses=25):
 
     # Define parameter ranges
     resolutions = [0.32, 0.50, 0.64, 1.00, 1.28, 2.00]
-    facet_algos = ["Youngs", "LVIRA", "linear", "safe_circle", "circular"]
+    facet_algos = ["Youngs", "LVIRA", "safe_linear", "linear", "safe_circle", "circular"]
     save_names = [
         "ellipse_youngs",
         "ellipse_lvira",
+        "ellipse_safelinear",
         "ellipse_linear",
         "ellipse_safecircle",
         "ellipse_mergecircle",
