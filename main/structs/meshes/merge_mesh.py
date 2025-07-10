@@ -255,7 +255,9 @@ class MergeMesh(BaseMesh):
                             self.polys[merge_coord[0]][merge_coord[1]]
                         )
                     except:
-                        breakpoint()
+                        # breakpoint()
+                        # TODO JL 5/29/25: pass for now? we need to figure out why this is happening though
+                        pass
                     neighbor.adjacent_polys.append(ret_poly)
 
         ret_poly.adjacent_polys = adjacent_polys

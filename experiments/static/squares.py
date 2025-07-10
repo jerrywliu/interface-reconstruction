@@ -124,9 +124,14 @@ def main(
         ):
             # Calculate area error
             # For linear facets, calculate area using the facet line and polygon
-            facet_area = getPolyLineArea(
-                poly.points, reconstructed_facet.pLeft, reconstructed_facet.pRight
-            )
+            try:
+                facet_area = getPolyLineArea(
+                    poly.points, reconstructed_facet.pLeft, reconstructed_facet.pRight
+                )
+            except:
+                # TODO JL 5/29/25: sometimes for some reason (usually in the linear+corner algo) the reconstructed facet is None
+                # and we get an error here.
+                continue
             total_area += facet_area
 
             # Calculate edge alignment error
