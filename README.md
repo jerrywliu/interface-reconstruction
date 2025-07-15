@@ -45,17 +45,39 @@ These experiments test interface reconstruction on various geometric shapes with
 ```
 Tests reconstruction of straight lines with varying orientations (0 to 2π).
 
+To plot:
+```bash
+python -m experiments.static.lines --plot_only --results_file results/static/line_reconstruction_results.txt
+```
+
 ### Circles
 ```bash
 ./experiments/static/run_circles.sh
 ```
 Tests reconstruction of circles with varying centers and fixed radius.
 
+To plot:
+```bash
+python -m experiments.static.circles --plot_only --results_file results/static/circle_reconstruction_results.txt
+```
+
 ### Ellipses
 ```bash
 ./experiments/static/run_ellipses.sh
 ```
 Tests reconstruction of ellipses with varying aspect ratios (1.5 to 3.0).
+
+To plot:
+```bash
+python -m experiments.static.ellipses --plot_only --results_file results/static/ellipse_reconstruction_results.txt
+```
+
+To run the unit tests of the ellipse helper functions, run:
+```bash
+python -m experiments.static.ellipses --test_plot_ellipse_arc
+python -m experiments.static.ellipses --test_plot_hausdorff_case
+python -m experiments.static.ellipses --test_ellipse_hausdorff
+```
 
 ### Squares
 ```bash

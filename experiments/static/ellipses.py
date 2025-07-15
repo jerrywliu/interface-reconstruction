@@ -61,7 +61,9 @@ import math
 import matplotlib.pyplot as plt
 
 from main.structs.meshes.merge_mesh import MergeMesh
-from util.metrics import calculate_facet_gaps
+from util.metrics.metrics import calculate_facet_gaps, hausdorffFacets
+from main.geoms.circular_facet import getCircleIntersectArea
+from main.structs.facets.base_facet import LinearFacet, ArcFacet
 
 from util.config import read_yaml
 from util.io.setup import setupOutputDirs
@@ -70,6 +72,117 @@ from util.initialize.points import makeFineCartesianGrid
 from util.initialize.areas import initializeEllipse
 from util.plotting.plt_utils import plotAreas, plotPartialAreas
 from util.plotting.vtk_utils import writeMesh
+
+# === Ellipse Hausdorff helpers ===
+def get_ellipse_to_circle_matrix(major_axis, minor_axis, theta):
+    """Return the 2x2 matrix that maps ellipse space to circle space."""
+    return np.linalg.inv(np.array([
+        [major_axis * math.cos(theta) ** 2 + minor_axis * math.sin(theta) ** 2,
+         (major_axis - minor_axis) * math.cos(theta) * math.sin(theta)],
+        [(major_axis - minor_axis) * math.cos(theta) * math.sin(theta),
+         major_axis * math.sin(theta) ** 2 + minor_axis * math.cos(theta) ** 2],
+    ]))
+
+def get_circle_to_ellipse_matrix(major_axis, minor_axis, theta):
+    """Return the 2x2 matrix that maps circle space to ellipse space."""
+    return np.array([
+        [major_axis * math.cos(theta) ** 2 + minor_axis * math.sin(theta) ** 2,
+         (major_axis - minor_axis) * math.cos(theta) * math.sin(theta)],
+        [(major_axis - minor_axis) * math.cos(theta) * math.sin(theta),
+         major_axis * math.sin(theta) ** 2 + minor_axis * math.cos(theta) ** 2],
+    ])
+
+def transform_points(points, matrix, center):
+    """Apply a 2x2 matrix and translation to a list of points."""
+    arr = np.array(points) - np.array(center)
+    return (arr @ matrix.T)  # shape (N,2)
+
+def inverse_transform_points(points, matrix, center):
+    """Apply the inverse transform (from circle space back to ellipse space)."""
+    arr = np.array(points) @ matrix + np.array(center)
+    return arr
+
+def sample_arc_points(center, radius, p1, p2, n=100):
+    """Sample n points along the arc from p1 to p2 (in circle space)."""
+    # Compute angles
+    a1 = math.atan2(p1[1] - center[1], p1[0] - center[0])
+    a2 = math.atan2(p2[1] - center[1], p2[0] - center[0])
+    # Ensure shortest direction
+    if a2 < a1:
+        a2 += 2 * math.pi
+    angles = np.linspace(a1, a2, n)
+    return np.stack([
+        center[0] + radius * np.cos(angles),
+        center[1] + radius * np.sin(angles)
+    ], axis=-1)
+
+def sample_linear_facet_points(facet, n=100):
+    return np.linspace(facet.pLeft, facet.pRight, n)
+
+def plot_hausdorff_comparison(true_points, reconstructed_points, title, save_path=None):
+    """Plot the true and reconstructed curves for Hausdorff comparison."""
+    import matplotlib.pyplot as plt
+    
+    plt.figure(figsize=(10, 6))
+    
+    # Plot true curve
+    plt.plot(true_points[:, 0], true_points[:, 1], 'b-', linewidth=3, label='True curve', alpha=0.8)
+    plt.plot(true_points[0, 0], true_points[0, 1], 'bo', markersize=8, label='True start')
+    plt.plot(true_points[-1, 0], true_points[-1, 1], 'bs', markersize=8, label='True end')
+    
+    # Plot reconstructed curve
+    plt.plot(reconstructed_points[:, 0], reconstructed_points[:, 1], 'r--', linewidth=3, label='Reconstructed curve', alpha=0.8)
+    plt.plot(reconstructed_points[0, 0], reconstructed_points[0, 1], 'ro', markersize=8, label='Reconstructed start')
+    plt.plot(reconstructed_points[-1, 0], reconstructed_points[-1, 1], 'rs', markersize=8, label='Reconstructed end')
+    
+    plt.title(title, fontsize=14, fontweight='bold')
+    plt.xlabel('x', fontsize=12)
+    plt.ylabel('y', fontsize=12)
+    plt.legend(fontsize=10)
+    plt.grid(True, alpha=0.3)
+    plt.axis('equal')
+    
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Plot saved to {save_path}")
+    else:
+        plt.show()
+    plt.close()
+
+def ellipse_hausdorff(mesh, reconstructed_facets, major_axis, minor_axis, theta, center, n=100):
+    """
+    Compute the average Hausdorff distance between reconstructed facets and true ellipse arcs using the circle trick.
+    The Hausdorff distance is computed in the original (ellipse) space.
+    """
+    ellipse_to_circle = get_ellipse_to_circle_matrix(major_axis, minor_axis, theta)
+    circle_to_ellipse = get_circle_to_ellipse_matrix(major_axis, minor_axis, theta)
+    total_hausdorff = 0
+    cnt_hausdorff = 0
+    
+    for poly, reconstructed_facet in zip(mesh.merged_polys.values(), reconstructed_facets):
+        # Transform cell polygon to circle space
+        poly_points_circ = transform_points(poly.points, ellipse_to_circle, center)
+        # Get intersection points in circle space
+        area, arcpoints = getCircleIntersectArea([0, 0], 1, poly_points_circ)
+        if len(arcpoints) >= 2:
+            # Sample points along the true arc in circle space
+            arc_samples_circ = sample_arc_points([0, 0], 1, arcpoints[0], arcpoints[-1], n)
+            # Transform true arc samples back to ellipse space
+            arc_samples_ellipse = inverse_transform_points(arc_samples_circ, circle_to_ellipse, center)
+            # Sample points along the reconstructed facet in ellipse space
+            if isinstance(reconstructed_facet, LinearFacet):
+                rec_points_ellipse = np.linspace(reconstructed_facet.pLeft, reconstructed_facet.pRight, n)
+            elif isinstance(reconstructed_facet, ArcFacet):
+                rec_points_ellipse = sample_arc_points(reconstructed_facet.center, abs(reconstructed_facet.radius), reconstructed_facet.pLeft, reconstructed_facet.pRight, n)
+            else:
+                continue  # skip unsupported facet types
+            # Compute Hausdorff distance in ellipse space
+            d1 = np.max([np.min(np.linalg.norm(rec_points_ellipse - p, axis=1)) for p in arc_samples_ellipse])
+            d2 = np.max([np.min(np.linalg.norm(arc_samples_ellipse - p, axis=1)) for p in rec_points_ellipse])
+            hausdorff = max(d1, d2)
+            total_hausdorff += hausdorff
+            cnt_hausdorff += 1
+    return total_hausdorff / cnt_hausdorff if cnt_hausdorff > 0 else 0
 
 # Global seed for reproducibility
 RANDOM_SEED = 42
@@ -116,6 +229,7 @@ def main(
     # Store metrics for all ellipses
     curvature_errors = []
     facet_gaps = []
+    hausdorff_distances = []
 
     for i, aspect_ratio in enumerate(aspect_ratios):
         print(f"Processing ellipse {i+1}/{num_ellipses}")
@@ -157,35 +271,57 @@ def main(
         avg_curvature_error = 0
         cnt_curvature = 0
 
+        # Hausdorff distance calculation
+        total_hausdorff = 0
+        cnt_hausdorff = 0
+
         for poly, reconstructed_facet in zip(
             m.merged_polys.values(), reconstructed_facets
         ):
-            # For each facet, calculate the true curvature at its center
-            # The curvature of an ellipse at angle phi is:
-            # k(phi) = (a*b) / (a^2 sin^2(phi) + b^2 cos^2(phi))^(3/2)
-            # where a is major axis, b is minor axis
+            # Curvature error (existing)
             facet_center = [
                 (reconstructed_facet.pLeft[0] + reconstructed_facet.pRight[0]) / 2,
                 (reconstructed_facet.pLeft[1] + reconstructed_facet.pRight[1]) / 2,
             ]
-
-            # Calculate angle from center to facet center
             dx = facet_center[0] - center[0]
             dy = facet_center[1] - center[1]
-            phi = math.atan2(dy, dx) - theta  # Adjust for ellipse rotation
-
-            # Calculate true curvature
+            phi = math.atan2(dy, dx) - theta
             true_curvature = (major_axis * minor_axis) / (
                 major_axis**2 * math.sin(phi) ** 2 + minor_axis**2 * math.cos(phi) ** 2
             ) ** (3 / 2)
-
-            # Take absolute error in curvature
             curvature_error = abs(reconstructed_facet.curvature - true_curvature)
             avg_curvature_error += curvature_error
             cnt_curvature += 1
 
+            # Hausdorff distance calculation (ellipse arc vs reconstructed facet)
+            # Use the circle trick: transform cell polygon to circle space, get arcpoints, then back to ellipse space
+            ellipse_to_circle = get_ellipse_to_circle_matrix(major_axis, minor_axis, theta)
+            circle_to_ellipse = get_circle_to_ellipse_matrix(major_axis, minor_axis, theta)
+            poly_points_circ = transform_points(poly.points, ellipse_to_circle, center)
+            area, arcpoints = getCircleIntersectArea([0, 0], 1, poly_points_circ)
+            if len(arcpoints) >= 2:
+                # True arc in ellipse space
+                arc_samples_circ = sample_arc_points([0, 0], 1, arcpoints[0], arcpoints[-1], 100)
+                arc_samples_ellipse = inverse_transform_points(arc_samples_circ, circle_to_ellipse, center)
+                # Reconstructed facet points in ellipse space
+                if isinstance(reconstructed_facet, LinearFacet):
+                    rec_points_ellipse = np.linspace(reconstructed_facet.pLeft, reconstructed_facet.pRight, 100)
+                elif isinstance(reconstructed_facet, ArcFacet):
+                    rec_points_ellipse = sample_arc_points(reconstructed_facet.center, abs(reconstructed_facet.radius), reconstructed_facet.pLeft, reconstructed_facet.pRight, 100)
+                else:
+                    continue
+                # Hausdorff distance
+                d1 = np.max([np.min(np.linalg.norm(rec_points_ellipse - p, axis=1)) for p in arc_samples_ellipse])
+                d2 = np.max([np.min(np.linalg.norm(arc_samples_ellipse - p, axis=1)) for p in rec_points_ellipse])
+                hausdorff = max(d1, d2)
+                total_hausdorff += hausdorff
+                cnt_hausdorff += 1
+
         avg_error = avg_curvature_error / cnt_curvature
         print(f"Average curvature error for ellipse {i+1}: {avg_error:.3e}")
+
+        avg_hausdorff = total_hausdorff / cnt_hausdorff if cnt_hausdorff > 0 else 0
+        print(f"Average Hausdorff distance for ellipse {i+1}: {avg_hausdorff:.3e}")
 
         # Calculate facet gaps
         avg_gap = calculate_facet_gaps(m, reconstructed_facets)
@@ -198,11 +334,14 @@ def main(
             f.write(f"{avg_error}\n")
         with open(os.path.join(output_dirs["metrics"], "facet_gap.txt"), "a") as f:
             f.write(f"{avg_gap}\n")
+        with open(os.path.join(output_dirs["metrics"], "hausdorff.txt"), "a") as f:
+            f.write(f"{avg_hausdorff}\n")
 
         curvature_errors.append(avg_error)
         facet_gaps.append(avg_gap)
+        hausdorff_distances.append(avg_hausdorff)
 
-    return curvature_errors, facet_gaps
+    return curvature_errors, facet_gaps, hausdorff_distances
 
 
 def create_combined_plot(resolutions, curvature_results, gap_results, 
@@ -327,6 +466,41 @@ def create_combined_plot(resolutions, curvature_results, gap_results,
     plt.close()
 
 
+def create_hausdorff_plot(resolutions, hausdorff_results, save_path="results/static/ellipse_reconstruction_hausdorff.png"):
+    """
+    Create a plot for Hausdorff distance vs. resolution for all algorithms.
+    """
+    import matplotlib.pyplot as plt
+    plt.rcParams.update({
+        'font.size': 12,
+        'font.family': 'serif',
+        'mathtext.fontset': 'cm',
+        'axes.linewidth': 1.5,
+        'xtick.major.width': 1.5,
+        'ytick.major.width': 1.5,
+        'xtick.minor.width': 1.0,
+        'ytick.minor.width': 1.0,
+        'lines.linewidth': 2.5,
+        'lines.markersize': 8,
+    })
+    plt.figure(figsize=(8, 6))
+    x_values = [int(100 * r) for r in resolutions]
+    for algo, values in hausdorff_results.items():
+        plt.plot(x_values, values, marker='o', label=algo, linewidth=2.5, markersize=8)
+    plt.xscale("log", base=2)
+    plt.xlabel(r"Resolution", fontsize=14)
+    plt.yscale("log")
+    plt.ylabel("Average Hausdorff Distance", fontsize=14)
+    plt.title("Hausdorff Distance (Ellipse)", fontsize=16, fontweight='bold')
+    plt.legend(fontsize=12, frameon=True, fancybox=True, shadow=False, loc='center left', bbox_to_anchor=(0.02, 0.4))
+    plt.grid(True, which="both", ls="-", alpha=0.3)
+    plt.xticks(x_values, [str(x) for x in x_values])
+    plt.grid(True, which="minor", ls=":", alpha=0.2)
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.close()
+
+
 def load_results_from_file(file_path):
     """
     Load results from a summary results file.
@@ -363,16 +537,26 @@ def load_results_from_file(file_path):
 
 def plot_from_results_file(file_path="results/static/ellipse_reconstruction_results.txt", drop_resolution_200=False):
     """
-    Load results from file and create combined performance plot.
-    
-    Args:
-        file_path: Path to the results file (default: ellipse_reconstruction_results.txt)
-        drop_resolution_200: Whether to drop the highest resolution data point
+    Load results from file and create combined performance plot and Hausdorff plot.
     """
     try:
-        resolutions, curvature_results, gap_results = load_results_from_file(file_path)
+        with open(file_path, 'r') as f:
+            lines = f.read().strip().split('\n')
+        resolutions_line = lines[0]
+        resolutions_str = resolutions_line.split('Resolutions: ')[1]
+        resolutions = eval(resolutions_str)
+        curvature_line = lines[1]
+        curvature_str = curvature_line.split('Curvature Results: ')[1]
+        curvature_results = eval(curvature_str)
+        gap_line = lines[2]
+        gap_str = gap_line.split('Gap Results: ')[1]
+        gap_results = eval(gap_str)
+        hausdorff_line = lines[3]
+        hausdorff_str = hausdorff_line.split('Hausdorff Results: ')[1]
+        hausdorff_results = eval(hausdorff_str)
         create_combined_plot(resolutions, curvature_results, gap_results, drop_resolution_200=drop_resolution_200)
-        print(f"Combined plot created from {file_path}")
+        create_hausdorff_plot(resolutions, hausdorff_results)
+        print(f"Combined and Hausdorff plots created from {file_path}")
     except FileNotFoundError:
         print(f"Error: File {file_path} not found")
     except Exception as e:
@@ -383,7 +567,7 @@ def run_parameter_sweep(config_setting, num_ellipses=25, drop_resolution_200=Fal
     MIN_ERROR = 1e-14
 
     # Define parameter ranges
-    resolutions = [0.32, 0.50, 0.64, 1.00, 1.28, 2.00]
+    resolutions = [0.32, 0.50, 0.64, 1.00, 1.28, 1.50]
     facet_algos = ["Youngs", "LVIRA", "safe_linear", "linear", "safe_circle", "circular"]
     save_names = [
         "ellipse_youngs",
@@ -397,13 +581,14 @@ def run_parameter_sweep(config_setting, num_ellipses=25, drop_resolution_200=Fal
     # Store results
     curvature_results = {algo: [] for algo in facet_algos}
     gap_results = {algo: [] for algo in facet_algos}
+    hausdorff_results = {algo: [] for algo in facet_algos}
 
     # Run experiments
     for resolution in resolutions:
         print(f"\nRunning experiments for resolution {resolution}")
         for algo, save_name in zip(facet_algos, save_names):
             print(f"Testing {algo} algorithm...")
-            errors, gaps = main(
+            errors, gaps, hausdorffs = main(
                 config_setting=config_setting,
                 resolution=resolution,
                 facet_algo=algo,
@@ -412,6 +597,7 @@ def run_parameter_sweep(config_setting, num_ellipses=25, drop_resolution_200=Fal
             )
             curvature_results[algo].append(max(np.mean(np.array(errors)), MIN_ERROR))
             gap_results[algo].append(max(np.mean(np.array(gaps)), MIN_ERROR))
+            hausdorff_results[algo].append(max(np.mean(np.array(hausdorffs)), MIN_ERROR))
 
     # Create combined plot
     create_combined_plot(resolutions, curvature_results, gap_results, drop_resolution_200=drop_resolution_200)
@@ -421,8 +607,207 @@ def run_parameter_sweep(config_setting, num_ellipses=25, drop_resolution_200=Fal
         f.write(f"Resolutions: {resolutions}\n")
         f.write(f"Curvature Results: {curvature_results}\n")
         f.write(f"Gap Results: {gap_results}\n")
+        f.write(f"Hausdorff Results: {hausdorff_results}\n")
 
-    return curvature_results, gap_results
+    return curvature_results, gap_results, hausdorff_results
+
+
+def test_ellipse_hausdorff():
+    print("Running ellipse_hausdorff test (single case)...")
+    import numpy as np
+    class DummyPolys(dict):
+        def values(self):
+            return [self[0]]
+    class DummyMesh:
+        def __init__(self, cell):
+            self.merged_polys = DummyPolys({0: cell})
+
+    # Test case parameters (match test_plot_hausdorff_case)
+    major_axis = 5.3
+    minor_axis = 2.0
+    theta = 0.0
+    center = [0.0, 0.0]
+    poly_points = [[5.0, 0.0], [7.0, 0.0], [7.0, 2.0], [5.0, 2.0]]
+
+    # Intersect the polygon with the reference circle (r=5.5)
+    from main.geoms.circular_facet import getCircleIntersectArea
+    area_circ, arcpoints_circ = getCircleIntersectArea(center, 5.5, poly_points)
+    if len(arcpoints_circ) < 2:
+        print("Reference circle does not intersect polygon in two points!")
+        return
+    # Create the reference circle arc facet
+    ref_facet = ArcFacet(center, 5.5, arcpoints_circ[0], arcpoints_circ[-1])
+
+    # Create the mesh and cell for the ellipse
+    cell = type('Poly', (), {})()
+    cell.points = poly_points
+    mesh = DummyMesh(cell)
+
+    # Compute Hausdorff distance between ellipse arc and reference circle arc within the polygon
+    reconstructed_facets = [ref_facet]
+    hausdorff = ellipse_hausdorff(mesh, reconstructed_facets, major_axis, minor_axis, theta, center)
+    print(f"Hausdorff distance (ellipse arc vs reference circle arc within polygon): {hausdorff:.6f}")
+    print("Test completed!")
+
+
+def test_plot_ellipse_arc():
+    import numpy as np
+    import matplotlib.pyplot as plt
+    print("Plotting circle arc and corresponding ellipse arc...")
+    # Ellipse parameters
+    major_axis = 2.0
+    minor_axis = 1.0
+    theta = np.pi / 6  # 30 degrees
+    center = [1.0, -1.0]
+    circle_to_ellipse = get_circle_to_ellipse_matrix(major_axis, minor_axis, theta)
+
+    # Arc endpoints in circle space (unit circle)
+    angle1 = np.pi / 4
+    angle2 = 3 * np.pi / 4
+    n = 100
+    arc_points_circ = np.stack([
+        np.cos(np.linspace(angle1, angle2, n)),
+        np.sin(np.linspace(angle1, angle2, n))
+    ], axis=-1)
+
+    # Transform arc points to ellipse space
+    arc_points_ellipse = (arc_points_circ @ circle_to_ellipse) + np.array(center)
+
+    # Plot
+    plt.figure(figsize=(8, 4))
+    plt.subplot(1, 2, 1)
+    plt.plot(arc_points_circ[:, 0], arc_points_circ[:, 1], 'b.-', label='Circle arc')
+    plt.gca().set_aspect('equal')
+    plt.title('Arc in Circle Space')
+    plt.xlabel('x')
+    plt.ylabel('y')
+    plt.legend()
+    plt.subplot(1, 2, 2)
+    plt.plot(arc_points_ellipse[:, 0], arc_points_ellipse[:, 1], 'r.-', label='Ellipse arc')
+    plt.gca().set_aspect('equal')
+    plt.title('Arc in Ellipse Space')
+    plt.xlabel('x')
+    plt.ylabel('y')
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig('results/tests/ellipse_arc_comparison.png', dpi=300, bbox_inches='tight')
+    plt.show()
+    print("Plot saved as results/tests/ellipse_arc_comparison.png")
+
+
+def test_plot_hausdorff_case():
+    """Plot the specific test case to visualize ellipse vs circle points, using only the arc segments within the polygon for both."""
+    import numpy as np
+    import matplotlib.pyplot as plt
+    import os
+    
+    print("Plotting Hausdorff test case...")
+    
+    # Test case parameters
+    major_axis = 5.3
+    minor_axis = 2.0
+    theta = 0.0
+    center = [0.0, 0.0]
+    
+    # Polygon
+    poly_points = [[5.0, 0.0], [7.0, 0.0], [7.0, 2.0], [5.0, 2.0]]
+    
+    # Transform to circle space
+    ellipse_to_circle = get_ellipse_to_circle_matrix(major_axis, minor_axis, theta)
+    circle_to_ellipse = get_circle_to_ellipse_matrix(major_axis, minor_axis, theta)
+    
+    poly_circ = transform_points(poly_points, ellipse_to_circle, center)
+    
+    # Get intersection points for ellipse (unit circle in circle space)
+    area, arcpoints = getCircleIntersectArea([0, 0], 1, poly_circ)
+    print(f"Ellipse/circle space intersection points: {arcpoints}")
+    
+    # Sample points along the true arc in circle space
+    if len(arcpoints) >= 2:
+        arc_samples_circ = sample_arc_points([0, 0], 1, arcpoints[0], arcpoints[-1], 100)
+        # Transform back to ellipse space
+        arc_samples_ellipse = inverse_transform_points(arc_samples_circ, circle_to_ellipse, center)
+        
+        # Now do the same for the reference circle (r=5.5)
+        # Intersect the polygon with the reference circle
+        area_circ, arcpoints_circ = getCircleIntersectArea(center, 5.5, poly_points)
+        print(f"Reference circle intersection points: {arcpoints_circ}")
+        if len(arcpoints_circ) >= 2:
+            arc_samples_circle = sample_arc_points(center, 5.5, arcpoints_circ[0], arcpoints_circ[-1], 100)
+        else:
+            arc_samples_circle = None
+        
+        # Create the plot
+        plt.figure(figsize=(12, 5))
+        
+        # Plot 1: Circle space
+        plt.subplot(1, 2, 1)
+        # Draw unit circle
+        circle_theta = np.linspace(0, 2*np.pi, 100)
+        circle_x = np.cos(circle_theta)
+        circle_y = np.sin(circle_theta)
+        plt.plot(circle_x, circle_y, 'k-', alpha=0.5, label='Unit circle')
+        
+        # Draw polygon in circle space
+        poly_circ_array = np.array(poly_circ)
+        plt.plot(poly_circ_array[:, 0], poly_circ_array[:, 1], 'b-', linewidth=2, label='Transformed polygon')
+        plt.plot([poly_circ_array[-1, 0], poly_circ_array[0, 0]], [poly_circ_array[-1, 1], poly_circ_array[0, 1]], 'b-', linewidth=2)
+        
+        # Draw intersection points
+        if arcpoints:
+            arcpoints_array = np.array(arcpoints)
+            plt.plot(arcpoints_array[:, 0], arcpoints_array[:, 1], 'ro', markersize=8, label='Intersection points')
+        
+        # Draw sampled arc points
+        plt.plot(arc_samples_circ[:, 0], arc_samples_circ[:, 1], 'g.-', linewidth=2, markersize=4, label='Sampled ellipse arc points')
+        
+        plt.title('Circle Space')
+        plt.xlabel('x')
+        plt.ylabel('y')
+        plt.legend()
+        plt.axis('equal')
+        plt.grid(True, alpha=0.3)
+        
+        # Plot 2: Ellipse space
+        plt.subplot(1, 2, 2)
+        # Draw ellipse
+        ellipse_theta = np.linspace(0, 2*np.pi, 100)
+        ellipse_x = center[0] + major_axis * np.cos(ellipse_theta) * np.cos(theta) - minor_axis * np.sin(ellipse_theta) * np.sin(theta)
+        ellipse_y = center[1] + major_axis * np.cos(ellipse_theta) * np.sin(theta) + minor_axis * np.sin(ellipse_theta) * np.cos(theta)
+        plt.plot(ellipse_x, ellipse_y, 'k-', alpha=0.5, label='Ellipse')
+        
+        # Draw original polygon
+        poly_array = np.array(poly_points)
+        plt.plot(poly_array[:, 0], poly_array[:, 1], 'b-', linewidth=2, label='Original polygon')
+        plt.plot([poly_array[-1, 0], poly_array[0, 0]], [poly_array[-1, 1], poly_array[0, 1]], 'b-', linewidth=2)
+        
+        # Draw sampled ellipse arc points
+        plt.plot(arc_samples_ellipse[:, 0], arc_samples_ellipse[:, 1], 'g.-', linewidth=2, markersize=4, label='Ellipse arc points')
+        
+        # Draw the reference circle arc segment and its points
+        if arc_samples_circle is not None:
+            plt.plot(arc_samples_circle[:, 0], arc_samples_circle[:, 1], 'r.-', linewidth=2, markersize=4, label='Reference circle arc points')
+        else:
+            # fallback: plot the full circle arc for reference
+            circle_arc_theta = np.linspace(-np.pi/2, np.pi/2, 100)
+            circle_arc_x = center[0] + 5.5 * np.cos(circle_arc_theta)
+            circle_arc_y = center[1] + 5.5 * np.sin(circle_arc_theta)
+            plt.plot(circle_arc_x, circle_arc_y, 'r--', linewidth=2, label='Reference circle arc (r=5.5)')
+        
+        plt.title('Ellipse Space')
+        plt.xlabel('x')
+        plt.ylabel('y')
+        plt.legend()
+        plt.axis('equal')
+        plt.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        os.makedirs('results/tests', exist_ok=True)
+        plt.savefig('results/tests/hausdorff_test_case_visualization.png', dpi=300, bbox_inches='tight')
+        plt.show()
+        print("Plot saved as results/tests/hausdorff_test_case_visualization.png")
+    else:
+        print("No intersection points found!")
 
 
 if __name__ == "__main__":
@@ -448,13 +833,32 @@ if __name__ == "__main__":
         "--drop_resolution_200", action="store_true", help="drop the highest resolution (200) data point from plots", 
         default=False
     )
+    parser.add_argument(
+        "--test_ellipse_hausdorff", action="store_true", help="run ellipse_hausdorff tests and exit", default=False
+    )
+    parser.add_argument(
+        "--test_plot_ellipse_arc", action="store_true", help="plot circle and ellipse arc for visual check", default=False
+    )
+    parser.add_argument(
+        "--test_plot_hausdorff_case", action="store_true", help="plot the specific test case for Hausdorff visualization", default=False
+    )
 
     args = parser.parse_args()
+
+    if args.test_ellipse_hausdorff:
+        test_ellipse_hausdorff()
+        exit(0)
+    if args.test_plot_ellipse_arc:
+        test_plot_ellipse_arc()
+        exit(0)
+    if args.test_plot_hausdorff_case:
+        test_plot_hausdorff_case()
+        exit(0)
 
     if args.plot_only:
         plot_from_results_file(args.results_file, args.drop_resolution_200)
     elif args.sweep:
-        curvature_results, gap_results = run_parameter_sweep(
+        curvature_results, gap_results, hausdorff_results = run_parameter_sweep(
             args.config, args.num_ellipses, args.drop_resolution_200
         )
         print("\nParameter sweep results:")
@@ -463,6 +867,9 @@ if __name__ == "__main__":
             print(f"{algo}: {values}")
         print("\nFacet Gaps:")
         for algo, values in gap_results.items():
+            print(f"{algo}: {values}")
+        print("\nHausdorff Distances:")
+        for algo, values in hausdorff_results.items():
             print(f"{algo}: {values}")
     else:
         main(

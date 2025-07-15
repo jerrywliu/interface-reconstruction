@@ -390,38 +390,6 @@ class ArcFacet(Facet):
         return False
 
 
-def hausdorffLinearFacets(facet1: LinearFacet, facet2: LinearFacet) -> float:
-    """
-    Compute Hausdorff distance between two linear facets by checking normal
-    distances from endpoints to the other facet.
-
-    Args:
-        facet1: First linear facet
-        facet2: Second linear facet
-
-    Returns:
-        float: Hausdorff distance
-    """
-
-    def getPointToLineDistance(p, facet):
-        # Get normal vector
-        normal = getNormal(facet, p)
-        # Get vector from point to line start
-        v = [p[0] - facet.pLeft[0], p[1] - facet.pLeft[1]]
-        # Project onto normal to get distance
-        return abs(v[0] * normal[0] + v[1] * normal[1])
-
-    # Check distances from facet1's endpoints to facet2
-    d1 = getPointToLineDistance(facet1.pLeft, facet2)
-    d2 = getPointToLineDistance(facet1.pRight, facet2)
-
-    # Check distances from facet2's endpoints to facet1
-    d3 = getPointToLineDistance(facet2.pLeft, facet1)
-    d4 = getPointToLineDistance(facet2.pRight, facet1)
-
-    return max(d1, d2, d3, d4)
-
-
 class CornerFacet(Facet):
 
     def __init__(
@@ -560,3 +528,8 @@ class CornerFacet(Facet):
         )
 
     # TODO: define equality for corner?
+
+
+if __name__ == "__main__":
+    # TODO JL 7/13/25: write tests for all facets
+    pass

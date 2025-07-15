@@ -55,8 +55,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from main.structs.meshes.merge_mesh import MergeMesh
-from main.structs.facets.base_facet import LinearFacet, hausdorffLinearFacets
+from main.structs.facets.base_facet import LinearFacet
 from main.geoms.geoms import getPolyLineIntersects
+from util.metrics.metrics import hausdorffFacets, calculate_facet_gaps
 
 from util.config import read_yaml
 from util.io.setup import setupOutputDirs
@@ -217,6 +218,7 @@ def main(
     rng = np.random.default_rng(RANDOM_SEED)
 
     hausdorff_distances = []
+    facet_gaps = []
 
     for i, angle in enumerate(angles):
         print(f"Processing line {i+1}/{num_lines}")
@@ -262,7 +264,7 @@ def main(
             intersects = getPolyLineIntersects(poly.points, [x1, y1], [x2, y2])
             if intersects:
                 true_facet = LinearFacet(intersects[0], intersects[-1])
-                avg_hausdorff += hausdorffLinearFacets(true_facet, reconstructed_facet)
+                avg_hausdorff += hausdorffFacets(true_facet, reconstructed_facet)
                 cnt_hausdorff += 1
         print(
             f"Average Hausdorff distance for line {i+1}: {avg_hausdorff/cnt_hausdorff:.3e}"
@@ -274,14 +276,21 @@ def main(
 
         hausdorff_distances.append(avg_hausdorff / cnt_hausdorff)
 
-    return hausdorff_distances
+        # Calculate facet gap
+        avg_gap = calculate_facet_gaps(m, reconstructed_facets)
+        print(f"Average facet gap for line {i+1}: {avg_gap:.3e}")
+        with open(os.path.join(output_dirs["metrics"], "facet_gap.txt"), "a") as f:
+            f.write(f"{avg_gap}\n")
+        facet_gaps.append(avg_gap)
+
+    return hausdorff_distances, facet_gaps
 
 
 def run_parameter_sweep(config_setting, num_lines=25):
     MIN_ERROR = 1e-14
 
     # Define parameter ranges
-    resolutions = [0.32, 0.50, 0.64, 1.00, 1.28, 2.00]
+    resolutions = [0.32, 0.50, 0.64, 1.00, 1.28, 1.50]
     facet_algos = ["Youngs", "LVIRA", "safe_linear", "linear"]
     save_names = [
         "line_youngs",
@@ -292,13 +301,14 @@ def run_parameter_sweep(config_setting, num_lines=25):
 
     # Store results
     results = {algo: [] for algo in facet_algos}
+    gap_results = {algo: [] for algo in facet_algos}
 
     # Run experiments
     for resolution in resolutions:
         print(f"\nRunning experiments for resolution {resolution}")
         for algo, save_name in zip(facet_algos, save_names):
             print(f"Testing {algo} algorithm...")
-            hausdorff = main(
+            hausdorff, gaps = main(
                 config_setting=config_setting,
                 resolution=resolution,
                 facet_algo=algo,
@@ -306,16 +316,36 @@ def run_parameter_sweep(config_setting, num_lines=25):
                 num_lines=num_lines,
             )
             results[algo].append(max(np.mean(np.array(hausdorff)), MIN_ERROR))
+            gap_results[algo].append(max(np.mean(np.array(gaps)), MIN_ERROR))
 
     # Create summary plot
     create_performance_plot(resolutions, results)
+
+    # Add a facet gap plot if desired
+    plt.figure(figsize=(8, 6))
+    x_values = [int(100 * r) for r in resolutions]
+    for algo, values in gap_results.items():
+        plt.plot(x_values, values, marker='o', label=algo, linewidth=2.5, markersize=8)
+    plt.xscale("log", base=2)
+    plt.xlabel(r"Resolution", fontsize=14)
+    plt.yscale("log")
+    plt.ylabel("Average Facet Gap", fontsize=14)
+    plt.title("Facet Gap vs. Resolution", fontsize=16, fontweight='bold')
+    plt.legend(fontsize=12, frameon=True, fancybox=True, shadow=False, loc='center left', bbox_to_anchor=(0.02, 0.4))
+    plt.grid(True, which="both", ls="-", alpha=0.3)
+    plt.xticks(x_values, [str(x) for x in x_values])
+    plt.grid(True, which="minor", ls=":", alpha=0.2)
+    plt.tight_layout()
+    plt.savefig("results/static/line_reconstruction_facet_gap.png", dpi=300, bbox_inches="tight")
+    plt.close()
 
     # Dump results to file
     with open("results/static/line_reconstruction_results.txt", "w") as f:
         f.write(f"Resolutions: {resolutions}\n")
         f.write(f"Results: {results}\n")
+        f.write(f"Facet Gaps: {gap_results}\n")
 
-    return results
+    return results, gap_results
 
 
 if __name__ == "__main__":
@@ -343,9 +373,12 @@ if __name__ == "__main__":
     if args.plot_only:
         plot_from_results_file(args.results_file)
     elif args.sweep:
-        results = run_parameter_sweep(args.config, args.num_lines)
+        results, gap_results = run_parameter_sweep(args.config, args.num_lines)
         print("\nParameter sweep results:")
         for algo, values in results.items():
+            print(f"{algo}: {values}")
+        print("\nFacet Gaps:")
+        for algo, values in gap_results.items():
             print(f"{algo}: {values}")
     else:
         main(

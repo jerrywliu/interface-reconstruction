@@ -60,7 +60,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from main.structs.meshes.merge_mesh import MergeMesh
-from util.metrics import calculate_facet_gaps
+from main.geoms.circular_facet import getCircleIntersectArea
+from main.structs.facets.base_facet import ArcFacet
+from util.metrics.metrics import hausdorffFacets, calculate_facet_gaps
 
 from util.config import read_yaml
 from util.io.setup import setupOutputDirs
@@ -71,7 +73,7 @@ from util.plotting.plt_utils import plotAreas, plotPartialAreas
 from util.plotting.vtk_utils import writeMesh
 
 # Global seed for reproducibility
-RANDOM_SEED = 42
+RANDOM_SEED = 41
 
 
 def main(
@@ -112,6 +114,7 @@ def main(
     # Store metrics for all circles
     curvature_errors = []
     facet_gaps = []
+    hausdorff_distances = []
 
     for i in range(num_circles):
         print(f"Processing circle {i+1}/{num_circles}")
@@ -148,6 +151,10 @@ def main(
         avg_curvature_error = 0
         cnt_curvature = 0
 
+        # Calculate Hausdorff distance
+        total_hausdorff = 0
+        cnt_hausdorff = 0
+
         for poly, reconstructed_facet in zip(
             m.merged_polys.values(), reconstructed_facets
         ):
@@ -156,8 +163,19 @@ def main(
             avg_curvature_error += curvature_error
             cnt_curvature += 1
 
+            # Hausdorff distance calculation
+            area, arcpoints = getCircleIntersectArea(center, radius, poly.points)
+            if len(arcpoints) >= 2:
+                true_facet = ArcFacet(center, radius, arcpoints[0], arcpoints[-1])
+                hausdorff_dist = hausdorffFacets(true_facet, reconstructed_facet)
+                total_hausdorff += hausdorff_dist
+                cnt_hausdorff += 1
+
         avg_error = avg_curvature_error / cnt_curvature
         print(f"Average curvature error for circle {i+1}: {avg_error:.3e}")
+
+        avg_hausdorff = total_hausdorff / cnt_hausdorff if cnt_hausdorff > 0 else 0
+        print(f"Average Hausdorff distance for circle {i+1}: {avg_hausdorff:.3e}")
 
         # Calculate facet gaps
         avg_gap = calculate_facet_gaps(m, reconstructed_facets)
@@ -170,15 +188,17 @@ def main(
             f.write(f"{avg_error}\n")
         with open(os.path.join(output_dirs["metrics"], "facet_gap.txt"), "a") as f:
             f.write(f"{avg_gap}\n")
+        with open(os.path.join(output_dirs["metrics"], "hausdorff.txt"), "a") as f:
+            f.write(f"{avg_hausdorff}\n")
 
         curvature_errors.append(avg_error)
         facet_gaps.append(avg_gap)
+        hausdorff_distances.append(avg_hausdorff)
 
-    return curvature_errors, facet_gaps
+    return curvature_errors, facet_gaps, hausdorff_distances
 
 
-def create_combined_plot(resolutions, curvature_results, gap_results, radius=10.0, 
-                        save_path="results/static/circle_reconstruction_combined.png", drop_resolution_200=True):
+def create_combined_plot(resolutions, curvature_results, gap_results, radius=10.0, save_path="results/static/circle_reconstruction_combined.png"):
     """
     Create a combined plot with facet gaps and curvature error subplots.
     
@@ -188,7 +208,6 @@ def create_combined_plot(resolutions, curvature_results, gap_results, radius=10.
         gap_results: Dictionary of facet gap results
         radius: Circle radius for title
         save_path: Path to save the plot
-        drop_resolution_200: Whether to drop the highest resolution (200) data point
     """
     # Set up matplotlib for better looking plots
     plt.rcParams.update({
@@ -204,14 +223,6 @@ def create_combined_plot(resolutions, curvature_results, gap_results, radius=10.
         'lines.markersize': 8,
     })
     
-    # Filter out resolution 200 if requested
-    if drop_resolution_200 and len(resolutions) > 0 and resolutions[-1] == 2.00:
-        resolutions = resolutions[:-1]
-        for algo in curvature_results:
-            curvature_results[algo] = curvature_results[algo][:-1]
-        for algo in gap_results:
-            gap_results[algo] = gap_results[algo][:-1]
-    
     # Convert resolutions to integers (100*r)
     x_values = [int(100 * r) for r in resolutions]
     
@@ -220,30 +231,8 @@ def create_combined_plot(resolutions, curvature_results, gap_results, radius=10.
     
     # Plot facet gaps (left subplot)
     for algo, values in gap_results.items():
-        if algo == "Youngs":
-            plt.sca(ax1)
-            plt.plot(x_values, values, marker='o', label="Youngs", 
-                    linewidth=2.5, markersize=8, linestyle='-')
-        elif algo == "LVIRA":
-            plt.sca(ax1)
-            plt.plot(x_values, values, marker='s', label="LVIRA", 
-                    linewidth=2.5, markersize=8, linestyle='--')
-        elif algo == "safe_linear":
-            plt.sca(ax1)
-            plt.plot(x_values, values, marker='o', label="Ours (linear, no merging)", 
-                    linewidth=2.5, markersize=8, linestyle='-')
-        elif algo == "linear":
-            plt.sca(ax1)
-            plt.plot(x_values, values, marker='s', label="Ours (linear, with merging)", 
-                    linewidth=2.5, markersize=8, linestyle='--')
-        elif algo == "safe_circle":
-            plt.sca(ax1)
-            plt.plot(x_values, values, marker='^', label="Ours (circular, no merging)", 
-                    linewidth=2.5, markersize=8, linestyle='-')
-        elif algo == "circular":
-            plt.sca(ax1)
-            plt.plot(x_values, values, marker='v', label="Ours (circular, with merging)", 
-                    linewidth=2.5, markersize=8, linestyle='--')
+        plt.sca(ax1)
+        plt.plot(x_values, values, marker='o', label=algo, linewidth=2.5, markersize=8)
     
     ax1.set_xscale("log", base=2)
     ax1.set_xlabel(r"Resolution", fontsize=14)
@@ -258,14 +247,8 @@ def create_combined_plot(resolutions, curvature_results, gap_results, radius=10.
     
     # Plot curvature errors (right subplot)
     for algo, values in curvature_results.items():
-        if algo == "safe_circle":
-            plt.sca(ax2)
-            plt.plot(x_values, values, marker='^', label="Ours (circular, no merging)", 
-                    linewidth=2.5, markersize=8, linestyle='-')
-        elif algo == "circular":
-            plt.sca(ax2)
-            plt.plot(x_values, values, marker='v', label="Ours (circular, with merging)", 
-                    linewidth=2.5, markersize=8, linestyle='--')
+        plt.sca(ax2)
+        plt.plot(x_values, values, marker='o', label=algo, linewidth=2.5, markersize=8)
     
     # Add PLIC reference line (1/r) for curvature
     plic_values = [1 / radius for r in resolutions]
@@ -290,63 +273,80 @@ def create_combined_plot(resolutions, curvature_results, gap_results, radius=10.
     plt.close()
 
 
+def create_hausdorff_plot(resolutions, hausdorff_results, radius=10.0, save_path="results/static/circle_reconstruction_hausdorff.png"):
+    """
+    Create a plot for Hausdorff distance vs. resolution.
+    """
+    plt.rcParams.update({
+        'font.size': 12,
+        'font.family': 'serif',
+        'mathtext.fontset': 'cm',
+        'axes.linewidth': 1.5,
+        'xtick.major.width': 1.5,
+        'ytick.major.width': 1.5,
+        'xtick.minor.width': 1.0,
+        'ytick.minor.width': 1.0,
+        'lines.linewidth': 2.5,
+        'lines.markersize': 8,
+    })
+    plt.figure(figsize=(8, 6))
+    x_values = [int(100 * r) for r in resolutions]
+    for algo, values in hausdorff_results.items():
+        plt.plot(x_values, values, marker='o', label=algo, linewidth=2.5, markersize=8)
+    plt.xscale("log", base=2)
+    plt.xlabel(r"Resolution", fontsize=14)
+    plt.yscale("log")
+    plt.ylabel("Average Hausdorff Distance", fontsize=14)
+    plt.title(f"Hausdorff Distance (Radius = {radius})", fontsize=16, fontweight='bold')
+    plt.legend(fontsize=12, frameon=True, fancybox=True, shadow=False, loc='center left', bbox_to_anchor=(0.02, 0.4))
+    plt.grid(True, which="both", ls="-", alpha=0.3)
+    plt.xticks(x_values, [str(x) for x in x_values])
+    plt.grid(True, which="minor", ls=":", alpha=0.2)
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.close()
+
+
 def load_results_from_file(file_path):
     """
     Load results from a summary results file.
-    
-    Args:
-        file_path: Path to the results file
-        
-    Returns:
-        tuple: (resolutions, curvature_results, gap_results)
     """
     with open(file_path, 'r') as f:
         content = f.read()
-    
-    # Parse the file content
     lines = content.strip().split('\n')
-    
-    # Extract resolutions
     resolutions_line = lines[0]
     resolutions_str = resolutions_line.split('Resolutions: ')[1]
-    resolutions = eval(resolutions_str)  # Safe for this specific format
-    
-    # Extract curvature results
+    resolutions = eval(resolutions_str)
     curvature_line = lines[1]
     curvature_str = curvature_line.split('Curvature Results: ')[1]
-    curvature_results = eval(curvature_str)  # Safe for this specific format
-    
-    # Extract gap results
+    curvature_results = eval(curvature_str)
     gap_line = lines[2]
     gap_str = gap_line.split('Gap Results: ')[1]
-    gap_results = eval(gap_str)  # Safe for this specific format
-    
-    return resolutions, curvature_results, gap_results
+    gap_results = eval(gap_str)
+    hausdorff_line = lines[3]
+    hausdorff_str = hausdorff_line.split('Hausdorff Results: ')[1]
+    hausdorff_results = eval(hausdorff_str)
+    return resolutions, curvature_results, gap_results, hausdorff_results
 
 
-def plot_from_results_file(file_path="results/static/circle_reconstruction_results.txt", drop_resolution_200=True):
+def plot_from_results_file(file_path="results/static/circle_reconstruction_results.txt", radius=10.0):
     """
     Load results from file and create combined performance plot.
-    
-    Args:
-        file_path: Path to the results file (default: circle_reconstruction_results.txt)
-        drop_resolution_200: Whether to drop the highest resolution data point
     """
     try:
-        resolutions, curvature_results, gap_results = load_results_from_file(file_path)
-        create_combined_plot(resolutions, curvature_results, gap_results, drop_resolution_200=drop_resolution_200)
-        print(f"Combined plot created from {file_path}")
+        resolutions, curvature_results, gap_results, hausdorff_results = load_results_from_file(file_path)
+        create_combined_plot(resolutions, curvature_results, gap_results, radius)
+        create_hausdorff_plot(resolutions, hausdorff_results, radius)
+        print(f"Combined and Hausdorff plots created from {file_path}")
     except FileNotFoundError:
         print(f"Error: File {file_path} not found")
     except Exception as e:
         print(f"Error loading results: {e}")
 
 
-def run_parameter_sweep(config_setting, num_circles=25, radius=10.0, drop_resolution_200=True):
+def run_parameter_sweep(config_setting, num_circles=25, radius=10.0):
     MIN_ERROR = 1e-14
-
-    # Define parameter ranges
-    resolutions = [0.32, 0.50, 0.64, 1.00, 1.28, 2.00]
+    resolutions = [0.32, 0.50, 0.64, 1.00, 1.28, 1.50]
     facet_algos = ["Youngs", "LVIRA", "safe_linear", "linear", "safe_circle", "circular"]
     save_names = [
         "circle_youngs",
@@ -356,17 +356,14 @@ def run_parameter_sweep(config_setting, num_circles=25, radius=10.0, drop_resolu
         "circle_safecircle",
         "circle_mergecircle",
     ]
-
-    # Store results
     curvature_results = {algo: [] for algo in facet_algos}
     gap_results = {algo: [] for algo in facet_algos}
-
-    # Run experiments
+    hausdorff_results = {algo: [] for algo in facet_algos}
     for resolution in resolutions:
         print(f"\nRunning experiments for resolution {resolution}")
         for algo, save_name in zip(facet_algos, save_names):
             print(f"Testing {algo} algorithm...")
-            errors, gaps = main(
+            errors, gaps, hausdorffs = main(
                 config_setting=config_setting,
                 resolution=resolution,
                 facet_algo=algo,
@@ -376,17 +373,15 @@ def run_parameter_sweep(config_setting, num_circles=25, radius=10.0, drop_resolu
             )
             curvature_results[algo].append(max(np.mean(np.array(errors)), MIN_ERROR))
             gap_results[algo].append(max(np.mean(np.array(gaps)), MIN_ERROR))
-
-    # Create combined plot
-    create_combined_plot(resolutions, curvature_results, gap_results, radius, drop_resolution_200=drop_resolution_200)
-
-    # Dump results to file
+            hausdorff_results[algo].append(max(np.mean(np.array(hausdorffs)), MIN_ERROR))
+    create_combined_plot(resolutions, curvature_results, gap_results, radius)
+    create_hausdorff_plot(resolutions, hausdorff_results, radius)
     with open("results/static/circle_reconstruction_results.txt", "w") as f:
         f.write(f"Resolutions: {resolutions}\n")
         f.write(f"Curvature Results: {curvature_results}\n")
         f.write(f"Gap Results: {gap_results}\n")
-
-    return curvature_results, gap_results
+        f.write(f"Hausdorff Results: {hausdorff_results}\n")
+    return curvature_results, gap_results, hausdorff_results
 
 
 if __name__ == "__main__":
@@ -409,18 +404,14 @@ if __name__ == "__main__":
         "--results_file", type=str, help="path to results file for plotting", 
         default="results/static/circle_reconstruction_results.txt"
     )
-    parser.add_argument(
-        "--keep_resolution_200", action="store_true", help="keep the highest resolution (200) data point in plots", 
-        default=False
-    )
 
     args = parser.parse_args()
 
     if args.plot_only:
-        plot_from_results_file(args.results_file, not args.keep_resolution_200)
+        plot_from_results_file(args.results_file, args.radius)
     elif args.sweep:
-        curvature_results, gap_results = run_parameter_sweep(
-            args.config, args.num_circles, args.radius, not args.keep_resolution_200
+        curvature_results, gap_results, hausdorff_results = run_parameter_sweep(
+            args.config, args.num_circles, args.radius
         )
         print("\nParameter sweep results:")
         print("\nCurvature Error:")
@@ -428,6 +419,9 @@ if __name__ == "__main__":
             print(f"{algo}: {values}")
         print("\nFacet Gaps:")
         for algo, values in gap_results.items():
+            print(f"{algo}: {values}")
+        print("\nHausdorff Distance:")
+        for algo, values in hausdorff_results.items():
             print(f"{algo}: {values}")
     else:
         main(
