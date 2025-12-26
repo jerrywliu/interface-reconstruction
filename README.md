@@ -85,6 +85,29 @@ python -m experiments.static.ellipses --test_ellipse_hausdorff
 ```
 Tests reconstruction of squares with varying orientations.
 
+To plot:
+```bash
+python -m experiments.static.squares --plot_only --results_file results/static/square_reconstruction_results.txt
+```
+
+To run the unit test for the square edge alignment metric:
+```bash
+python -m experiments.static.squares --test_edge_metric
+```
+
+Note: There are currently no dedicated unit tests for square-specific helper functions.
+
+### Zalesak (Static)
+```bash
+python -m experiments.static.zalesak --config static/circle --sweep --num_cases 15
+```
+Tests reconstruction of Zalesak's disk (circle with slot) with random centers and random rotations.
+
+To plot:
+```bash
+python -m experiments.static.zalesak --plot_only --results_file results/static/zalesak_reconstruction_results.txt
+```
+
 ### TODO
 - Randomly generated polygons (corners)
 - Pac-man (circular corners)

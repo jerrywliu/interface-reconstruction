@@ -5,7 +5,8 @@ import math
 import matplotlib.pyplot as plt
 
 from main.structs.meshes.merge_mesh import MergeMesh
-from main.geoms.geoms import getArea, getPolyLineArea
+from main.geoms.geoms import getArea, getPolyLineArea, getPolyIntersectArea
+from main.structs.facets.base_facet import LinearFacet
 
 from util.config import read_yaml
 from util.io.setup import setupOutputDirs
@@ -14,9 +15,97 @@ from util.initialize.points import makeFineCartesianGrid
 from util.initialize.areas import initializePoly
 from util.plotting.plt_utils import plotAreas, plotPartialAreas
 from util.plotting.vtk_utils import writeMesh
+from util.write_facets import writeFacets
 
 # Global seed for reproducibility
 RANDOM_SEED = 42
+
+
+def true_area_from_polygon_over_mesh(m, polygon):
+    """Sum exact polygon∩cell areas (merged cells)."""
+    total = 0.0
+    for poly in m.merged_polys.values():
+        intersects = getPolyIntersectArea(polygon, poly.points)
+        if not intersects:
+            continue
+        for inter in intersects:
+            total += abs(getArea(inter))
+    return total
+
+
+def _point_segment_distance(px, py, ax, ay, bx, by):
+    """Euclidean distance from point P to segment AB."""
+    vx, vy = bx - ax, by - ay
+    wx, wy = px - ax, py - ay
+    vv = vx * vx + vy * vy
+    if vv == 0.0:  # degenerate edge
+        return math.hypot(px - ax, py - ay)
+    t = (wx * vx + wy * vy) / vv
+    if t <= 0.0:
+        dx, dy = px - ax, py - ay
+    elif t >= 1.0:
+        dx, dy = px - bx, py - by
+    else:
+        projx, projy = ax + t * vx, ay + t * vy
+        dx, dy = px - projx, py - projy
+    return math.hypot(dx, dy)
+
+
+def _facet_midpoint(pL, pR):
+    return 0.5 * (pL[0] + pR[0]), 0.5 * (pL[1] + pR[1])
+
+
+def compute_edge_alignment_error_for_facet(rotated_square, p_left, p_right):
+    """
+    Compute the edge alignment error for a single facet defined by endpoints p_left and p_right
+    against the nearest edge of the true (possibly rotated) square polygon provided in order.
+
+    Returns:
+        float: minimum perpendicular distance from the facet midpoint to any valid projected edge.
+               If no valid projection exists on any edge, returns np.inf.
+    """
+    facet_center = [
+        (p_left[0] + p_right[0]) / 2,
+        (p_left[1] + p_right[1]) / 2,
+    ]
+    min_dist = float("inf")
+    for j in range(4):
+        edge_start = rotated_square[j]
+        edge_end = rotated_square[(j + 1) % 4]
+        edge_vec = [edge_end[0] - edge_start[0], edge_end[1] - edge_start[1]]
+        edge_len = math.sqrt(edge_vec[0] ** 2 + edge_vec[1] ** 2)
+        if edge_len == 0:
+            continue
+        edge_normal = [-edge_vec[1] / edge_len, edge_vec[0] / edge_len]
+        proj = (
+            (facet_center[0] - edge_start[0]) * edge_vec[0]
+            + (facet_center[1] - edge_start[1]) * edge_vec[1]
+        ) / edge_len
+        if 0 <= proj <= edge_len:
+            dist = abs(
+                (facet_center[0] - edge_start[0]) * edge_normal[0]
+                + (facet_center[1] - edge_start[1]) * edge_normal[1]
+            )
+            min_dist = min(min_dist, dist)
+    return min_dist
+
+
+def create_true_facets_square(rotated_square):
+    """
+    Create true facets for a square geometry.
+
+    Args:
+        rotated_square: List of 4 vertices [x, y] defining the square
+
+    Returns:
+        List of LinearFacet objects representing the 4 edges of the square
+    """
+    true_facets = []
+    for j in range(4):
+        edge_start = rotated_square[j]
+        edge_end = rotated_square[(j + 1) % 4]
+        true_facets.append(LinearFacet(edge_start, edge_end))
+    return true_facets
 
 
 def main(
@@ -111,65 +200,74 @@ def main(
             algo_kwargs={},
         )
 
-        # Calculate error metrics
-        # For squares, we can measure:
-        # 1. Area error (total area should be side_length^2)
-        # 2. Edge alignment error (how well the reconstructed facets align with the true edges)
-        total_area = 0
-        edge_alignment_error = 0
+        # ---------- Save true facets to VTK ----------
+        true_facets = create_true_facets_square(rotated_square)
+        writeFacets(
+            true_facets,
+            os.path.join(output_dirs["vtk_true"], f"true_square{i}.vtp"),
+        )
+
+        # ---------- Ground-truth area over the mesh (polygon ∩ cells) ----------
+        true_total_area = true_area_from_polygon_over_mesh(m, rotated_square)
+
+        # ---------- Reconstructed total area: mixed (via facet) + full (via exact ∩) ----------
+        reconstructed_total_area = 0.0
+        mixed_ids = set()
+
+        for poly, reconstructed_facet in zip(
+            m.merged_polys.values(), reconstructed_facets
+        ):
+            try:
+                reconstructed_total_area += getPolyLineArea(
+                    poly.points, reconstructed_facet.pLeft, reconstructed_facet.pRight
+                )
+                mixed_ids.add(id(poly))
+            except Exception:
+                # facet might be None for some algos/corner cases
+                continue
+
+        # Add area for cells without a facet (fully inside, or otherwise no mixed boundary)
+        for poly in m.merged_polys.values():
+            if id(poly) in mixed_ids:
+                continue
+            intersects = getPolyIntersectArea(rotated_square, poly.points)
+            if not intersects:
+                continue
+            inside_area = sum(abs(getArea(p)) for p in intersects)
+            reconstructed_total_area += inside_area
+
+        # Final area error (vs exact per-cell truth)
+        area_error = abs(reconstructed_total_area - true_total_area) / max(
+            true_total_area, 1e-12
+        )
+
+        edge_alignment_error_sum = 0.0
         cnt_edges = 0
 
         for poly, reconstructed_facet in zip(
             m.merged_polys.values(), reconstructed_facets
         ):
-            # Calculate area error
-            # For linear facets, calculate area using the facet line and polygon
             try:
-                facet_area = getPolyLineArea(
-                    poly.points, reconstructed_facet.pLeft, reconstructed_facet.pRight
+                mx, my = _facet_midpoint(
+                    reconstructed_facet.pLeft, reconstructed_facet.pRight
                 )
-            except:
-                # TODO JL 5/29/25: sometimes for some reason (usually in the linear+corner algo) the reconstructed facet is None
-                # and we get an error here.
+            except Exception:
                 continue
-            total_area += facet_area
 
-            # Calculate edge alignment error
-            # For each reconstructed facet, find the closest true edge
-            facet_center = [
-                (reconstructed_facet.pLeft[0] + reconstructed_facet.pRight[0]) / 2,
-                (reconstructed_facet.pLeft[1] + reconstructed_facet.pRight[1]) / 2,
-            ]
-
-            # Find closest true edge
-            min_dist = float("inf")
+            # min distance from facet midpoint to any of the 4 square edges (as segments)
+            mind = float("inf")
             for j in range(4):
-                edge_start = rotated_square[j]
-                edge_end = rotated_square[(j + 1) % 4]
+                ax, ay = rotated_square[j]
+                bx, by = rotated_square[(j + 1) % 4]
+                d = _point_segment_distance(mx, my, ax, ay, bx, by)
+                if d < mind:
+                    mind = d
 
-                # Calculate distance from facet center to edge
-                edge_vec = [edge_end[0] - edge_start[0], edge_end[1] - edge_start[1]]
-                edge_len = math.sqrt(edge_vec[0] ** 2 + edge_vec[1] ** 2)
-                edge_normal = [-edge_vec[1] / edge_len, edge_vec[0] / edge_len]
-
-                # Project facet center onto edge
-                proj = (
-                    (facet_center[0] - edge_start[0]) * edge_vec[0]
-                    + (facet_center[1] - edge_start[1]) * edge_vec[1]
-                ) / edge_len
-
-                if 0 <= proj <= edge_len:  # Projection is on the edge
-                    dist = abs(
-                        (facet_center[0] - edge_start[0]) * edge_normal[0]
-                        + (facet_center[1] - edge_start[1]) * edge_normal[1]
-                    )
-                    min_dist = min(min_dist, dist)
-
-            edge_alignment_error += min_dist
+            # Normalize by side length to make scale-free
+            edge_alignment_error_sum += mind / max(side_length, 1e-12)
             cnt_edges += 1
 
-        area_error = abs(total_area - side_length**2) / side_length**2
-        avg_edge_error = edge_alignment_error / cnt_edges
+        avg_edge_error = edge_alignment_error_sum / max(cnt_edges, 1)
 
         print(f"Area error for square {i+1}: {area_error:.3e}")
         print(f"Average edge alignment error for square {i+1}: {avg_edge_error:.3e}")
@@ -193,13 +291,13 @@ def run_parameter_sweep(config_setting, num_squares=25):
     MIN_ERROR = 1e-14
 
     # Define parameter ranges
-    # resolutions = [0.32, 0.50, 0.64, 1.00, 1.28, 2.00]
-    resolutions = [0.50]
+    resolutions = [0.50, 0.64, 1.00, 1.28, 1.50]
     facet_algos = [
         "Youngs",
         "LVIRA",
+        "safe_linear",
         "linear",
-        "safe_linear_corner",
+        # "safe_linear_corner",
         "linear+corner",
         "safe_circle",
         "circular",
@@ -207,8 +305,9 @@ def run_parameter_sweep(config_setting, num_squares=25):
     save_names = [
         "square_youngs",
         "square_lvira",
+        "square_safelinear",
         "square_linear",
-        "square_safelinearcorner",
+        # "square_safelinearcorner",
         "square_linear+corner",
         "square_safecircle",
         "square_mergecircle",
@@ -246,7 +345,9 @@ def run_parameter_sweep(config_setting, num_squares=25):
     plt.title("Square Reconstruction Performance")
     plt.legend()
     plt.grid(True, which="both", ls="-", alpha=0.2)
-    plt.savefig("results/static/square_reconstruction_area.png", dpi=300, bbox_inches="tight")
+    plt.savefig(
+        "results/static/square_reconstruction_area.png", dpi=300, bbox_inches="tight"
+    )
     plt.close()
 
     # Edge alignment error plot
@@ -261,7 +362,9 @@ def run_parameter_sweep(config_setting, num_squares=25):
     plt.title("Square Reconstruction Edge Alignment")
     plt.legend()
     plt.grid(True, which="both", ls="-", alpha=0.2)
-    plt.savefig("results/static/square_reconstruction_edge.png", dpi=300, bbox_inches="tight")
+    plt.savefig(
+        "results/static/square_reconstruction_edge.png", dpi=300, bbox_inches="tight"
+    )
     plt.close()
 
     # Dump results to file
@@ -271,6 +374,71 @@ def run_parameter_sweep(config_setting, num_squares=25):
         f.write(f"Edge Results: {edge_results}\n")
 
     return area_results, edge_results
+
+
+def create_plots(
+    resolutions,
+    area_results,
+    edge_results,
+    area_save_path="results/static/square_reconstruction_area.png",
+    edge_save_path="results/static/square_reconstruction_edge.png",
+):
+    # Area error plot
+    plt.figure(figsize=(10, 6))
+    for algo, values in area_results.items():
+        plt.plot(resolutions, values, marker="o", label=algo)
+    plt.xscale("log")
+    plt.xlabel("Resolution")
+    plt.yscale("log")
+    plt.ylabel("Average Area Error")
+    plt.title("Square Reconstruction Performance")
+    plt.legend()
+    plt.grid(True, which="both", ls="-", alpha=0.2)
+    plt.savefig(area_save_path, dpi=300, bbox_inches="tight")
+    plt.close()
+
+    # Edge alignment error plot
+    plt.figure(figsize=(10, 6))
+    for algo, values in edge_results.items():
+        plt.plot(resolutions, values, marker="o", label=algo)
+    plt.xscale("log")
+    plt.xlabel("Resolution")
+    plt.yscale("log")
+    plt.ylabel("Average Edge Alignment Error")
+    plt.title("Square Reconstruction Edge Alignment")
+    plt.legend()
+    plt.grid(True, which="both", ls="-", alpha=0.2)
+    plt.savefig(edge_save_path, dpi=300, bbox_inches="tight")
+    plt.close()
+
+
+def load_results_from_file(file_path):
+    with open(file_path, "r") as f:
+        content = f.read()
+    lines = content.strip().split("\n")
+    resolutions_line = lines[0]
+    resolutions_str = resolutions_line.split("Resolutions: ")[1]
+    resolutions = eval(resolutions_str)
+    area_line = lines[1]
+    area_str = area_line.split("Area Results: ")[1]
+    area_results = eval(area_str)
+    edge_line = lines[2]
+    edge_str = edge_line.split("Edge Results: ")[1]
+    edge_results = eval(edge_str)
+    return resolutions, area_results, edge_results
+
+
+def plot_from_results_file(
+    file_path="results/static/square_reconstruction_results.txt",
+):
+    try:
+        resolutions, area_results, edge_results = load_results_from_file(file_path)
+        create_plots(resolutions, area_results, edge_results)
+        print(f"Plots created from {file_path}")
+    except FileNotFoundError:
+        print(f"Error: File {file_path} not found")
+    except Exception as e:
+        print(f"Error loading results: {e}")
 
 
 if __name__ == "__main__":
@@ -285,10 +453,51 @@ if __name__ == "__main__":
     parser.add_argument(
         "--sweep", action="store_true", help="run parameter sweep", default=False
     )
+    parser.add_argument(
+        "--plot_only",
+        action="store_true",
+        help="load results and create plots only",
+        default=False,
+    )
+    parser.add_argument(
+        "--results_file",
+        type=str,
+        help="path to results file for plotting",
+        default="results/static/square_reconstruction_results.txt",
+    )
+    parser.add_argument(
+        "--test_edge_metric",
+        action="store_true",
+        help="run edge alignment metric tests and exit",
+        default=False,
+    )
 
     args = parser.parse_args()
 
-    if args.sweep:
+    if args.test_edge_metric:
+        # Define a unit square centered at origin (side length 2)
+        rot_sq = [
+            [-1.0, -1.0],
+            [1.0, -1.0],
+            [1.0, 1.0],
+            [-1.0, 1.0],
+        ]
+        # Facet exactly on top edge: expect ~0
+        pL1, pR1 = [-0.5, 1.0], [0.5, 1.0]
+        d1 = compute_edge_alignment_error_for_facet(rot_sq, pL1, pR1)
+        print(f"Top-edge-aligned facet distance: {d1}")
+        assert np.isclose(d1, 0.0, atol=1e-12)
+
+        # Facet shifted inward by 0.25 from left edge: expect ~0.25
+        pL2, pR2 = [-0.75, -0.5], [-0.75, 0.5]
+        d2 = compute_edge_alignment_error_for_facet(rot_sq, pL2, pR2)
+        print(f"Left-edge-offset facet distance: {d2}")
+        assert np.isclose(d2, 0.25, atol=1e-12)
+
+        print("Edge alignment metric tests passed.")
+    elif args.plot_only:
+        plot_from_results_file(args.results_file)
+    elif args.sweep:
         area_results, edge_results = run_parameter_sweep(args.config, args.num_squares)
         print("\nParameter sweep results:")
         print("\nArea Error:")

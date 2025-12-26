@@ -20,7 +20,7 @@ When run with --sweep flag, performs a comprehensive parameter sweep across:
 
 2. Facet Reconstruction Algorithms (6 algorithms):
    - Youngs: Classic Youngs' method for interface reconstruction
-   - LVIRA: Least Squares Volume-of-Fluid Interface Reconstruction Algorithm  
+   - LVIRA: Least Squares Volume-of-Fluid Interface Reconstruction Algorithm
    - safe_linear: Linear reconstruction method without cell merging (faster but potentially less accurate)
    - linear: Our linear reconstruction method with cell merging
    - safe_circle: Circular reconstruction method without cell merging (faster but potentially less accurate)
@@ -71,9 +71,32 @@ from util.initialize.points import makeFineCartesianGrid
 from util.initialize.areas import initializeCircle
 from util.plotting.plt_utils import plotAreas, plotPartialAreas
 from util.plotting.vtk_utils import writeMesh
+from util.write_facets import writeFacets
 
 # Global seed for reproducibility
 RANDOM_SEED = 41
+
+
+def create_true_facets_circle(m, center, radius):
+    """
+    Create true facets for a circle geometry.
+
+    Args:
+        m: MergeMesh object
+        center: Circle center [x, y]
+        radius: Circle radius
+
+    Returns:
+        List of ArcFacet objects representing the circle intersection with mesh cells
+    """
+    true_facets = []
+    for poly in m.merged_polys.values():
+        # Get circle intersection with polygon
+        _, arcpoints = getCircleIntersectArea(center, radius, poly.points)
+        if len(arcpoints) >= 2:
+            # Create arc facet for this cell
+            true_facets.append(ArcFacet(center, radius, arcpoints[0], arcpoints[-1]))
+    return true_facets
 
 
 def main(
@@ -146,6 +169,13 @@ def main(
             algo_kwargs={},
         )
 
+        # ---------- Save true facets to VTK ----------
+        true_facets = create_true_facets_circle(m, center, radius)
+        writeFacets(
+            true_facets,
+            os.path.join(output_dirs["vtk_true"], f"true_circle{i}.vtp"),
+        )
+
         # Calculate curvature error
         true_curvature = 1.0 / radius  # Curvature = 1/R
         avg_curvature_error = 0
@@ -198,10 +228,16 @@ def main(
     return curvature_errors, facet_gaps, hausdorff_distances
 
 
-def create_combined_plot(resolutions, curvature_results, gap_results, radius=10.0, save_path="results/static/circle_reconstruction_combined.png"):
+def create_combined_plot(
+    resolutions,
+    curvature_results,
+    gap_results,
+    radius=10.0,
+    save_path="results/static/circle_reconstruction_combined.png",
+):
     """
     Create a combined plot with facet gaps and curvature error subplots.
-    
+
     Args:
         resolutions: List of resolution values
         curvature_results: Dictionary of curvature error results
@@ -210,95 +246,136 @@ def create_combined_plot(resolutions, curvature_results, gap_results, radius=10.
         save_path: Path to save the plot
     """
     # Set up matplotlib for better looking plots
-    plt.rcParams.update({
-        'font.size': 12,
-        'font.family': 'serif',
-        'mathtext.fontset': 'cm',
-        'axes.linewidth': 1.5,
-        'xtick.major.width': 1.5,
-        'ytick.major.width': 1.5,
-        'xtick.minor.width': 1.0,
-        'ytick.minor.width': 1.0,
-        'lines.linewidth': 2.5,
-        'lines.markersize': 8,
-    })
-    
+    plt.rcParams.update(
+        {
+            "font.size": 12,
+            "font.family": "serif",
+            "mathtext.fontset": "cm",
+            "axes.linewidth": 1.5,
+            "xtick.major.width": 1.5,
+            "ytick.major.width": 1.5,
+            "xtick.minor.width": 1.0,
+            "ytick.minor.width": 1.0,
+            "lines.linewidth": 2.5,
+            "lines.markersize": 8,
+        }
+    )
+
     # Convert resolutions to integers (100*r)
     x_values = [int(100 * r) for r in resolutions]
-    
+
     # Create subplots
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
-    
+
     # Plot facet gaps (left subplot)
     for algo, values in gap_results.items():
         plt.sca(ax1)
-        plt.plot(x_values, values, marker='o', label=algo, linewidth=2.5, markersize=8)
-    
+        plt.plot(x_values, values, marker="o", label=algo, linewidth=2.5, markersize=8)
+
     ax1.set_xscale("log", base=2)
     ax1.set_xlabel(r"Resolution", fontsize=14)
     ax1.set_yscale("log")
     ax1.set_ylabel("Average Facet Gap", fontsize=14)
-    ax1.set_title("Facet Gaps", fontsize=16, fontweight='bold')
-    ax1.legend(fontsize=12, frameon=True, fancybox=True, shadow=False, loc='center left', bbox_to_anchor=(0.02, 0.4))
+    ax1.set_title("Facet Gaps", fontsize=16, fontweight="bold")
+    ax1.legend(
+        fontsize=12,
+        frameon=True,
+        fancybox=True,
+        shadow=False,
+        loc="center left",
+        bbox_to_anchor=(0.02, 0.4),
+    )
     ax1.grid(True, which="both", ls="-", alpha=0.3)
     ax1.grid(True, which="minor", ls=":", alpha=0.2)
     ax1.set_xticks(x_values)
     ax1.set_xticklabels([str(x) for x in x_values])
-    
+
     # Plot curvature errors (right subplot)
     for algo, values in curvature_results.items():
         plt.sca(ax2)
-        plt.plot(x_values, values, marker='o', label=algo, linewidth=2.5, markersize=8)
-    
+        plt.plot(x_values, values, marker="o", label=algo, linewidth=2.5, markersize=8)
+
     # Add PLIC reference line (1/r) for curvature
     plic_values = [1 / radius for r in resolutions]
     plt.sca(ax2)
-    plt.plot(x_values, plic_values, marker='', label="PLIC", 
-            linewidth=2.5, linestyle=':', color='gray')
-    
+    plt.plot(
+        x_values,
+        plic_values,
+        marker="",
+        label="PLIC",
+        linewidth=2.5,
+        linestyle=":",
+        color="gray",
+    )
+
     ax2.set_xscale("log", base=2)
     ax2.set_xlabel(r"Resolution", fontsize=14)
     ax2.set_yscale("log")
     ax2.set_ylabel("Average Curvature Error", fontsize=14)
-    ax2.set_title("Curvature", fontsize=16, fontweight='bold')
-    ax2.legend(fontsize=12, frameon=True, fancybox=True, shadow=False, loc='center left', bbox_to_anchor=(0.02, 0.4))
+    ax2.set_title("Curvature", fontsize=16, fontweight="bold")
+    ax2.legend(
+        fontsize=12,
+        frameon=True,
+        fancybox=True,
+        shadow=False,
+        loc="center left",
+        bbox_to_anchor=(0.02, 0.4),
+    )
     ax2.grid(True, which="both", ls="-", alpha=0.3)
     ax2.grid(True, which="minor", ls=":", alpha=0.2)
     ax2.set_xticks(x_values)
     ax2.set_xticklabels([str(x) for x in x_values])
-    
-    plt.suptitle(f"Circle Static Reconstruction (Radius = {radius})", fontsize=18, fontweight='bold')
+
+    plt.suptitle(
+        f"Circle Static Reconstruction (Radius = {radius})",
+        fontsize=18,
+        fontweight="bold",
+    )
     plt.tight_layout()
     plt.savefig(save_path, dpi=300, bbox_inches="tight")
     plt.close()
 
 
-def create_hausdorff_plot(resolutions, hausdorff_results, radius=10.0, save_path="results/static/circle_reconstruction_hausdorff.png"):
+def create_hausdorff_plot(
+    resolutions,
+    hausdorff_results,
+    radius=10.0,
+    save_path="results/static/circle_reconstruction_hausdorff.png",
+):
     """
     Create a plot for Hausdorff distance vs. resolution.
     """
-    plt.rcParams.update({
-        'font.size': 12,
-        'font.family': 'serif',
-        'mathtext.fontset': 'cm',
-        'axes.linewidth': 1.5,
-        'xtick.major.width': 1.5,
-        'ytick.major.width': 1.5,
-        'xtick.minor.width': 1.0,
-        'ytick.minor.width': 1.0,
-        'lines.linewidth': 2.5,
-        'lines.markersize': 8,
-    })
+    plt.rcParams.update(
+        {
+            "font.size": 12,
+            "font.family": "serif",
+            "mathtext.fontset": "cm",
+            "axes.linewidth": 1.5,
+            "xtick.major.width": 1.5,
+            "ytick.major.width": 1.5,
+            "xtick.minor.width": 1.0,
+            "ytick.minor.width": 1.0,
+            "lines.linewidth": 2.5,
+            "lines.markersize": 8,
+        }
+    )
     plt.figure(figsize=(8, 6))
     x_values = [int(100 * r) for r in resolutions]
     for algo, values in hausdorff_results.items():
-        plt.plot(x_values, values, marker='o', label=algo, linewidth=2.5, markersize=8)
+        plt.plot(x_values, values, marker="o", label=algo, linewidth=2.5, markersize=8)
     plt.xscale("log", base=2)
     plt.xlabel(r"Resolution", fontsize=14)
     plt.yscale("log")
     plt.ylabel("Average Hausdorff Distance", fontsize=14)
-    plt.title(f"Hausdorff Distance (Radius = {radius})", fontsize=16, fontweight='bold')
-    plt.legend(fontsize=12, frameon=True, fancybox=True, shadow=False, loc='center left', bbox_to_anchor=(0.02, 0.4))
+    plt.title(f"Hausdorff Distance (Radius = {radius})", fontsize=16, fontweight="bold")
+    plt.legend(
+        fontsize=12,
+        frameon=True,
+        fancybox=True,
+        shadow=False,
+        loc="center left",
+        bbox_to_anchor=(0.02, 0.4),
+    )
     plt.grid(True, which="both", ls="-", alpha=0.3)
     plt.xticks(x_values, [str(x) for x in x_values])
     plt.grid(True, which="minor", ls=":", alpha=0.2)
@@ -311,30 +388,34 @@ def load_results_from_file(file_path):
     """
     Load results from a summary results file.
     """
-    with open(file_path, 'r') as f:
+    with open(file_path, "r") as f:
         content = f.read()
-    lines = content.strip().split('\n')
+    lines = content.strip().split("\n")
     resolutions_line = lines[0]
-    resolutions_str = resolutions_line.split('Resolutions: ')[1]
+    resolutions_str = resolutions_line.split("Resolutions: ")[1]
     resolutions = eval(resolutions_str)
     curvature_line = lines[1]
-    curvature_str = curvature_line.split('Curvature Results: ')[1]
+    curvature_str = curvature_line.split("Curvature Results: ")[1]
     curvature_results = eval(curvature_str)
     gap_line = lines[2]
-    gap_str = gap_line.split('Gap Results: ')[1]
+    gap_str = gap_line.split("Gap Results: ")[1]
     gap_results = eval(gap_str)
     hausdorff_line = lines[3]
-    hausdorff_str = hausdorff_line.split('Hausdorff Results: ')[1]
+    hausdorff_str = hausdorff_line.split("Hausdorff Results: ")[1]
     hausdorff_results = eval(hausdorff_str)
     return resolutions, curvature_results, gap_results, hausdorff_results
 
 
-def plot_from_results_file(file_path="results/static/circle_reconstruction_results.txt", radius=10.0):
+def plot_from_results_file(
+    file_path="results/static/circle_reconstruction_results.txt", radius=10.0
+):
     """
     Load results from file and create combined performance plot.
     """
     try:
-        resolutions, curvature_results, gap_results, hausdorff_results = load_results_from_file(file_path)
+        resolutions, curvature_results, gap_results, hausdorff_results = (
+            load_results_from_file(file_path)
+        )
         create_combined_plot(resolutions, curvature_results, gap_results, radius)
         create_hausdorff_plot(resolutions, hausdorff_results, radius)
         print(f"Combined and Hausdorff plots created from {file_path}")
@@ -347,7 +428,14 @@ def plot_from_results_file(file_path="results/static/circle_reconstruction_resul
 def run_parameter_sweep(config_setting, num_circles=25, radius=10.0):
     MIN_ERROR = 1e-14
     resolutions = [0.32, 0.50, 0.64, 1.00, 1.28, 1.50]
-    facet_algos = ["Youngs", "LVIRA", "safe_linear", "linear", "safe_circle", "circular"]
+    facet_algos = [
+        "Youngs",
+        "LVIRA",
+        "safe_linear",
+        "linear",
+        "safe_circle",
+        "circular",
+    ]
     save_names = [
         "circle_youngs",
         "circle_lvira",
@@ -373,7 +461,9 @@ def run_parameter_sweep(config_setting, num_circles=25, radius=10.0):
             )
             curvature_results[algo].append(max(np.mean(np.array(errors)), MIN_ERROR))
             gap_results[algo].append(max(np.mean(np.array(gaps)), MIN_ERROR))
-            hausdorff_results[algo].append(max(np.mean(np.array(hausdorffs)), MIN_ERROR))
+            hausdorff_results[algo].append(
+                max(np.mean(np.array(hausdorffs)), MIN_ERROR)
+            )
     create_combined_plot(resolutions, curvature_results, gap_results, radius)
     create_hausdorff_plot(resolutions, hausdorff_results, radius)
     with open("results/static/circle_reconstruction_results.txt", "w") as f:
@@ -398,11 +488,16 @@ if __name__ == "__main__":
         "--sweep", action="store_true", help="run parameter sweep", default=False
     )
     parser.add_argument(
-        "--plot_only", action="store_true", help="load results and create plot only", default=False
+        "--plot_only",
+        action="store_true",
+        help="load results and create plot only",
+        default=False,
     )
     parser.add_argument(
-        "--results_file", type=str, help="path to results file for plotting", 
-        default="results/static/circle_reconstruction_results.txt"
+        "--results_file",
+        type=str,
+        help="path to results file for plotting",
+        default="results/static/circle_reconstruction_results.txt",
     )
 
     args = parser.parse_args()

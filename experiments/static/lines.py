@@ -20,7 +20,7 @@ When run with --sweep flag, performs a comprehensive parameter sweep across:
 
 2. Facet Reconstruction Algorithms (4 algorithms):
    - Youngs: Classic Youngs' method for interface reconstruction
-   - LVIRA: Least Squares Volume-of-Fluid Interface Reconstruction Algorithm  
+   - LVIRA: Least Squares Volume-of-Fluid Interface Reconstruction Algorithm
    - linear: Our linear reconstruction method with cell merging
    - safe_linear: Linear reconstruction method without cell merging (faster but potentially less accurate)
 
@@ -66,16 +66,35 @@ from util.initialize.points import makeFineCartesianGrid
 from util.initialize.areas import initializeLine
 from util.plotting.plt_utils import plotAreas, plotPartialAreas
 from util.plotting.vtk_utils import writeMesh
+from util.write_facets import writeFacets
 
 # Global seed for reproducibility
 RANDOM_SEED = 42
 
 
-def create_performance_plot(resolutions, results, title="Line Static Reconstruction", 
-                           ylabel="Average Hausdorff Distance", save_path="results/static/line_reconstruction_hausdorff.png"):
+def create_true_facets_line(x1, y1, x2, y2):
+    """
+    Create true facets for a line geometry.
+
+    Args:
+        x1, y1, x2, y2: Endpoints of the line
+
+    Returns:
+        List with single LinearFacet object representing the line
+    """
+    return [LinearFacet([x1, y1], [x2, y2])]
+
+
+def create_performance_plot(
+    resolutions,
+    results,
+    title="Line Static Reconstruction",
+    ylabel="Average Hausdorff Distance",
+    save_path="results/static/line_reconstruction_hausdorff.png",
+):
     """
     Create a performance comparison plot from results data.
-    
+
     Args:
         resolutions: List of resolution values
         results: Dictionary of algorithm results
@@ -84,50 +103,74 @@ def create_performance_plot(resolutions, results, title="Line Static Reconstruct
         save_path: Path to save the plot
     """
     # Set up matplotlib for better looking plots
-    plt.rcParams.update({
-        'font.size': 12,
-        'font.family': 'serif',
-        'mathtext.fontset': 'cm',
-        'axes.linewidth': 1.5,
-        'xtick.major.width': 1.5,
-        'ytick.major.width': 1.5,
-        'xtick.minor.width': 1.0,
-        'ytick.minor.width': 1.0,
-        'lines.linewidth': 2.5,
-        'lines.markersize': 8,
-    })
-    
+    plt.rcParams.update(
+        {
+            "font.size": 12,
+            "font.family": "serif",
+            "mathtext.fontset": "cm",
+            "axes.linewidth": 1.5,
+            "xtick.major.width": 1.5,
+            "ytick.major.width": 1.5,
+            "xtick.minor.width": 1.0,
+            "ytick.minor.width": 1.0,
+            "lines.linewidth": 2.5,
+            "lines.markersize": 8,
+        }
+    )
+
     plt.figure(figsize=(8, 6))
-    
+
     # Convert resolutions to integers (100*r) and flip x-axis
     x_values = [int(100 * r) for r in resolutions]
-    
+
     # Plot algorithms with better labels and styling
     for algo, values in results.items():
         if algo == "safe_linear":
-            plt.plot(x_values, values, marker='o', label="Ours (no merging)", 
-                    linewidth=2.5, markersize=8, linestyle='-')
+            plt.plot(
+                x_values,
+                values,
+                marker="o",
+                label="Ours (no merging)",
+                linewidth=2.5,
+                markersize=8,
+                linestyle="-",
+            )
         elif algo == "linear":
-            plt.plot(x_values, values, marker='s', label="Ours (with merging)", 
-                    linewidth=2.5, markersize=8, linestyle='--')
+            plt.plot(
+                x_values,
+                values,
+                marker="s",
+                label="Ours (with merging)",
+                linewidth=2.5,
+                markersize=8,
+                linestyle="--",
+            )
         else:
-            plt.plot(x_values, values, marker='o', label=algo, 
-                    linewidth=2.5, markersize=8)
+            plt.plot(
+                x_values, values, marker="o", label=algo, linewidth=2.5, markersize=8
+            )
 
     plt.xscale("log", base=2)
     plt.xlabel(r"Resolution", fontsize=14)
     plt.yscale("log")
     plt.ylabel(ylabel, fontsize=14)
-    plt.title(title, fontsize=16, fontweight='bold')
-    plt.legend(fontsize=12, frameon=True, fancybox=True, shadow=False, loc='center left', bbox_to_anchor=(0.02, 0.4))
+    plt.title(title, fontsize=16, fontweight="bold")
+    plt.legend(
+        fontsize=12,
+        frameon=True,
+        fancybox=True,
+        shadow=False,
+        loc="center left",
+        bbox_to_anchor=(0.02, 0.4),
+    )
     plt.grid(True, which="both", ls="-", alpha=0.3)
-    
+
     # Set x-axis ticks to show resolution values as integers
     plt.xticks(x_values, [str(x) for x in x_values])
-    
+
     # Add minor grid
     plt.grid(True, which="minor", ls=":", alpha=0.2)
-    
+
     plt.tight_layout()
     plt.savefig(save_path, dpi=300, bbox_inches="tight")
     plt.close()
@@ -136,36 +179,36 @@ def create_performance_plot(resolutions, results, title="Line Static Reconstruct
 def load_results_from_file(file_path):
     """
     Load results from a summary results file.
-    
+
     Args:
         file_path: Path to the results file
-        
+
     Returns:
         tuple: (resolutions, results_dict)
     """
-    with open(file_path, 'r') as f:
+    with open(file_path, "r") as f:
         content = f.read()
-    
+
     # Parse the file content
-    lines = content.strip().split('\n')
-    
+    lines = content.strip().split("\n")
+
     # Extract resolutions
     resolutions_line = lines[0]
-    resolutions_str = resolutions_line.split('Resolutions: ')[1]
+    resolutions_str = resolutions_line.split("Resolutions: ")[1]
     resolutions = eval(resolutions_str)  # Safe for this specific format
-    
+
     # Extract results
     results_line = lines[1]
-    results_str = results_line.split('Results: ')[1]
+    results_str = results_line.split("Results: ")[1]
     results = eval(results_str)  # Safe for this specific format
-    
+
     return resolutions, results
 
 
 def plot_from_results_file(file_path="results/static/line_reconstruction_results.txt"):
     """
     Load results from file and create performance plot.
-    
+
     Args:
         file_path: Path to the results file (default: line_reconstruction_results.txt)
     """
@@ -203,6 +246,19 @@ def main(
 
     # Setup output directories
     output_dirs = setupOutputDirs(save_name)
+
+    # Initialize metrics files with headers
+    with open(os.path.join(output_dirs["metrics"], "hausdorff.txt"), "w") as f:
+        f.write("# Line reconstruction Hausdorff distances\n")
+        f.write("# Format: line_{line_number}_angle_{angle}_hausdorff_{distance}\n")
+    with open(os.path.join(output_dirs["metrics"], "facet_gap.txt"), "w") as f:
+        f.write("# Line reconstruction facet gaps\n")
+        f.write("# Format: line_{line_number}_angle_{angle}_gap_{distance}\n")
+    with open(os.path.join(output_dirs["metrics"], "facet_details.txt"), "w") as f:
+        f.write("# Detailed facet information for each line\n")
+        f.write(
+            "# Includes true vs reconstructed facet coordinates and individual cell Hausdorff distances\n"
+        )
 
     # Generate lines with different slopes
     angles = np.linspace(0, 2 * np.pi, num_lines + 1)[:-1]
@@ -254,6 +310,13 @@ def main(
             },  # Fit 1-neighbor to handle boundary cells
         )
 
+        # ---------- Save true facets to VTK ----------
+        true_facets = create_true_facets_line(x1, y1, x2, y2)
+        writeFacets(
+            true_facets,
+            os.path.join(output_dirs["vtk_true"], f"true_line{i}.vtp"),
+        )
+
         # Calculate Hausdorff distance
         # For each cell, calculate the true LinearFacet and compare with reconstructed
         avg_hausdorff = 0
@@ -270,9 +333,33 @@ def main(
             f"Average Hausdorff distance for line {i+1}: {avg_hausdorff/cnt_hausdorff:.3e}"
         )
 
-        # Save metric to file
+        # Save metric to file with detailed information
         with open(os.path.join(output_dirs["metrics"], "hausdorff.txt"), "a") as f:
-            f.write(f"{avg_hausdorff/cnt_hausdorff}\n")
+            f.write(
+                f"line_{i+1}_angle_{angle:.4f}_hausdorff_{avg_hausdorff/cnt_hausdorff:.6e}\n"
+            )
+
+        # Save detailed facet information
+        with open(os.path.join(output_dirs["metrics"], "facet_details.txt"), "a") as f:
+            f.write(f"=== Line {i+1} (angle: {angle:.4f}) ===\n")
+            f.write(f"True line: ({x1:.4f}, {y1:.4f}) to ({x2:.4f}, {y2:.4f})\n")
+            f.write(f"Average Hausdorff: {avg_hausdorff/cnt_hausdorff:.6e}\n")
+            f.write(f"Number of cells with facets: {cnt_hausdorff}\n")
+
+            # Write individual cell facet information
+            for j, (poly, reconstructed_facet) in enumerate(
+                zip(m.merged_polys.values(), reconstructed_facets)
+            ):
+                intersects = getPolyLineIntersects(poly.points, [x1, y1], [x2, y2])
+                if intersects:
+                    true_facet = LinearFacet(intersects[0], intersects[-1])
+                    cell_hausdorff = hausdorffFacets(true_facet, reconstructed_facet)
+                    f.write(
+                        f"  Cell {j}: Hausdorff={cell_hausdorff:.6e}, "
+                        f"True=({true_facet.pLeft[0]:.4f},{true_facet.pLeft[1]:.4f})-({true_facet.pRight[0]:.4f},{true_facet.pRight[1]:.4f}), "
+                        f"Reconstructed=({reconstructed_facet.pLeft[0]:.4f},{reconstructed_facet.pLeft[1]:.4f})-({reconstructed_facet.pRight[0]:.4f},{reconstructed_facet.pRight[1]:.4f})\n"
+                    )
+            f.write("\n")
 
         hausdorff_distances.append(avg_hausdorff / cnt_hausdorff)
 
@@ -280,7 +367,7 @@ def main(
         avg_gap = calculate_facet_gaps(m, reconstructed_facets)
         print(f"Average facet gap for line {i+1}: {avg_gap:.3e}")
         with open(os.path.join(output_dirs["metrics"], "facet_gap.txt"), "a") as f:
-            f.write(f"{avg_gap}\n")
+            f.write(f"line_{i+1}_angle_{angle:.4f}_gap_{avg_gap:.6e}\n")
         facet_gaps.append(avg_gap)
 
     return hausdorff_distances, facet_gaps
@@ -325,18 +412,27 @@ def run_parameter_sweep(config_setting, num_lines=25):
     plt.figure(figsize=(8, 6))
     x_values = [int(100 * r) for r in resolutions]
     for algo, values in gap_results.items():
-        plt.plot(x_values, values, marker='o', label=algo, linewidth=2.5, markersize=8)
+        plt.plot(x_values, values, marker="o", label=algo, linewidth=2.5, markersize=8)
     plt.xscale("log", base=2)
     plt.xlabel(r"Resolution", fontsize=14)
     plt.yscale("log")
     plt.ylabel("Average Facet Gap", fontsize=14)
-    plt.title("Facet Gap vs. Resolution", fontsize=16, fontweight='bold')
-    plt.legend(fontsize=12, frameon=True, fancybox=True, shadow=False, loc='center left', bbox_to_anchor=(0.02, 0.4))
+    plt.title("Facet Gap vs. Resolution", fontsize=16, fontweight="bold")
+    plt.legend(
+        fontsize=12,
+        frameon=True,
+        fancybox=True,
+        shadow=False,
+        loc="center left",
+        bbox_to_anchor=(0.02, 0.4),
+    )
     plt.grid(True, which="both", ls="-", alpha=0.3)
     plt.xticks(x_values, [str(x) for x in x_values])
     plt.grid(True, which="minor", ls=":", alpha=0.2)
     plt.tight_layout()
-    plt.savefig("results/static/line_reconstruction_facet_gap.png", dpi=300, bbox_inches="tight")
+    plt.savefig(
+        "results/static/line_reconstruction_facet_gap.png", dpi=300, bbox_inches="tight"
+    )
     plt.close()
 
     # Dump results to file
@@ -361,11 +457,16 @@ if __name__ == "__main__":
         "--sweep", action="store_true", help="run parameter sweep", default=False
     )
     parser.add_argument(
-        "--plot_only", action="store_true", help="load results and create plot only", default=False
+        "--plot_only",
+        action="store_true",
+        help="load results and create plot only",
+        default=False,
     )
     parser.add_argument(
-        "--results_file", type=str, help="path to results file for plotting", 
-        default="results/static/line_reconstruction_results.txt"
+        "--results_file",
+        type=str,
+        help="path to results file for plotting",
+        default="results/static/line_reconstruction_results.txt",
     )
 
     args = parser.parse_args()

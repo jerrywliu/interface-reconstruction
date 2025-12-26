@@ -12,6 +12,7 @@ def setupOutputDirs(save_name):
     dirs = {
         "base": base_dir,
         "vtk": os.path.join(base_dir, "vtk"),
+        "vtk_true": os.path.join(base_dir, "vtk", "true"),
         "vtk_reconstructed": os.path.join(base_dir, "vtk", "reconstructed"),
         "vtk_reconstructed_mixed": os.path.join(
             base_dir, "vtk", "reconstructed", "mixed_cells"

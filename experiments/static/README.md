@@ -30,10 +30,15 @@ python3 -m experiments.static.lines --config static/line --facet_algo linear --s
 ### Square Reconstruction
 ```bash
 # Run parameter sweep
-python3 -m experiments.static.squares --config static/circle --sweep
+python3 -m experiments.static.squares --config static/square --sweep
 
 # Run single test
-python3 -m experiments.static.squares --config static/circle --facet_algo circular --save_name square_mergecircle
+python3 -m experiments.static.squares --config static/square --facet_algo circular --save_name square_mergecircle
+```
+
+To plot only from saved results:
+```bash
+python -m experiments.static.squares --plot_only --results_file results/static/square_reconstruction_results.txt
 ```
 
 ### Circle Reconstruction
@@ -116,6 +121,24 @@ This experiment is the most challenging as it combines:
 - Varying curvature along the interface
 - Non-uniform sampling of the interface
 - Orientation-dependent reconstruction quality
+
+## Zalesak Reconstruction (Static)
+
+The Zalesak experiment tests reconstruction of a circle with a vertical slot (asymmetric; one slot edge passes through the circle center). Each test case:
+- Samples a random center and random rotation for the slot
+- Reconstructs the interface using each algorithm
+- Measures reconstruction quality using area error (vs analytic) and facet gaps
+
+```bash
+# Run parameter sweep
+python3 -m experiments.static.zalesak --config static/circle --sweep --num_cases 15
+
+# Run single test
+python3 -m experiments.static.zalesak --config static/circle --facet_algo circular --save_name zalesak_mergecircle
+
+# Plot only from saved results
+python -m experiments.static.zalesak --plot_only --results_file results/static/zalesak_reconstruction_results.txt
+```
 
 ## Results
 
