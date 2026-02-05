@@ -7,7 +7,7 @@ from util.config import read_yaml
 from util.io.setup import setupOutputDirs
 from util.reconstruction import runReconstruction
 from util.advection import runAdvection
-from util.initialize.points import makeFineCartesianGrid
+from util.initialize.mesh_factory import make_points_from_config
 from util.initialize.areas import initializeAreas, trueFinalAreas
 from util.initialize.velocity import initializeVelocity
 from util.plotting.plt_utils import plotAreas, plotPartialAreas
@@ -18,8 +18,7 @@ from util.checkpointing import Checkpoint
 
 def initialize_simulation(
     m,
-    grid_size,
-    resolution,
+    mesh_cfg,
     test_setting,
     threshold,
     output_dirs,
@@ -27,7 +26,7 @@ def initialize_simulation(
 ):
     """Initialize mesh and run initial reconstruction."""
     print("Generating mesh...")
-    opoints = makeFineCartesianGrid(grid_size, resolution)
+    opoints = make_points_from_config(mesh_cfg)
     m = MergeMesh(opoints, threshold)
     writeMesh(m, os.path.join(output_dirs["vtk"], "mesh.vtk"))
 
@@ -87,10 +86,12 @@ def main(
 
     # Initialize or load from checkpoint
     if resume_iter is None:
+        mesh_cfg = dict(config["MESH"])
+        mesh_cfg["RESOLUTION"] = resolution
+
         m, true_final_areas = initialize_simulation(
             m=None,
-            grid_size=grid_size,
-            resolution=resolution,
+            mesh_cfg=mesh_cfg,
             test_setting=test_setting,
             threshold=threshold,
             output_dirs=output_dirs,

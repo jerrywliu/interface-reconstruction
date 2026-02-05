@@ -2,6 +2,19 @@
 
 An example implementation in Python of an interface reconstruction method, using linear/circular elements and cusps.
 
+## Quick Start
+
+Run all linear (and linear-corner where applicable) static experiments in one go:
+
+```bash
+# Subprocess mode keeps memory low; --notify uploads summary plots to Slack (if configured).
+python -m experiments.static.run_linear_sweeps --subprocess --notify
+```
+
+Summary plots are written to `results/static/linear_*.png` and uploaded to Slack when `--notify` is set.
+
+For a full description of the sweep experiments (linear + perturbed), see `docs/EXPERIMENTS.md`.
+
 ## Contributors
 
 Jerry Liu, jwl50@stanford.edu

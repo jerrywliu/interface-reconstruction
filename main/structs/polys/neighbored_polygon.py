@@ -7,7 +7,10 @@ from main.geoms.geoms import (
     pointInPoly,
     lineAngleSine,
 )
-from main.structs.facets.base_facet import Facet, LinearFacet, ArcFacet, CornerFacet
+from main.structs.facets.base_facet import Facet
+from main.structs.facets.circular_facet import ArcFacet
+from main.structs.facets.corner_facet import CornerFacet
+from main.structs.facets.linear_facet import LinearFacet
 from main.geoms.circular_facet import (
     getArcFacet,
     getCircleLineIntersects,

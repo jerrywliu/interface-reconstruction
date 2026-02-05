@@ -6,12 +6,12 @@ import matplotlib.pyplot as plt
 
 from main.structs.meshes.merge_mesh import MergeMesh
 from main.geoms.geoms import getArea, getPolyLineArea, getPolyIntersectArea
-from main.structs.facets.base_facet import LinearFacet
+from main.structs.facets.linear_facet import LinearFacet
 
 from util.config import read_yaml
 from util.io.setup import setupOutputDirs
 from util.reconstruction import runReconstruction
-from util.initialize.points import makeFineCartesianGrid
+from util.initialize.mesh_factory import make_points_from_config, apply_mesh_overrides
 from util.initialize.areas import initializePoly
 from util.plotting.plt_utils import plotAreas, plotPartialAreas
 from util.plotting.vtk_utils import writeMesh
@@ -114,6 +114,12 @@ def main(
     facet_algo=None,
     save_name=None,
     num_squares=25,
+    mesh_type=None,
+    perturb_wiggle=None,
+    perturb_seed=None,
+    perturb_fix_boundary=None,
+    perturb_max_tries=None,
+    perturb_type=None,
     **kwargs,
 ):
     # Read config
@@ -138,7 +144,19 @@ def main(
 
     # Initialize mesh once
     print("Generating mesh...")
-    opoints = makeFineCartesianGrid(grid_size, resolution)
+    if isinstance(perturb_fix_boundary, int):
+        perturb_fix_boundary = bool(perturb_fix_boundary)
+    mesh_cfg = apply_mesh_overrides(
+        config["MESH"],
+        resolution=resolution,
+        mesh_type=mesh_type,
+        perturb_wiggle=perturb_wiggle,
+        perturb_seed=perturb_seed,
+        perturb_fix_boundary=perturb_fix_boundary,
+        perturb_max_tries=perturb_max_tries,
+        perturb_type=perturb_type,
+    )
+    opoints = make_points_from_config(mesh_cfg)
     m = MergeMesh(opoints, threshold)
     writeMesh(m, os.path.join(output_dirs["vtk"], f"mesh.vtk"))
 
@@ -450,6 +468,35 @@ if __name__ == "__main__":
     parser.add_argument(
         "--num_squares", type=int, help="number of squares to test", default=25
     )
+    parser.add_argument("--mesh_type", type=str, help="mesh type override", default=None)
+    parser.add_argument(
+        "--perturb_wiggle",
+        type=float,
+        help="perturbation amplitude (fraction of cell size)",
+        default=None,
+    )
+    parser.add_argument(
+        "--perturb_seed", type=int, help="perturbation RNG seed", default=None
+    )
+    parser.add_argument(
+        "--perturb_fix_boundary",
+        type=int,
+        choices=[0, 1],
+        help="fix boundary nodes (1=yes, 0=no)",
+        default=None,
+    )
+    parser.add_argument(
+        "--perturb_max_tries",
+        type=int,
+        help="max attempts to generate non-inverted mesh",
+        default=None,
+    )
+    parser.add_argument(
+        "--perturb_type",
+        type=str,
+        help="perturbation type (e.g., random)",
+        default=None,
+    )
     parser.add_argument(
         "--sweep", action="store_true", help="run parameter sweep", default=False
     )
@@ -513,4 +560,10 @@ if __name__ == "__main__":
             facet_algo=args.facet_algo,
             save_name=args.save_name,
             num_squares=args.num_squares,
+            mesh_type=args.mesh_type,
+            perturb_wiggle=args.perturb_wiggle,
+            perturb_seed=args.perturb_seed,
+            perturb_fix_boundary=args.perturb_fix_boundary,
+            perturb_max_tries=args.perturb_max_tries,
+            perturb_type=args.perturb_type,
         )

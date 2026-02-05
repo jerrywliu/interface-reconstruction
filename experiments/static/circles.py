@@ -61,13 +61,20 @@ import matplotlib.pyplot as plt
 
 from main.structs.meshes.merge_mesh import MergeMesh
 from main.geoms.circular_facet import getCircleIntersectArea
-from main.structs.facets.base_facet import ArcFacet
-from util.metrics.metrics import hausdorffFacets, calculate_facet_gaps
+from main.structs.facets.circular_facet import ArcFacet
+from util.metrics.metrics import (
+    calculate_facet_gaps,
+    hausdorffFacets,
+    interface_turning_curvature,
+    polyline_average_curvature,
+    tangent_error_to_curve,
+)
+from main.structs.interface import Interface
 
 from util.config import read_yaml
 from util.io.setup import setupOutputDirs
 from util.reconstruction import runReconstruction
-from util.initialize.points import makeFineCartesianGrid
+from util.initialize.mesh_factory import make_points_from_config, apply_mesh_overrides
 from util.initialize.areas import initializeCircle
 from util.plotting.plt_utils import plotAreas, plotPartialAreas
 from util.plotting.vtk_utils import writeMesh
@@ -106,6 +113,12 @@ def main(
     save_name=None,
     num_circles=25,
     radius=10.0,  # Fixed radius for all circles
+    mesh_type=None,
+    perturb_wiggle=None,
+    perturb_seed=None,
+    perturb_fix_boundary=None,
+    perturb_max_tries=None,
+    perturb_type=None,
     **kwargs,
 ):
     # Read config
@@ -127,7 +140,19 @@ def main(
 
     # Initialize mesh once
     print("Generating mesh...")
-    opoints = makeFineCartesianGrid(grid_size, resolution)
+    if isinstance(perturb_fix_boundary, int):
+        perturb_fix_boundary = bool(perturb_fix_boundary)
+    mesh_cfg = apply_mesh_overrides(
+        config["MESH"],
+        resolution=resolution,
+        mesh_type=mesh_type,
+        perturb_wiggle=perturb_wiggle,
+        perturb_seed=perturb_seed,
+        perturb_fix_boundary=perturb_fix_boundary,
+        perturb_max_tries=perturb_max_tries,
+        perturb_type=perturb_type,
+    )
+    opoints = make_points_from_config(mesh_cfg)
     m = MergeMesh(opoints, threshold)
     writeMesh(m, os.path.join(output_dirs["vtk"], f"mesh.vtk"))
 
@@ -138,6 +163,8 @@ def main(
     curvature_errors = []
     facet_gaps = []
     hausdorff_distances = []
+    tangent_errors = []
+    curvature_proxy_errors = []
 
     for i in range(num_circles):
         print(f"Processing circle {i+1}/{num_circles}")
@@ -211,6 +238,35 @@ def main(
         avg_gap = calculate_facet_gaps(m, reconstructed_facets)
         print(f"Average facet gap for circle {i+1}: {avg_gap:.3e}")
 
+        # Tangent error + curvature proxy error
+        sample_count = 256
+        true_points = []
+        true_tangents = []
+        for k in range(sample_count):
+            t = 2 * math.pi * k / sample_count
+            x = center[0] + radius * math.cos(t)
+            y = center[1] + radius * math.sin(t)
+            true_points.append([x, y])
+            true_tangents.append([-math.sin(t), math.cos(t)])
+
+        tangent_stats = tangent_error_to_curve(
+            reconstructed_facets, true_points, true_tangents, n_per_facet=25
+        )
+        tangent_error = tangent_stats["mean"]
+
+        interface = Interface.from_merge_mesh(
+            m, reconstructed_facets=reconstructed_facets, infer_missing_neighbors=True
+        )
+        curvature_stats = interface_turning_curvature(interface)
+        recon_curvature = curvature_stats["mean"]
+        true_curvature = polyline_average_curvature(true_points, closed=True)
+        curvature_proxy_error = abs(recon_curvature - true_curvature)
+
+        print(f"Tangent error for circle {i+1}: {tangent_error:.3e}")
+        print(
+            f"Curvature proxy error for circle {i+1}: {curvature_proxy_error:.3e}"
+        )
+
         # Save metrics to file
         with open(
             os.path.join(output_dirs["metrics"], "curvature_error.txt"), "a"
@@ -220,12 +276,26 @@ def main(
             f.write(f"{avg_gap}\n")
         with open(os.path.join(output_dirs["metrics"], "hausdorff.txt"), "a") as f:
             f.write(f"{avg_hausdorff}\n")
+        with open(os.path.join(output_dirs["metrics"], "tangent_error.txt"), "a") as f:
+            f.write(f"{tangent_error}\n")
+        with open(
+            os.path.join(output_dirs["metrics"], "curvature_proxy_error.txt"), "a"
+        ) as f:
+            f.write(f"{curvature_proxy_error}\n")
 
         curvature_errors.append(avg_error)
         facet_gaps.append(avg_gap)
         hausdorff_distances.append(avg_hausdorff)
+        tangent_errors.append(tangent_error)
+        curvature_proxy_errors.append(curvature_proxy_error)
 
-    return curvature_errors, facet_gaps, hausdorff_distances
+    return (
+        curvature_errors,
+        facet_gaps,
+        hausdorff_distances,
+        tangent_errors,
+        curvature_proxy_errors,
+    )
 
 
 def create_combined_plot(
@@ -384,6 +454,68 @@ def create_hausdorff_plot(
     plt.close()
 
 
+def create_tangent_plot(
+    resolutions,
+    tangent_results,
+    radius=10.0,
+    save_path="results/static/circle_reconstruction_tangent.png",
+):
+    plt.figure(figsize=(8, 6))
+    x_values = [int(100 * r) for r in resolutions]
+    for algo, values in tangent_results.items():
+        plt.plot(x_values, values, marker="o", label=algo, linewidth=2.5, markersize=8)
+    plt.xscale("log", base=2)
+    plt.xlabel(r"Resolution", fontsize=14)
+    plt.yscale("log")
+    plt.ylabel("Mean Tangent Error (radians)", fontsize=14)
+    plt.title("Tangent Error vs. Resolution", fontsize=16, fontweight="bold")
+    plt.legend(
+        fontsize=12,
+        frameon=True,
+        fancybox=True,
+        shadow=False,
+        loc="center left",
+        bbox_to_anchor=(0.02, 0.4),
+    )
+    plt.grid(True, which="both", ls="-", alpha=0.3)
+    plt.xticks(x_values, [str(x) for x in x_values])
+    plt.grid(True, which="minor", ls=":", alpha=0.2)
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.close()
+
+
+def create_curvature_proxy_plot(
+    resolutions,
+    curvature_proxy_results,
+    radius=10.0,
+    save_path="results/static/circle_reconstruction_curvature_proxy.png",
+):
+    plt.figure(figsize=(8, 6))
+    x_values = [int(100 * r) for r in resolutions]
+    for algo, values in curvature_proxy_results.items():
+        plt.plot(x_values, values, marker="o", label=algo, linewidth=2.5, markersize=8)
+    plt.xscale("log", base=2)
+    plt.xlabel(r"Resolution", fontsize=14)
+    plt.yscale("log")
+    plt.ylabel("Curvature Proxy Error", fontsize=14)
+    plt.title("Curvature Proxy Error vs. Resolution", fontsize=16, fontweight="bold")
+    plt.legend(
+        fontsize=12,
+        frameon=True,
+        fancybox=True,
+        shadow=False,
+        loc="center left",
+        bbox_to_anchor=(0.02, 0.4),
+    )
+    plt.grid(True, which="both", ls="-", alpha=0.3)
+    plt.xticks(x_values, [str(x) for x in x_values])
+    plt.grid(True, which="minor", ls=":", alpha=0.2)
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.close()
+
+
 def load_results_from_file(file_path):
     """
     Load results from a summary results file.
@@ -447,11 +579,13 @@ def run_parameter_sweep(config_setting, num_circles=25, radius=10.0):
     curvature_results = {algo: [] for algo in facet_algos}
     gap_results = {algo: [] for algo in facet_algos}
     hausdorff_results = {algo: [] for algo in facet_algos}
+    tangent_results = {algo: [] for algo in facet_algos}
+    curvature_proxy_results = {algo: [] for algo in facet_algos}
     for resolution in resolutions:
         print(f"\nRunning experiments for resolution {resolution}")
         for algo, save_name in zip(facet_algos, save_names):
             print(f"Testing {algo} algorithm...")
-            errors, gaps, hausdorffs = main(
+            errors, gaps, hausdorffs, tangent_errors, curvature_proxy_errors = main(
                 config_setting=config_setting,
                 resolution=resolution,
                 facet_algo=algo,
@@ -464,13 +598,23 @@ def run_parameter_sweep(config_setting, num_circles=25, radius=10.0):
             hausdorff_results[algo].append(
                 max(np.mean(np.array(hausdorffs)), MIN_ERROR)
             )
+            tangent_results[algo].append(
+                max(np.mean(np.array(tangent_errors)), MIN_ERROR)
+            )
+            curvature_proxy_results[algo].append(
+                max(np.mean(np.array(curvature_proxy_errors)), MIN_ERROR)
+            )
     create_combined_plot(resolutions, curvature_results, gap_results, radius)
     create_hausdorff_plot(resolutions, hausdorff_results, radius)
+    create_tangent_plot(resolutions, tangent_results, radius)
+    create_curvature_proxy_plot(resolutions, curvature_proxy_results, radius)
     with open("results/static/circle_reconstruction_results.txt", "w") as f:
         f.write(f"Resolutions: {resolutions}\n")
         f.write(f"Curvature Results: {curvature_results}\n")
         f.write(f"Gap Results: {gap_results}\n")
         f.write(f"Hausdorff Results: {hausdorff_results}\n")
+        f.write(f"Tangent Results: {tangent_results}\n")
+        f.write(f"Curvature Proxy Results: {curvature_proxy_results}\n")
     return curvature_results, gap_results, hausdorff_results
 
 
@@ -484,6 +628,35 @@ if __name__ == "__main__":
         "--num_circles", type=int, help="number of circles to test", default=25
     )
     parser.add_argument("--radius", type=float, help="circle radius", default=10.0)
+    parser.add_argument("--mesh_type", type=str, help="mesh type override", default=None)
+    parser.add_argument(
+        "--perturb_wiggle",
+        type=float,
+        help="perturbation amplitude (fraction of cell size)",
+        default=None,
+    )
+    parser.add_argument(
+        "--perturb_seed", type=int, help="perturbation RNG seed", default=None
+    )
+    parser.add_argument(
+        "--perturb_fix_boundary",
+        type=int,
+        choices=[0, 1],
+        help="fix boundary nodes (1=yes, 0=no)",
+        default=None,
+    )
+    parser.add_argument(
+        "--perturb_max_tries",
+        type=int,
+        help="max attempts to generate non-inverted mesh",
+        default=None,
+    )
+    parser.add_argument(
+        "--perturb_type",
+        type=str,
+        help="perturbation type (e.g., random)",
+        default=None,
+    )
     parser.add_argument(
         "--sweep", action="store_true", help="run parameter sweep", default=False
     )
@@ -526,4 +699,10 @@ if __name__ == "__main__":
             save_name=args.save_name,
             num_circles=args.num_circles,
             radius=args.radius,
+            mesh_type=args.mesh_type,
+            perturb_wiggle=args.perturb_wiggle,
+            perturb_seed=args.perturb_seed,
+            perturb_fix_boundary=args.perturb_fix_boundary,
+            perturb_max_tries=args.perturb_max_tries,
+            perturb_type=args.perturb_type,
         )

@@ -202,8 +202,11 @@ def getCircleIntersectArea(center, radius, poly): #TODO fix
         arcpoints.reverse()
         return getArea(poly)-complement_area, arcpoints
 
-    #Hyperparameter
+    #Hyperparameters
     adjustcorneramount = 1e-14
+    max_corner_retries = 16
+    eps = 1e-12 * max(1.0, abs(radius))
+    retries = 0
     notmod = True
     while notmod:
         startAt = 1
@@ -222,9 +225,19 @@ def getCircleIntersectArea(center, radius, poly): #TODO fix
                 if len(arcpoints) == 0 and curin and not(nextin):
                     startAt = 0
                 arcpoints.append(intersect)
+        arcpoints = _unique_points(arcpoints, eps)
         #If not 0 mod 2, circle intersects a corner, perturb poly and rerun
         if len(arcpoints) % 2 == 1:
-            poly = list(map(lambda x : [x[0]+adjustcorneramount, x[1]+adjustcorneramount], poly))
+            if retries >= max_corner_retries:
+                raise RuntimeError(
+                    "getCircleIntersectArea: odd number of arc intersection points "
+                    f"after {max_corner_retries} retries"
+                )
+            perturb = adjustcorneramount * (retries + 1)
+            poly = list(
+                map(lambda x: [x[0] + perturb, x[1] + perturb], poly)
+            )
+            retries += 1
         else:
             notmod = False
 
@@ -248,6 +261,19 @@ def getCircleIntersectArea(center, radius, poly): #TODO fix
         return 0, []
     
     return area % (radius*radius*math.pi), arcpoints
+
+
+def _unique_points(points, tol):
+    unique = []
+    for p in points:
+        keep = True
+        for q in unique:
+            if getDistance(p, q) < tol:
+                keep = False
+                break
+        if keep:
+            unique.append(p)
+    return unique
 
 #Newton's method to match a1, a2, a3s
 #Matches area fractions a1, a2, a3

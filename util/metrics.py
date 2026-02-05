@@ -1,6 +1,9 @@
 import os
 
+import numpy as np
+
 from main.geoms.geoms import getDistance
+from main.structs.interface import Interface
 from util.plotting.plt_utils import plotInitialAreaCompare
 
 
@@ -47,47 +50,38 @@ def LinfErrorFractions(final, true):
 
 
 def calculate_facet_gaps(mesh, reconstructed_facets):
-    """Calculate the minimum distance between left facet endpoint and neighboring facets' endpoints.
+    """Calculate average gap distance between adjacent facets."""
+    interface = Interface.from_merge_mesh(
+        mesh, reconstructed_facets=reconstructed_facets, infer_missing_neighbors=False
+    )
+    has_oriented = any(
+        record.left_cell_id is not None or record.right_cell_id is not None
+        for component in interface.components
+        for record in component.records
+    )
+    if not has_oriented:
+        interface = Interface.from_merge_mesh(
+            mesh,
+            reconstructed_facets=reconstructed_facets,
+            infer_missing_neighbors=True,
+        )
 
-    Args:
-        mesh: MergeMesh object
-        reconstructed_facets: List of reconstructed facets for each cell
-
-    Returns:
-        avg_gap: Average minimum gap distance across all mixed cells
-    """
-    total_gap = 0
-    cnt_gap = 0
-
-    # Get list of merged polygons for easier indexing
-    merged_polys = list(mesh.merged_polys.values())
-
-    for i, (poly, facet) in enumerate(zip(merged_polys, reconstructed_facets)):
-        if not facet:  # Skip if no facet
+    gaps = []
+    for component in interface.components:
+        records = component.records
+        if len(records) < 2:
             continue
+        for i in range(len(records)):
+            j = (i + 1) % len(records) if component.is_closed else i + 1
+            if j >= len(records):
+                continue
+            p_right = records[i].right_point()
+            p_left = records[j].left_point()
+            gaps.append(getDistance(p_right, p_left))
 
-        # Get left endpoint of current facet
-        left_endpoint = facet.pLeft
-
-        # Find all neighboring mixed cells that have facets
-        min_gap = float("inf")
-        for neighbor in poly.adjacent_polys:
-            if neighbor in merged_polys:
-                # Get neighbor facet
-                i = merged_polys.index(neighbor)
-                neighbor_facet = reconstructed_facets[i]
-                assert neighbor_facet == neighbor.getFacet()
-                # Calculate distance to both endpoints of neighbor's facet
-                dist_left = getDistance(left_endpoint, neighbor_facet.pLeft)
-                dist_right = getDistance(left_endpoint, neighbor_facet.pRight)
-                # Update minimum gap
-                min_gap = min(min_gap, dist_left, dist_right)
-
-        if min_gap != float("inf"):
-            total_gap += min_gap
-            cnt_gap += 1
-
-    return total_gap / cnt_gap if cnt_gap > 0 else 0
+    if not gaps:
+        return 0
+    return float(np.mean(np.asarray(gaps)))
 
 
 def computeFinalMetrics(m, true_final_areas, output_dirs):

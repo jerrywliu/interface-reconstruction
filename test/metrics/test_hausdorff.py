@@ -4,11 +4,9 @@ Test script for the hausdorffFacets function.
 Tests the numerical Hausdorff distance calculation between different facet types.
 """
 
-from main.structs.facets.base_facet import (
-    LinearFacet, 
-    ArcFacet, 
-    CornerFacet,
-)
+from main.structs.facets.circular_facet import ArcFacet
+from main.structs.facets.corner_facet import CornerFacet
+from main.structs.facets.linear_facet import LinearFacet
 from util.metrics.metrics import hausdorffFacets
 
 

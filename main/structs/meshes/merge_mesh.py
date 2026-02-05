@@ -18,12 +18,10 @@ from main.geoms.geoms import (
 )
 from main.geoms.circular_facet import getCircleIntersectArea
 from main.geoms.corner_facet import getPolyCornerArea, getPolyCurvedCornerArea
-from main.structs.facets.base_facet import (
-    LinearFacet,
-    ArcFacet,
-    CornerFacet,
-    advectPoint,
-)
+from main.structs.facets.base_facet import advectPoint
+from main.structs.facets.circular_facet import ArcFacet
+from main.structs.facets.corner_facet import CornerFacet
+from main.structs.facets.linear_facet import LinearFacet
 
 """
 A class for meshes that merge cells.

@@ -5,6 +5,11 @@ Usage:
     python -m util.logging.analyze_log get_arc_facet_calls.log
     python -m util.logging.analyze_log get_arc_facet_calls.log --extract-failed
     python -m util.logging.analyze_log get_arc_facet_calls.log --extract-slow --threshold 1.0
+    python -m util.logging.analyze_log get_arc_facet_calls.log --extract-problematic
+    
+Note: "Infinite loop" cases that hit maxTimestep quickly will show up as "failed"
+      (not "slow") because they complete in <1 second. Use --extract-problematic
+      to get both failed and slow cases.
 """
 
 import json
@@ -30,7 +35,7 @@ def load_log_entries(log_file: str) -> List[Dict[str, Any]]:
     return entries
 
 
-def print_summary(entries: List[Dict[str, Any]]):
+def print_summary(entries: List[Dict[str, Any]], infinite_loop_threshold: float = 0.01):
     """Print summary statistics."""
     total = len(entries)
     success = sum(1 for e in entries if e.get("status") == "success")
@@ -54,6 +59,21 @@ def print_summary(entries: List[Dict[str, Any]]):
     print(f"  Average: {avg_time:.4f}s")
     print(f"  Maximum: {max_time:.4f}s")
     print(f"  Total: {total_time:.2f}s")
+    
+    # Categorize failed cases
+    if failed > 0:
+        instant_failures, infinite_loop_failures = categorize_failed_cases(
+            entries, infinite_loop_threshold
+        )
+        print()
+        print(f"Failed cases breakdown (threshold: {infinite_loop_threshold}s):")
+        print(f"  ⚡ Instant failures (likely no valid solution): {len(instant_failures)} ({100*len(instant_failures)/failed:.1f}%)")
+        print(f"  🔄 Infinite loop failures (hit maxTimestep): {len(infinite_loop_failures)} ({100*len(infinite_loop_failures)/failed:.1f}%)")
+    
+    # Count slow cases (>1s)
+    slow_count = sum(1 for e in entries if e.get("execution_time_seconds", 0) > 1.0)
+    if slow_count > 0:
+        print(f"  Slow cases (>1.0s): {slow_count}")
     print()
 
 
@@ -62,11 +82,76 @@ def extract_failed_cases(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [e for e in entries if e.get("status") == "failed"]
 
 
+def categorize_failed_cases(
+    entries: List[Dict[str, Any]], 
+    infinite_loop_threshold: float = 0.01
+) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """
+    Categorize failed cases into:
+    1. Instant failures: Likely no valid solution exists (fail quickly)
+    2. Infinite loop failures: Hit maxTimestep after many iterations (take longer)
+    
+    Args:
+        entries: List of log entries
+        infinite_loop_threshold: Time threshold (seconds) to distinguish infinite loops.
+                                 Cases taking longer than this are considered "infinite loops".
+                                 Default 0.01s (10ms) - infinite loops iterate many times.
+    
+    Returns:
+        (instant_failures, infinite_loop_failures)
+    """
+    failed = extract_failed_cases(entries)
+    
+    instant_failures = []
+    infinite_loop_failures = []
+    
+    for e in failed:
+        exec_time = e.get("execution_time_seconds", 0)
+        if exec_time >= infinite_loop_threshold:
+            infinite_loop_failures.append(e)
+        else:
+            instant_failures.append(e)
+    
+    return instant_failures, infinite_loop_failures
+
+
 def extract_slow_cases(
     entries: List[Dict[str, Any]], threshold: float = 1.0
 ) -> List[Dict[str, Any]]:
     """Extract cases that took longer than threshold seconds."""
     return [e for e in entries if e.get("execution_time_seconds", 0) > threshold]
+
+
+def extract_problematic_cases(
+    entries: List[Dict[str, Any]], 
+    slow_threshold: float = 1.0,
+    include_failed: bool = True,
+    include_slow: bool = True,
+) -> List[Dict[str, Any]]:
+    """
+    Extract problematic cases: slow cases, failed cases, or both.
+    
+    Args:
+        entries: List of log entries
+        slow_threshold: Time threshold for slow cases (seconds)
+        include_failed: Include cases that failed to converge
+        include_slow: Include cases that took longer than threshold
+    
+    Returns:
+        List of problematic entries
+    """
+    result = []
+    for e in entries:
+        status = e.get("status", "unknown")
+        exec_time = e.get("execution_time_seconds", 0)
+        
+        is_failed = (status == "failed") and include_failed
+        is_slow = (exec_time > slow_threshold) and include_slow
+        
+        if is_failed or is_slow:
+            result.append(e)
+    
+    return result
 
 
 def extract_extreme_area_fractions(
@@ -92,12 +177,20 @@ def extract_extreme_area_fractions(
     return result
 
 
-def format_test_case(entry: Dict[str, Any]) -> str:
+def format_test_case(entry: Dict[str, Any], infinite_loop_threshold: float = 0.01) -> str:
     """Format a log entry as a test case."""
     inputs = entry.get("inputs", {})
     call_id = entry.get("call_id", "unknown")
     status = entry.get("status", "unknown")
     exec_time = entry.get("execution_time_seconds", 0)
+    
+    # Determine failure type for failed cases
+    failure_type = ""
+    if status == "failed":
+        if exec_time >= infinite_loop_threshold:
+            failure_type = " (infinite loop - hit maxTimestep)"
+        else:
+            failure_type = " (instant failure - likely no valid solution)"
 
     return f"""TestCase(
     name="case_from_log_{call_id}",
@@ -108,7 +201,7 @@ def format_test_case(entry: Dict[str, Any]) -> str:
     a2={inputs.get('a2')},
     a3={inputs.get('a3')},
     epsilon={inputs.get('epsilon')},
-    description="From log: status={status}, time={exec_time:.4f}s"
+    description="From log: status={status}{failure_type}, time={exec_time:.4f}s"
 ),"""
 
 
@@ -122,10 +215,33 @@ def main():
         "--extract-slow", action="store_true", help="Extract slow test cases"
     )
     parser.add_argument(
+        "--extract-problematic",
+        action="store_true",
+        help="Extract problematic cases (failed OR slow). This is useful for finding "
+             "'infinite loop' cases that hit maxTimestep quickly (failed) or take a long time (slow).",
+    )
+    parser.add_argument(
         "--threshold",
         type=float,
         default=1.0,
         help="Time threshold for slow cases (seconds)",
+    )
+    parser.add_argument(
+        "--infinite-loop-threshold",
+        type=float,
+        default=0.01,
+        help="Time threshold to distinguish infinite loop failures from instant failures (seconds). "
+             "Failed cases taking longer than this are considered 'infinite loops'. Default: 0.01s",
+    )
+    parser.add_argument(
+        "--extract-instant-failures",
+        action="store_true",
+        help="Extract instant failures (likely no valid solution exists, fail quickly)",
+    )
+    parser.add_argument(
+        "--extract-infinite-loops",
+        action="store_true",
+        help="Extract infinite loop failures (hit maxTimestep after many iterations)",
     )
     parser.add_argument(
         "--extract-extreme",
@@ -156,7 +272,7 @@ def main():
     print(f"Loaded {len(entries)} entries\n")
 
     # Print summary
-    print_summary(entries)
+    print_summary(entries, args.infinite_loop_threshold)
 
     # Extract cases based on flags
     extracted = []
@@ -166,10 +282,30 @@ def main():
         print(f"Found {len(failed)} failed cases")
         extracted.extend(failed)
 
+    if args.extract_instant_failures:
+        instant_failures, _ = categorize_failed_cases(entries, args.infinite_loop_threshold)
+        print(f"Found {len(instant_failures)} instant failures (<{args.infinite_loop_threshold}s)")
+        extracted.extend(instant_failures)
+
+    if args.extract_infinite_loops:
+        _, infinite_loop_failures = categorize_failed_cases(entries, args.infinite_loop_threshold)
+        print(f"Found {len(infinite_loop_failures)} infinite loop failures (>={args.infinite_loop_threshold}s)")
+        extracted.extend(infinite_loop_failures)
+
     if args.extract_slow:
         slow = extract_slow_cases(entries, args.threshold)
         print(f"Found {len(slow)} slow cases (>{args.threshold}s)")
         extracted.extend(slow)
+
+    if args.extract_problematic:
+        problematic = extract_problematic_cases(
+            entries, 
+            slow_threshold=args.threshold,
+            include_failed=True,
+            include_slow=True,
+        )
+        print(f"Found {len(problematic)} problematic cases (failed OR slow >{args.threshold}s)")
+        extracted.extend(problematic)
 
     if args.extract_extreme:
         extreme = extract_extreme_area_fractions(entries, args.min_frac, args.max_frac)
@@ -189,7 +325,7 @@ def main():
         print(f"\nTotal unique extracted cases: {len(unique_extracted)}")
 
         # Format as test cases
-        test_cases = [format_test_case(e) for e in unique_extracted]
+        test_cases = [format_test_case(e, args.infinite_loop_threshold) for e in unique_extracted]
 
         if args.output:
             with open(args.output, "w") as f:

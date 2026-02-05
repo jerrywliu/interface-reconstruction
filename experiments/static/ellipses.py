@@ -61,14 +61,22 @@ import math
 import matplotlib.pyplot as plt
 
 from main.structs.meshes.merge_mesh import MergeMesh
-from util.metrics.metrics import calculate_facet_gaps, hausdorffFacets
+from util.metrics.metrics import (
+    calculate_facet_gaps,
+    hausdorffFacets,
+    interface_turning_curvature,
+    polyline_average_curvature,
+    tangent_error_to_curve,
+)
+from main.structs.interface import Interface
 from main.geoms.circular_facet import getCircleIntersectArea
-from main.structs.facets.base_facet import LinearFacet, ArcFacet
+from main.structs.facets.circular_facet import ArcFacet
+from main.structs.facets.linear_facet import LinearFacet
 
 from util.config import read_yaml
 from util.io.setup import setupOutputDirs
 from util.reconstruction import runReconstruction
-from util.initialize.points import makeFineCartesianGrid
+from util.initialize.mesh_factory import make_points_from_config, apply_mesh_overrides
 from util.initialize.areas import initializeEllipse
 from util.plotting.plt_utils import plotAreas, plotPartialAreas
 from util.plotting.vtk_utils import writeMesh
@@ -194,6 +202,12 @@ def main(
     facet_algo=None,
     save_name=None,
     num_ellipses=25,
+    mesh_type=None,
+    perturb_wiggle=None,
+    perturb_seed=None,
+    perturb_fix_boundary=None,
+    perturb_max_tries=None,
+    perturb_type=None,
     **kwargs,
 ):
     # Read config
@@ -219,7 +233,19 @@ def main(
 
     # Initialize mesh once
     print("Generating mesh...")
-    opoints = makeFineCartesianGrid(grid_size, resolution)
+    if isinstance(perturb_fix_boundary, int):
+        perturb_fix_boundary = bool(perturb_fix_boundary)
+    mesh_cfg = apply_mesh_overrides(
+        config["MESH"],
+        resolution=resolution,
+        mesh_type=mesh_type,
+        perturb_wiggle=perturb_wiggle,
+        perturb_seed=perturb_seed,
+        perturb_fix_boundary=perturb_fix_boundary,
+        perturb_max_tries=perturb_max_tries,
+        perturb_type=perturb_type,
+    )
+    opoints = make_points_from_config(mesh_cfg)
     m = MergeMesh(opoints, threshold)
     writeMesh(m, os.path.join(output_dirs["vtk"], f"mesh.vtk"))
 
@@ -230,6 +256,8 @@ def main(
     curvature_errors = []
     facet_gaps = []
     hausdorff_distances = []
+    tangent_errors = []
+    curvature_proxy_errors = []
 
     for i, aspect_ratio in enumerate(aspect_ratios):
         print(f"Processing ellipse {i+1}/{num_ellipses}")
@@ -327,6 +355,44 @@ def main(
         avg_gap = calculate_facet_gaps(m, reconstructed_facets)
         print(f"Average facet gap for ellipse {i+1}: {avg_gap:.3e}")
 
+        # Tangent error + curvature proxy error
+        sample_count = 256
+        true_points = []
+        true_tangents = []
+        cos_t = math.cos(theta)
+        sin_t = math.sin(theta)
+        for k in range(sample_count):
+            t = 2 * math.pi * k / sample_count
+            x_local = major_axis * math.cos(t)
+            y_local = minor_axis * math.sin(t)
+            x = center[0] + cos_t * x_local - sin_t * y_local
+            y = center[1] + sin_t * x_local + cos_t * y_local
+            true_points.append([x, y])
+
+            dx_local = -major_axis * math.sin(t)
+            dy_local = minor_axis * math.cos(t)
+            dx = cos_t * dx_local - sin_t * dy_local
+            dy = sin_t * dx_local + cos_t * dy_local
+            true_tangents.append([dx, dy])
+
+        tangent_stats = tangent_error_to_curve(
+            reconstructed_facets, true_points, true_tangents, n_per_facet=25
+        )
+        tangent_error = tangent_stats["mean"]
+
+        interface = Interface.from_merge_mesh(
+            m, reconstructed_facets=reconstructed_facets, infer_missing_neighbors=True
+        )
+        curvature_stats = interface_turning_curvature(interface)
+        recon_curvature = curvature_stats["mean"]
+        true_curvature = polyline_average_curvature(true_points, closed=True)
+        curvature_proxy_error = abs(recon_curvature - true_curvature)
+
+        print(f"Tangent error for ellipse {i+1}: {tangent_error:.3e}")
+        print(
+            f"Curvature proxy error for ellipse {i+1}: {curvature_proxy_error:.3e}"
+        )
+
         # Save metrics to file
         with open(
             os.path.join(output_dirs["metrics"], "curvature_error.txt"), "a"
@@ -336,12 +402,26 @@ def main(
             f.write(f"{avg_gap}\n")
         with open(os.path.join(output_dirs["metrics"], "hausdorff.txt"), "a") as f:
             f.write(f"{avg_hausdorff}\n")
+        with open(os.path.join(output_dirs["metrics"], "tangent_error.txt"), "a") as f:
+            f.write(f"{tangent_error}\n")
+        with open(
+            os.path.join(output_dirs["metrics"], "curvature_proxy_error.txt"), "a"
+        ) as f:
+            f.write(f"{curvature_proxy_error}\n")
 
         curvature_errors.append(avg_error)
         facet_gaps.append(avg_gap)
         hausdorff_distances.append(avg_hausdorff)
+        tangent_errors.append(tangent_error)
+        curvature_proxy_errors.append(curvature_proxy_error)
 
-    return curvature_errors, facet_gaps, hausdorff_distances
+    return (
+        curvature_errors,
+        facet_gaps,
+        hausdorff_distances,
+        tangent_errors,
+        curvature_proxy_errors,
+    )
 
 
 def create_combined_plot(resolutions, curvature_results, gap_results, 
@@ -501,6 +581,84 @@ def create_hausdorff_plot(resolutions, hausdorff_results, save_path="results/sta
     plt.close()
 
 
+def create_tangent_plot(
+    resolutions,
+    tangent_results,
+    save_path="results/static/ellipse_reconstruction_tangent.png",
+):
+    """
+    Create a plot for tangent error vs. resolution for all algorithms.
+    """
+    import matplotlib.pyplot as plt
+    plt.rcParams.update({
+        'font.size': 12,
+        'font.family': 'serif',
+        'mathtext.fontset': 'cm',
+        'axes.linewidth': 1.5,
+        'xtick.major.width': 1.5,
+        'ytick.major.width': 1.5,
+        'xtick.minor.width': 1.0,
+        'ytick.minor.width': 1.0,
+        'lines.linewidth': 2.5,
+        'lines.markersize': 8,
+    })
+    plt.figure(figsize=(8, 6))
+    x_values = [int(100 * r) for r in resolutions]
+    for algo, values in tangent_results.items():
+        plt.plot(x_values, values, marker='o', label=algo, linewidth=2.5, markersize=8)
+    plt.xscale("log", base=2)
+    plt.xlabel(r"Resolution", fontsize=14)
+    plt.yscale("log")
+    plt.ylabel("Mean Tangent Error (radians)", fontsize=14)
+    plt.title("Tangent Error (Ellipse)", fontsize=16, fontweight='bold')
+    plt.legend(fontsize=12, frameon=True, fancybox=True, shadow=False, loc='center left', bbox_to_anchor=(0.02, 0.4))
+    plt.grid(True, which="both", ls="-", alpha=0.3)
+    plt.xticks(x_values, [str(x) for x in x_values])
+    plt.grid(True, which="minor", ls=":", alpha=0.2)
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.close()
+
+
+def create_curvature_proxy_plot(
+    resolutions,
+    curvature_proxy_results,
+    save_path="results/static/ellipse_reconstruction_curvature_proxy.png",
+):
+    """
+    Create a plot for curvature proxy error vs. resolution for all algorithms.
+    """
+    import matplotlib.pyplot as plt
+    plt.rcParams.update({
+        'font.size': 12,
+        'font.family': 'serif',
+        'mathtext.fontset': 'cm',
+        'axes.linewidth': 1.5,
+        'xtick.major.width': 1.5,
+        'ytick.major.width': 1.5,
+        'xtick.minor.width': 1.0,
+        'ytick.minor.width': 1.0,
+        'lines.linewidth': 2.5,
+        'lines.markersize': 8,
+    })
+    plt.figure(figsize=(8, 6))
+    x_values = [int(100 * r) for r in resolutions]
+    for algo, values in curvature_proxy_results.items():
+        plt.plot(x_values, values, marker='o', label=algo, linewidth=2.5, markersize=8)
+    plt.xscale("log", base=2)
+    plt.xlabel(r"Resolution", fontsize=14)
+    plt.yscale("log")
+    plt.ylabel("Curvature Proxy Error", fontsize=14)
+    plt.title("Curvature Proxy Error (Ellipse)", fontsize=16, fontweight='bold')
+    plt.legend(fontsize=12, frameon=True, fancybox=True, shadow=False, loc='center left', bbox_to_anchor=(0.02, 0.4))
+    plt.grid(True, which="both", ls="-", alpha=0.3)
+    plt.xticks(x_values, [str(x) for x in x_values])
+    plt.grid(True, which="minor", ls=":", alpha=0.2)
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.close()
+
+
 def load_results_from_file(file_path):
     """
     Load results from a summary results file.
@@ -582,13 +740,15 @@ def run_parameter_sweep(config_setting, num_ellipses=25, drop_resolution_200=Fal
     curvature_results = {algo: [] for algo in facet_algos}
     gap_results = {algo: [] for algo in facet_algos}
     hausdorff_results = {algo: [] for algo in facet_algos}
+    tangent_results = {algo: [] for algo in facet_algos}
+    curvature_proxy_results = {algo: [] for algo in facet_algos}
 
     # Run experiments
     for resolution in resolutions:
         print(f"\nRunning experiments for resolution {resolution}")
         for algo, save_name in zip(facet_algos, save_names):
             print(f"Testing {algo} algorithm...")
-            errors, gaps, hausdorffs = main(
+            errors, gaps, hausdorffs, tangent_errors, curvature_proxy_errors = main(
                 config_setting=config_setting,
                 resolution=resolution,
                 facet_algo=algo,
@@ -598,9 +758,18 @@ def run_parameter_sweep(config_setting, num_ellipses=25, drop_resolution_200=Fal
             curvature_results[algo].append(max(np.mean(np.array(errors)), MIN_ERROR))
             gap_results[algo].append(max(np.mean(np.array(gaps)), MIN_ERROR))
             hausdorff_results[algo].append(max(np.mean(np.array(hausdorffs)), MIN_ERROR))
+            tangent_results[algo].append(
+                max(np.mean(np.array(tangent_errors)), MIN_ERROR)
+            )
+            curvature_proxy_results[algo].append(
+                max(np.mean(np.array(curvature_proxy_errors)), MIN_ERROR)
+            )
 
     # Create combined plot
     create_combined_plot(resolutions, curvature_results, gap_results, drop_resolution_200=drop_resolution_200)
+    create_hausdorff_plot(resolutions, hausdorff_results)
+    create_tangent_plot(resolutions, tangent_results)
+    create_curvature_proxy_plot(resolutions, curvature_proxy_results)
 
     # Dump results to file
     with open("results/static/ellipse_reconstruction_results.txt", "w") as f:
@@ -608,6 +777,8 @@ def run_parameter_sweep(config_setting, num_ellipses=25, drop_resolution_200=Fal
         f.write(f"Curvature Results: {curvature_results}\n")
         f.write(f"Gap Results: {gap_results}\n")
         f.write(f"Hausdorff Results: {hausdorff_results}\n")
+        f.write(f"Tangent Results: {tangent_results}\n")
+        f.write(f"Curvature Proxy Results: {curvature_proxy_results}\n")
 
     return curvature_results, gap_results, hausdorff_results
 
@@ -819,6 +990,35 @@ if __name__ == "__main__":
     parser.add_argument(
         "--num_ellipses", type=int, help="number of ellipses to test", default=25
     )
+    parser.add_argument("--mesh_type", type=str, help="mesh type override", default=None)
+    parser.add_argument(
+        "--perturb_wiggle",
+        type=float,
+        help="perturbation amplitude (fraction of cell size)",
+        default=None,
+    )
+    parser.add_argument(
+        "--perturb_seed", type=int, help="perturbation RNG seed", default=None
+    )
+    parser.add_argument(
+        "--perturb_fix_boundary",
+        type=int,
+        choices=[0, 1],
+        help="fix boundary nodes (1=yes, 0=no)",
+        default=None,
+    )
+    parser.add_argument(
+        "--perturb_max_tries",
+        type=int,
+        help="max attempts to generate non-inverted mesh",
+        default=None,
+    )
+    parser.add_argument(
+        "--perturb_type",
+        type=str,
+        help="perturbation type (e.g., random)",
+        default=None,
+    )
     parser.add_argument(
         "--sweep", action="store_true", help="run parameter sweep", default=False
     )
@@ -878,4 +1078,10 @@ if __name__ == "__main__":
             facet_algo=args.facet_algo,
             save_name=args.save_name,
             num_ellipses=args.num_ellipses,
+            mesh_type=args.mesh_type,
+            perturb_wiggle=args.perturb_wiggle,
+            perturb_seed=args.perturb_seed,
+            perturb_fix_boundary=args.perturb_fix_boundary,
+            perturb_max_tries=args.perturb_max_tries,
+            perturb_type=args.perturb_type,
         )

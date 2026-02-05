@@ -1,11 +1,22 @@
 import math
+from typing import Iterable, Sequence, Union
+
+import numpy as np
+from scipy.spatial import cKDTree
 
 from main.geoms.geoms import getDistance
-from main.structs.facets.base_facet import LinearFacet, ArcFacet, CornerFacet, lerp, getNormal
-from typing import Union
+from main.structs.facets.base_facet import getNormal
+from main.structs.facets.circular_facet import ArcFacet
+from main.structs.facets.corner_facet import CornerFacet
+from main.structs.facets.linear_facet import LinearFacet
+from main.structs.interface import Interface
 
 
-def hausdorffFacets(facet1: Union[LinearFacet, ArcFacet, CornerFacet], facet2: Union[LinearFacet, ArcFacet, CornerFacet], n=100):
+def hausdorffFacets(
+    facet1: Union[LinearFacet, ArcFacet, CornerFacet],
+    facet2: Union[LinearFacet, ArcFacet, CornerFacet],
+    n=100,
+):
     """
     Compute Hausdorff distance between two facets using numerical approximation.
     
@@ -18,144 +29,278 @@ def hausdorffFacets(facet1: Union[LinearFacet, ArcFacet, CornerFacet], facet2: U
         float: Hausdorff distance
     """
     
-    def sample_points_linear(facet, n):
-        """Sample n equispaced points along a linear facet."""
-        points = []
-        for i in range(n):
-            t = i / (n - 1)  # Parameter from 0 to 1
-            point = lerp(facet.pLeft, facet.pRight, t)
-            points.append(point)
-        return points
-    
-    def sample_points_arc(facet, n):
-        """Sample n equispaced points along an arc facet."""
-        points = []
-        
-        # Calculate angles for start and end points
-        start_angle = math.atan2(facet.pLeft[1] - facet.center[1], 
-                                facet.pLeft[0] - facet.center[0])
-        end_angle = math.atan2(facet.pRight[1] - facet.center[1], 
-                              facet.pRight[0] - facet.center[0])
-        
-        # Handle angle wrapping - ensure we go the shorter way around
-        angle_diff = end_angle - start_angle
-        if angle_diff > math.pi:
-            angle_diff -= 2 * math.pi
-        elif angle_diff < -math.pi:
-            angle_diff += 2 * math.pi
-            
-        # Sample points along the arc
-        for i in range(n):
-            t = i / (n - 1)  # Parameter from 0 to 1
-            angle = start_angle + t * angle_diff
-            point = [
-                facet.center[0] + abs(facet.radius) * math.cos(angle),
-                facet.center[1] + abs(facet.radius) * math.sin(angle)
-            ]
-            points.append(point)
-        
-        return points
-    
-    def sample_points_corner(facet, n):
-        """Sample n equispaced points along a corner facet (both sides)."""
-        points = []
-        
-        # Sample points along left facet
-        if isinstance(facet.facetLeft, LinearFacet):
-            left_points = sample_points_linear(facet.facetLeft, n // 2)
-        elif isinstance(facet.facetLeft, ArcFacet):
-            left_points = sample_points_arc(facet.facetLeft, n // 2)
+    points1 = facet1.sample(n)
+    points2 = facet2.sample(n)
+    return hausdorff_points(points1, points2)
+
+
+def hausdorff_points(points1: Iterable, points2: Iterable) -> float:
+    points1 = np.asarray(list(points1), dtype=float)
+    points2 = np.asarray(list(points2), dtype=float)
+    if points1.size == 0 or points2.size == 0:
+        return float("inf")
+    if points1.ndim == 1:
+        points1 = points1.reshape(1, -1)
+    if points2.ndim == 1:
+        points2 = points2.reshape(1, -1)
+
+    tree2 = cKDTree(points2)
+    d1, _ = tree2.query(points1, k=1)
+
+    tree1 = cKDTree(points1)
+    d2, _ = tree1.query(points2, k=1)
+
+    return max(np.max(d1), np.max(d2))
+
+
+def interface_gap_stats(interface: Interface, mode: str = "euclidean"):
+    gaps = []
+    for component in interface.components:
+        records = component.records
+        if len(records) < 2:
+            continue
+        for i in range(len(records)):
+            j = (i + 1) % len(records) if component.is_closed else i + 1
+            if j >= len(records):
+                continue
+            p_right = records[i].right_point()
+            p_left = records[j].left_point()
+            if mode == "normal":
+                normal = getNormal(records[i].facet, p_right)
+                if normal is None:
+                    gap = getDistance(p_right, p_left)
+                else:
+                    delta = np.asarray(p_right) - np.asarray(p_left)
+                    gap = abs(float(np.dot(delta, normal)))
+            else:
+                gap = getDistance(p_right, p_left)
+            gaps.append(gap)
+
+    if not gaps:
+        return {"mean": 0.0, "max": 0.0, "p95": 0.0, "count": 0}
+
+    gaps_np = np.asarray(gaps, dtype=float)
+    return {
+        "mean": float(np.mean(gaps_np)),
+        "max": float(np.max(gaps_np)),
+        "p95": float(np.quantile(gaps_np, 0.95)),
+        "count": int(len(gaps)),
+    }
+
+
+def calculate_facet_gaps(
+    mesh,
+    reconstructed_facets,
+    mode: str = "euclidean",
+    infer_missing_neighbors: bool = True,
+    return_stats: bool = False,
+):
+    """Calculate gap metrics between adjacent facets along the interface."""
+    interface = Interface.from_merge_mesh(
+        mesh,
+        reconstructed_facets=reconstructed_facets,
+        infer_missing_neighbors=False,
+    )
+    if infer_missing_neighbors:
+        has_oriented = any(
+            record.left_cell_id is not None or record.right_cell_id is not None
+            for component in interface.components
+            for record in component.records
+        )
+        if not has_oriented:
+            interface = Interface.from_merge_mesh(
+                mesh,
+                reconstructed_facets=reconstructed_facets,
+                infer_missing_neighbors=True,
+            )
+    stats = interface_gap_stats(interface, mode=mode)
+    return stats if return_stats else stats["mean"]
+
+
+def _normalize(vec: Sequence[float]):
+    arr = np.asarray(vec, dtype=float)
+    norm = float(np.linalg.norm(arr))
+    if norm < 1e-12:
+        return None
+    return arr / norm
+
+
+def _flatten_facets(facets: Iterable):
+    for facet in facets:
+        if isinstance(facet, CornerFacet):
+            yield facet.facetLeft
+            yield facet.facetRight
         else:
-            left_points = []
-        
-        # Sample points along right facet
-        if isinstance(facet.facetRight, LinearFacet):
-            right_points = sample_points_linear(facet.facetRight, n // 2)
-        elif isinstance(facet.facetRight, ArcFacet):
-            right_points = sample_points_arc(facet.facetRight, n // 2)
+            yield facet
+
+
+def sample_facets_with_tangents(
+    facets: Iterable[Union[LinearFacet, ArcFacet, CornerFacet]],
+    n_per_facet: int = 50,
+):
+    points = []
+    tangents = []
+    for facet in _flatten_facets(facets):
+        if facet is None:
+            continue
+        samples = facet.sample(max(2, n_per_facet))
+        for p in samples:
+            tangent = _normalize(facet.getTangent(p))
+            if tangent is None:
+                continue
+            points.append(p)
+            tangents.append(tangent)
+
+    if not points:
+        return np.zeros((0, 2)), np.zeros((0, 2))
+    return np.asarray(points, dtype=float), np.asarray(tangents, dtype=float)
+
+
+def tangent_error_to_curve(
+    reconstructed_facets: Iterable[Union[LinearFacet, ArcFacet, CornerFacet]],
+    true_points: Sequence[Sequence[float]],
+    true_tangents: Sequence[Sequence[float]],
+    n_per_facet: int = 50,
+):
+    true_pts = np.asarray(true_points, dtype=float)
+    true_tans = []
+    for tan in true_tangents:
+        normed = _normalize(tan)
+        if normed is None:
+            true_tans.append(None)
         else:
-            right_points = []
-        
-        # Combine points, avoiding duplicate corner point
-        if left_points and right_points:
-            points = left_points[:-1] + right_points[1:]
-        else:
-            points = left_points + right_points
-        return points
-    
-    def sample_points(facet, n):
-        """Sample n points along a facet based on its type."""
-        if isinstance(facet, LinearFacet):
-            return sample_points_linear(facet, n)
-        elif isinstance(facet, ArcFacet):
-            return sample_points_arc(facet, n)
-        elif isinstance(facet, CornerFacet):
-            return sample_points_corner(facet, n)
-        else:
-            raise ValueError(f"Unsupported facet type: {type(facet)}")
-    
-    # Sample points from both facets
-    points1 = sample_points(facet1, n)
-    points2 = sample_points(facet2, n)
-    
-    # Compute Hausdorff distance: max(min distances from each point to other set)
-    def compute_hausdorff_distance(set1, set2):
-        """Compute Hausdorff distance from set1 to set2."""
-        max_min_distance = 0
-        for p1 in set1:
-            min_distance = float('inf')
-            for p2 in set2:
-                dist = getDistance(p1, p2)
-                min_distance = min(min_distance, dist)
-            max_min_distance = max(max_min_distance, min_distance)
-        return max_min_distance
-    
-    # Hausdorff distance is the maximum of both directions
-    d1_to_2 = compute_hausdorff_distance(points1, points2)
-    d2_to_1 = compute_hausdorff_distance(points2, points1)
-    
-    return max(d1_to_2, d2_to_1)
+            true_tans.append(normed)
+
+    recon_pts, recon_tans = sample_facets_with_tangents(
+        reconstructed_facets, n_per_facet=n_per_facet
+    )
+    if recon_pts.size == 0 or true_pts.size == 0:
+        return {"mean": float("nan"), "median": float("nan"), "max": float("nan")}
+
+    tree = cKDTree(recon_pts)
+    _, idxs = tree.query(true_pts, k=1)
+
+    angles = []
+    for i, idx in enumerate(idxs):
+        t_true = true_tans[i]
+        if t_true is None:
+            continue
+        t_recon = recon_tans[idx]
+        dot = float(np.clip(np.dot(t_true, t_recon), -1.0, 1.0))
+        dot = abs(dot)  # tangent direction is sign-invariant
+        angle = math.acos(dot)
+        angles.append(angle)
+
+    if not angles:
+        return {"mean": float("nan"), "median": float("nan"), "max": float("nan")}
+
+    angles_np = np.asarray(angles, dtype=float)
+    return {
+        "mean": float(np.mean(angles_np)),
+        "median": float(np.median(angles_np)),
+        "max": float(np.max(angles_np)),
+    }
 
 
-def calculate_facet_gaps(mesh, reconstructed_facets):
-    """Calculate the minimum distance between left facet endpoint and neighboring facets' endpoints.
+def polyline_vertex_curvature(points: Sequence[Sequence[float]], closed: bool = True):
+    pts = np.asarray(points, dtype=float)
+    if pts.shape[0] < 3:
+        return []
 
-    Args:
-        mesh: MergeMesh object
-        reconstructed_facets: List of reconstructed facets for each cell
-
-    Returns:
-        avg_gap: Average minimum gap distance across all mixed cells
-    """
-    total_gap = 0
-    cnt_gap = 0
-
-    # Get list of merged polygons for easier indexing
-    merged_polys = list(mesh.merged_polys.values())
-
-    for i, (poly, facet) in enumerate(zip(merged_polys, reconstructed_facets)):
-        if not facet:  # Skip if no facet
+    n = pts.shape[0]
+    curvatures = []
+    indices = range(n) if closed else range(1, n - 1)
+    for i in indices:
+        i_prev = (i - 1) % n
+        i_next = (i + 1) % n
+        if not closed and (i == 0 or i == n - 1):
             continue
 
-        # Get left endpoint of current facet
-        left_endpoint = facet.pLeft
+        v1 = pts[i] - pts[i_prev]
+        v2 = pts[i_next] - pts[i]
+        len1 = float(np.linalg.norm(v1))
+        len2 = float(np.linalg.norm(v2))
+        if len1 < 1e-12 or len2 < 1e-12:
+            continue
 
-        # Find all neighboring mixed cells that have facets
-        min_gap = float("inf")
-        for neighbor in poly.adjacent_polys:
-            if neighbor in merged_polys:
-                # Get neighbor facet
-                i = merged_polys.index(neighbor)
-                neighbor_facet = reconstructed_facets[i]
-                assert neighbor_facet == neighbor.getFacet()
-                # Calculate distance to both endpoints of neighbor's facet
-                dist_left = getDistance(left_endpoint, neighbor_facet.pLeft)
-                dist_right = getDistance(left_endpoint, neighbor_facet.pRight)
-                # Update minimum gap
-                min_gap = min(min_gap, dist_left, dist_right)
+        dot = float(np.dot(v1, v2))
+        cross = float(v1[0] * v2[1] - v1[1] * v2[0])
+        angle = abs(math.atan2(cross, dot))
+        avg_len = 0.5 * (len1 + len2)
+        curvatures.append(angle / avg_len)
 
-        if min_gap != float("inf"):
-            total_gap += min_gap
-            cnt_gap += 1
+    return curvatures
 
-    return total_gap / cnt_gap if cnt_gap > 0 else 0
+
+def polyline_average_curvature(points: Sequence[Sequence[float]], closed: bool = True):
+    pts = np.asarray(points, dtype=float)
+    if pts.shape[0] < 2:
+        return float("nan")
+
+    segs = pts[1:] - pts[:-1]
+    if closed:
+        segs = np.vstack([segs, pts[0] - pts[-1]])
+    lengths = np.linalg.norm(segs, axis=1)
+    total_length = float(np.sum(lengths))
+    if total_length < 1e-12:
+        return float("nan")
+
+    n = pts.shape[0]
+    total_turn = 0.0
+    indices = range(n) if closed else range(1, n - 1)
+    for i in indices:
+        i_prev = (i - 1) % n
+        i_next = (i + 1) % n
+        if not closed and (i == 0 or i == n - 1):
+            continue
+        v1 = pts[i] - pts[i_prev]
+        v2 = pts[i_next] - pts[i]
+        if np.linalg.norm(v1) < 1e-12 or np.linalg.norm(v2) < 1e-12:
+            continue
+        dot = float(np.dot(v1, v2))
+        cross = float(v1[0] * v2[1] - v1[1] * v2[0])
+        total_turn += abs(math.atan2(cross, dot))
+
+    return total_turn / total_length
+
+
+def interface_turning_curvature(interface: Interface):
+    curvatures = []
+    for component in interface.components:
+        records = component.records
+        if len(records) < 2:
+            continue
+        for i in range(len(records)):
+            j = (i + 1) % len(records) if component.is_closed else i + 1
+            if j >= len(records):
+                continue
+
+            rec_i = records[i]
+            rec_j = records[j]
+            p_joint = rec_i.right_point()
+
+            tan_i = _normalize(rec_i.facet.getTangent(p_joint))
+            tan_j = _normalize(rec_j.facet.getTangent(p_joint))
+            if tan_i is None or tan_j is None:
+                continue
+
+            dot = float(np.clip(np.dot(tan_i, tan_j), -1.0, 1.0))
+            cross = float(tan_i[0] * tan_j[1] - tan_i[1] * tan_j[0])
+            angle = abs(math.atan2(cross, dot))
+
+            len_i = getDistance(rec_i.left_point(), rec_i.right_point())
+            len_j = getDistance(rec_j.left_point(), rec_j.right_point())
+            avg_len = 0.5 * (len_i + len_j)
+            if avg_len < 1e-12:
+                continue
+            curvatures.append(angle / avg_len)
+
+    if not curvatures:
+        return {"mean": float("nan"), "median": float("nan"), "max": float("nan")}
+
+    curv_np = np.asarray(curvatures, dtype=float)
+    return {
+        "mean": float(np.mean(curv_np)),
+        "median": float(np.median(curv_np)),
+        "max": float(np.max(curv_np)),
+    }

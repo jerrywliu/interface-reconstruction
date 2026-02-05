@@ -5,7 +5,8 @@ from main.geoms.geoms import (
     lineIntersect,
     pointInPoly,
 )
-from main.structs.facets.base_facet import LinearFacet, ArcFacet
+from main.structs.facets.circular_facet import ArcFacet
+from main.structs.facets.linear_facet import LinearFacet
 from main.algos.plic_normals import getYoungsNormal, getLVIRANormal
 from main.geoms.linear_facet import (
     getLinearFacet,
@@ -142,6 +143,8 @@ class BasePolygon:
                 # Check if nonmixed neighbors' fractions are consistent
                 nonmixed1 = _helper_getNeighborFromDirIndex((mixed_dirs[0] + 1) % 4)
                 nonmixed2 = _helper_getNeighborFromDirIndex((mixed_dirs[1] + 1) % 4)
+                if nonmixed1 is None or nonmixed2 is None:
+                    return None
                 if nonmixed1.isFull() and nonmixed2.isEmpty():
                     return [mixed_neighbors[1], mixed_neighbors[0]]
                 elif nonmixed1.isEmpty() and nonmixed2.isFull():

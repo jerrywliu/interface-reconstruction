@@ -6,6 +6,11 @@ TEST:
 MESH:
   GRID_SIZE: 100
   RESOLUTION: 0.5
+  TYPE: cartesian
+  PERTURB:
+    WIGGLE: 0.0
+    SEED: 0
+    FIX_BOUNDARY: true
 
 GEOMS:
   FACET_ALGO: safe_circle
