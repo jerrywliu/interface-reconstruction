@@ -156,6 +156,12 @@ def _collect_result_plots(explicit_paths):
     return unique
 
 
+def _parse_str_list(value):
+    if value is None:
+        return []
+    return [p.strip().lower() for p in value.split(",") if p.strip()]
+
+
 def _sample_indices(count, sample_count):
     if sample_count <= 0 or count <= 0:
         return []
@@ -875,6 +881,12 @@ def main():
     parser.add_argument("--notify", action="store_true", help="send plots to Slack")
     parser.add_argument("--dry_run", action="store_true", help="skip execution")
     parser.add_argument(
+        "--only",
+        type=str,
+        default=None,
+        help="comma-separated experiment names to run (e.g., lines,ellipses)",
+    )
+    parser.add_argument(
         "--aggregate_samples",
         type=int,
         default=0,
@@ -904,6 +916,8 @@ def main():
     if notify and not args.notify and auto_notify:
         print("Slack auto-notify enabled via SLACK_NOTIFY.")
 
+    only_experiments = set(_parse_str_list(args.only))
+
     log_dir = args.log_dir
     if args.subprocess and log_dir is None:
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -913,52 +927,57 @@ def main():
         print(f"Logging subprocess output to {log_dir}")
 
     if not args.dry_run:
-        all_plots += run_circle_sweep(
-            "static/circle",
-            args.circles,
-            10.0,
-            failures,
-            args.subprocess,
-            log_dir,
-            notify,
-            args.aggregate_samples,
-        )
-        all_plots += run_ellipse_sweep(
-            "static/ellipse",
-            args.ellipses,
-            failures,
-            args.subprocess,
-            log_dir,
-            notify,
-            args.aggregate_samples,
-        )
-        all_plots += run_line_sweep(
-            "static/line",
-            args.lines,
-            failures,
-            args.subprocess,
-            log_dir,
-            notify,
-            args.aggregate_samples,
-        )
-        all_plots += run_square_sweep(
-            "static/square",
-            args.squares,
-            failures,
-            args.subprocess,
-            log_dir,
-            notify,
-            args.aggregate_samples,
-        )
-        all_plots += run_zalesak_sweep(
-            "static/zalesak",
-            args.zalesak,
-            failures,
-            args.subprocess,
-            log_dir,
-            notify,
-            args.aggregate_samples,
-        )
+        if not only_experiments or "circles" in only_experiments:
+            all_plots += run_circle_sweep(
+                "static/circle",
+                args.circles,
+                10.0,
+                failures,
+                args.subprocess,
+                log_dir,
+                notify,
+                args.aggregate_samples,
+            )
+        if not only_experiments or "ellipses" in only_experiments:
+            all_plots += run_ellipse_sweep(
+                "static/ellipse",
+                args.ellipses,
+                failures,
+                args.subprocess,
+                log_dir,
+                notify,
+                args.aggregate_samples,
+            )
+        if not only_experiments or "lines" in only_experiments:
+            all_plots += run_line_sweep(
+                "static/line",
+                args.lines,
+                failures,
+                args.subprocess,
+                log_dir,
+                notify,
+                args.aggregate_samples,
+            )
+        if not only_experiments or "squares" in only_experiments:
+            all_plots += run_square_sweep(
+                "static/square",
+                args.squares,
+                failures,
+                args.subprocess,
+                log_dir,
+                notify,
+                args.aggregate_samples,
+            )
+        if not only_experiments or "zalesak" in only_experiments:
+            all_plots += run_zalesak_sweep(
+                "static/zalesak",
+                args.zalesak,
+                failures,
+                args.subprocess,
+                log_dir,
+                notify,
+                args.aggregate_samples,
+            )
 
     print("\n=== Linear sweep summary ===")
     print(f"Failures: {len(failures)}")

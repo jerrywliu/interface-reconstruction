@@ -144,10 +144,16 @@ def _collect_metrics(exp_name, save_name):
         curvature = _parse_numeric_values(metrics_dir / "curvature_error.txt")
         gaps = _parse_numeric_values(metrics_dir / "facet_gap.txt")
         hausdorff = _parse_numeric_values(metrics_dir / "hausdorff.txt")
+        tangent = _parse_numeric_values(metrics_dir / "tangent_error.txt")
+        curvature_proxy = _parse_numeric_values(
+            metrics_dir / "curvature_proxy_error.txt"
+        )
         return {
             "curvature_error": _safe_mean(curvature),
             "facet_gap": _safe_mean(gaps),
             "hausdorff": _safe_mean(hausdorff),
+            "tangent_error": _safe_mean(tangent),
+            "curvature_proxy_error": _safe_mean(curvature_proxy),
         }
     if exp_name == "lines":
         hausdorff = _parse_labeled_values(metrics_dir / "hausdorff.txt")
