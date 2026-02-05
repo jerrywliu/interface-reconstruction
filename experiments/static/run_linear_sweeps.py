@@ -295,6 +295,8 @@ def run_circle_sweep(
                     curvature_results[algo].append(float("nan"))
                     gap_results[algo].append(float("nan"))
                     hausdorff_results[algo].append(float("nan"))
+                    tangent_results[algo].append(float("nan"))
+                    curvature_proxy_results[algo].append(float("nan"))
                     continue
                 errors, gaps, hausdorffs, tangents, curv_proxies = _collect_metrics(
                     "circles", save_name
@@ -437,6 +439,8 @@ def run_ellipse_sweep(
                     curvature_results[algo].append(float("nan"))
                     gap_results[algo].append(float("nan"))
                     hausdorff_results[algo].append(float("nan"))
+                    tangent_results[algo].append(float("nan"))
+                    curvature_proxy_results[algo].append(float("nan"))
                     continue
                 errors, gaps, hausdorffs, tangents, curv_proxies = _collect_metrics(
                     "ellipses", save_name

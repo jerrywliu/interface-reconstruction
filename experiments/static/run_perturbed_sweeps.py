@@ -87,6 +87,28 @@ def _safe_mean(values):
     return mean_val
 
 
+def _safe_stats(values):
+    if not values:
+        return {
+            "mean": float("nan"),
+            "median": float("nan"),
+            "p25": float("nan"),
+            "p75": float("nan"),
+        }
+    arr = np.asarray(values, dtype=float)
+    return {
+        "mean": float(np.mean(arr)),
+        "median": float(np.median(arr)),
+        "p25": float(np.percentile(arr, 25)),
+        "p75": float(np.percentile(arr, 75)),
+    }
+
+
+def _metric_stats(metric_name, values):
+    stats = _safe_stats(values)
+    return {f"{metric_name}_{key}": value for key, value in stats.items()}
+
+
 def _make_save_name(exp_name, algo, resolution, wiggle, seed):
     res_tag = str(resolution).replace(".", "p")
     wiggle_tag = str(wiggle).replace(".", "p")
@@ -148,34 +170,34 @@ def _collect_metrics(exp_name, save_name):
         curvature_proxy = _parse_numeric_values(
             metrics_dir / "curvature_proxy_error.txt"
         )
-        return {
-            "curvature_error": _safe_mean(curvature),
-            "facet_gap": _safe_mean(gaps),
-            "hausdorff": _safe_mean(hausdorff),
-            "tangent_error": _safe_mean(tangent),
-            "curvature_proxy_error": _safe_mean(curvature_proxy),
-        }
+        metrics = {}
+        metrics.update(_metric_stats("curvature_error", curvature))
+        metrics.update(_metric_stats("facet_gap", gaps))
+        metrics.update(_metric_stats("hausdorff", hausdorff))
+        metrics.update(_metric_stats("tangent_error", tangent))
+        metrics.update(_metric_stats("curvature_proxy_error", curvature_proxy))
+        return metrics
     if exp_name == "lines":
         hausdorff = _parse_labeled_values(metrics_dir / "hausdorff.txt")
         gaps = _parse_labeled_values(metrics_dir / "facet_gap.txt")
-        return {
-            "hausdorff": _safe_mean(hausdorff),
-            "facet_gap": _safe_mean(gaps),
-        }
+        metrics = {}
+        metrics.update(_metric_stats("hausdorff", hausdorff))
+        metrics.update(_metric_stats("facet_gap", gaps))
+        return metrics
     if exp_name == "squares":
         area = _parse_numeric_values(metrics_dir / "area_error.txt")
         edge = _parse_numeric_values(metrics_dir / "edge_alignment_error.txt")
-        return {
-            "area_error": _safe_mean(area),
-            "edge_alignment_error": _safe_mean(edge),
-        }
+        metrics = {}
+        metrics.update(_metric_stats("area_error", area))
+        metrics.update(_metric_stats("edge_alignment_error", edge))
+        return metrics
     if exp_name == "zalesak":
         area = _parse_numeric_values(metrics_dir / "area_error.txt")
         gaps = _parse_numeric_values(metrics_dir / "facet_gap.txt")
-        return {
-            "area_error": _safe_mean(area),
-            "facet_gap": _safe_mean(gaps),
-        }
+        metrics = {}
+        metrics.update(_metric_stats("area_error", area))
+        metrics.update(_metric_stats("facet_gap", gaps))
+        return metrics
     return {}
 
 
@@ -270,12 +292,18 @@ def _load_sweep_rows(csv_path):
 
 
 def _build_metric_index(rows):
+    def _split_metric_key(metric_key):
+        for suffix in ("_mean", "_median", "_p25", "_p75"):
+            if metric_key.endswith(suffix):
+                return metric_key[: -len(suffix)], suffix[1:]
+        return metric_key, "value"
+
     data = {}
     for row in rows:
         try:
             exp = row["experiment"]
             algo = row["algo"]
-            metric = row["metric_key"]
+            metric, stat = _split_metric_key(row["metric_key"])
             res = float(row["resolution"])
             wiggle = float(row["wiggle"])
             value = float(row["metric_value"])
@@ -284,7 +312,7 @@ def _build_metric_index(rows):
 
         data.setdefault(exp, {}).setdefault(algo, {}).setdefault(metric, {}).setdefault(
             res, {}
-        ).setdefault(wiggle, []).append(value)
+        ).setdefault(wiggle, {}).setdefault(stat, []).append(value)
 
     return data
 
@@ -294,6 +322,13 @@ def _plot_metric_vs_wiggle(exp, algo, metric, res_map, out_dir):
 
     plt.figure(figsize=(8, 6))
     min_error = 1e-14
+
+    def _aggregate(values):
+        if not values:
+            return float("nan")
+        arr = np.asarray(values, dtype=float)
+        return float(np.median(arr))
+
     for res in sorted(res_map.keys()):
         wiggle_map = res_map[res]
         wiggles = sorted(wiggle_map.keys())
@@ -301,15 +336,23 @@ def _plot_metric_vs_wiggle(exp, algo, metric, res_map, out_dir):
         p25 = []
         p75 = []
         for w in wiggles:
-            values = np.asarray(wiggle_map[w], dtype=float)
-            if values.size == 0:
+            stats = wiggle_map[w]
+            if not stats:
                 medians.append(float("nan"))
                 p25.append(float("nan"))
                 p75.append(float("nan"))
                 continue
-            med = float(np.median(values))
-            q25 = float(np.percentile(values, 25))
-            q75 = float(np.percentile(values, 75))
+
+            med = (
+                _aggregate(stats.get("median"))
+                if "median" in stats
+                else _aggregate(stats.get("mean"))
+                if "mean" in stats
+                else _aggregate(stats.get("value"))
+            )
+            q25 = _aggregate(stats.get("p25")) if "p25" in stats else med
+            q75 = _aggregate(stats.get("p75")) if "p75" in stats else med
+
             medians.append(max(med, min_error))
             p25.append(max(q25, min_error))
             p75.append(max(q75, min_error))
@@ -537,14 +580,21 @@ def main():
             f"- {failure['experiment']} / {failure['algo']} / r={failure['resolution']} / w={failure['wiggle']} / s={failure['seed']} (code {failure['code']})"
         )
 
-    summary_dir = Path("results") / "static" / "perturbed_plots"
+    summary_dir = (Path("results") / "static" / "perturbed_plots").resolve()
     plots_by_exp = _generate_summary_plots(out_csv, summary_dir)
 
     if notify:
         for exp, plot_paths in plots_by_exp.items():
             if plot_paths:
-                send_results_to_slack(f"Perturbed sweep plots: {exp}", plot_paths)
-        send_results_to_slack(f"Perturbed sweep complete. CSV: {out_csv}", [out_csv])
+                resolved_paths = [str(Path(path).resolve()) for path in plot_paths]
+                send_results_to_slack(
+                    f"Perturbed sweep plots: {exp}",
+                    resolved_paths,
+                )
+        send_results_to_slack(
+            f"Perturbed sweep complete. CSV: {out_csv}",
+            [str(Path(out_csv).resolve())],
+        )
 
 
 if __name__ == "__main__":
