@@ -20,7 +20,23 @@ from util.io.slack import load_slack_env, send_results_to_slack
 
 
 LINEAR_ALGOS = ["Youngs", "LVIRA", "safe_linear", "linear"]
-CORNER_ALGOS = ["safe_linear_corner", "linear+corner"]
+LINE_ALGOS = LINEAR_ALGOS
+CIRCLE_ALGOS = LINEAR_ALGOS + ["safe_circle", "circular"]
+ELLIPSE_ALGOS = LINEAR_ALGOS + ["safe_circle", "circular"]
+SQUARE_ALGOS = LINEAR_ALGOS + ["linear+corner", "safe_circle", "circular"]
+ZALESAK_ALGOS = LINEAR_ALGOS + ["safe_circle", "circular", "circular+corner"]
+
+METHOD_ORDER = [
+    "Youngs",
+    "LVIRA",
+    "safe_linear",
+    "linear",
+    "safe_linear_corner",
+    "linear+corner",
+    "safe_circle",
+    "circular",
+    "circular+corner",
+]
 
 DEFAULT_RESOLUTIONS = [0.32, 0.50, 0.64, 1.00, 1.28, 1.50]
 DEFAULT_RESOLUTIONS_SHORT = [0.50, 0.64, 1.00, 1.28, 1.50]
@@ -34,35 +50,35 @@ EXPERIMENTS = [
         "module": "experiments.static.circles",
         "config": "static/circle",
         "num_arg": "--num_circles",
-        "algorithms": LINEAR_ALGOS,
+        "algorithms": CIRCLE_ALGOS,
     },
     {
         "name": "ellipses",
         "module": "experiments.static.ellipses",
         "config": "static/ellipse",
         "num_arg": "--num_ellipses",
-        "algorithms": LINEAR_ALGOS,
+        "algorithms": ELLIPSE_ALGOS,
     },
     {
         "name": "lines",
         "module": "experiments.static.lines",
         "config": "static/line",
         "num_arg": "--num_lines",
-        "algorithms": LINEAR_ALGOS,
+        "algorithms": LINE_ALGOS,
     },
     {
         "name": "squares",
         "module": "experiments.static.squares",
         "config": "static/square",
         "num_arg": "--num_squares",
-        "algorithms": LINEAR_ALGOS + CORNER_ALGOS,
+        "algorithms": SQUARE_ALGOS,
     },
     {
         "name": "zalesak",
         "module": "experiments.static.zalesak",
         "config": "static/zalesak",
         "num_arg": "--num_cases",
-        "algorithms": LINEAR_ALGOS + CORNER_ALGOS,
+        "algorithms": ZALESAK_ALGOS,
     },
 ]
 
@@ -361,7 +377,7 @@ def _plot_metric_vs_wiggle(exp, algo, metric, res_map, out_dir):
         plt.fill_between(wiggles, p25, p75, alpha=0.2)
 
     metric_label = metric.replace("_", " ").title()
-    plt.xlabel("Wiggle", fontsize=12)
+    plt.xlabel("Perturbation Magnitude", fontsize=12)
     plt.ylabel(metric_label, fontsize=12)
     plt.title(f"{exp} {algo} ({metric_label})", fontsize=14, fontweight="bold")
     plt.yscale("log")
@@ -378,6 +394,691 @@ def _plot_metric_vs_wiggle(exp, algo, metric, res_map, out_dir):
     return str(out_path)
 
 
+def _extract_stat_value(stats):
+    for key in ("median", "mean", "value"):
+        values = stats.get(key)
+        if not values:
+            continue
+        arr = np.asarray(values, dtype=float)
+        if arr.size == 0:
+            continue
+        return float(np.median(arr))
+    return float("nan")
+
+
+def _ordered_methods(methods):
+    ordered = [algo for algo in METHOD_ORDER if algo in methods]
+    for algo in sorted(methods):
+        if algo not in ordered:
+            ordered.append(algo)
+    return ordered
+
+
+def _build_method_curves(exp_data, metric):
+    metric_wiggles = set()
+    for algo_data in exp_data.values():
+        res_map = algo_data.get(metric, {})
+        for wiggle_map in res_map.values():
+            metric_wiggles.update(wiggle_map.keys())
+    wiggles = sorted(metric_wiggles)
+    if not wiggles:
+        return {}
+
+    curves = {}
+    for algo, algo_data in exp_data.items():
+        res_map = algo_data.get(metric, {})
+        if not res_map:
+            continue
+        medians = []
+        p25 = []
+        p75 = []
+        for wiggle in wiggles:
+            values = []
+            for wiggle_map in res_map.values():
+                stats = wiggle_map.get(wiggle)
+                if not stats:
+                    continue
+                value = _extract_stat_value(stats)
+                if not math.isnan(value):
+                    values.append(value)
+            if not values:
+                medians.append(float("nan"))
+                p25.append(float("nan"))
+                p75.append(float("nan"))
+                continue
+            arr = np.asarray(values, dtype=float)
+            medians.append(float(np.median(arr)))
+            p25.append(float(np.percentile(arr, 25)))
+            p75.append(float(np.percentile(arr, 75)))
+        medians_arr = np.asarray(medians, dtype=float)
+        if not np.any(np.isfinite(medians_arr)):
+            continue
+        curves[algo] = {
+            "x_values": np.asarray(wiggles, dtype=float),
+            "median": medians_arr,
+            "p25": np.asarray(p25, dtype=float),
+            "p75": np.asarray(p75, dtype=float),
+        }
+    return curves
+
+
+def _build_method_curves_by_resolution(exp_data, metric):
+    metric_resolutions = set()
+    for algo_data in exp_data.values():
+        res_map = algo_data.get(metric, {})
+        metric_resolutions.update(res_map.keys())
+    resolutions = sorted(metric_resolutions)
+    if not resolutions:
+        return {}
+
+    curves = {}
+    for algo, algo_data in exp_data.items():
+        res_map = algo_data.get(metric, {})
+        if not res_map:
+            continue
+        medians = []
+        p25 = []
+        p75 = []
+        for resolution in resolutions:
+            wiggle_map = res_map.get(resolution, {})
+            values = []
+            for stats in wiggle_map.values():
+                if not stats:
+                    continue
+                value = _extract_stat_value(stats)
+                if not math.isnan(value):
+                    values.append(value)
+            if not values:
+                medians.append(float("nan"))
+                p25.append(float("nan"))
+                p75.append(float("nan"))
+                continue
+            arr = np.asarray(values, dtype=float)
+            medians.append(float(np.median(arr)))
+            p25.append(float(np.percentile(arr, 25)))
+            p75.append(float(np.percentile(arr, 75)))
+
+        medians_arr = np.asarray(medians, dtype=float)
+        if not np.any(np.isfinite(medians_arr)):
+            continue
+        curves[algo] = {
+            "x_values": np.asarray(resolutions, dtype=float),
+            "median": medians_arr,
+            "p25": np.asarray(p25, dtype=float),
+            "p75": np.asarray(p75, dtype=float),
+        }
+
+    return curves
+
+
+def _draw_method_curves(ax, curves, metric, x_label):
+    min_error = 1e-14
+    for algo in _ordered_methods(curves.keys()):
+        series = curves[algo]
+        x_values = series["x_values"]
+        medians = series["median"]
+        p25 = series["p25"]
+        p75 = series["p75"]
+        valid = np.isfinite(medians)
+        if not np.any(valid):
+            continue
+        x_values_v = x_values[valid]
+        medians_v = np.maximum(medians[valid], min_error)
+        p25_v = np.maximum(p25[valid], min_error)
+        p75_v = np.maximum(p75[valid], min_error)
+        ax.plot(x_values_v, medians_v, marker="o", linewidth=2.0, label=algo)
+        ax.fill_between(x_values_v, p25_v, p75_v, alpha=0.15)
+
+    metric_label = metric.replace("_", " ").title()
+    ax.set_xlabel(x_label, fontsize=11)
+    ax.set_ylabel(metric_label, fontsize=11)
+    ax.set_yscale("log")
+    ax.grid(True, alpha=0.3)
+
+
+def _generate_experiment_method_summary_plots(data, exp_name, metric_candidates, out_dir):
+    import matplotlib.pyplot as plt
+
+    exp_data = data.get(exp_name, {})
+    if not exp_data:
+        return []
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    plots = []
+    metric_curves = {}
+    for metric in metric_candidates:
+        curves = _build_method_curves(exp_data, metric)
+        if not curves:
+            continue
+        metric_curves[metric] = curves
+
+        fig, ax = plt.subplots(figsize=(8, 6))
+        _draw_method_curves(ax, curves, metric, x_label="Perturbation Magnitude")
+        ax.set_title(
+            f"{exp_name.title()} Perturbed Sweep: All Methods ({metric.replace('_', ' ').title()})",
+            fontsize=13,
+            fontweight="bold",
+        )
+        ax.legend(fontsize=10, frameon=True)
+        fig.tight_layout()
+
+        out_path = out_dir / f"{exp_name}_all_methods_{metric}.png"
+        fig.savefig(out_path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+        plots.append(str(out_path))
+
+    metric_order = [metric for metric in metric_candidates if metric in metric_curves]
+    if len(metric_order) >= 2:
+        fig, axes = plt.subplots(1, len(metric_order), figsize=(6 * len(metric_order), 5.5))
+        if len(metric_order) == 1:
+            axes = [axes]
+        for ax, metric in zip(axes, metric_order):
+            _draw_method_curves(
+                ax,
+                metric_curves[metric],
+                metric,
+                x_label="Perturbation Magnitude",
+            )
+            ax.set_title(metric.replace("_", " ").title(), fontsize=12, fontweight="bold")
+        handles, labels = axes[0].get_legend_handles_labels()
+        if handles:
+            axes[0].legend(handles, labels, fontsize=9, frameon=True)
+        fig.suptitle(
+            f"{exp_name.title()} Perturbed Sweep: Method Comparison",
+            fontsize=14,
+            fontweight="bold",
+        )
+        fig.tight_layout(rect=[0, 0, 1, 0.95])
+
+        combined_path = out_dir / f"{exp_name}_all_methods_combined.png"
+        fig.savefig(combined_path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+        plots.append(str(combined_path))
+
+    return plots
+
+
+def _generate_lines_method_axes_grid_plot(data, out_dir):
+    return _generate_two_metric_axes_grid_plot(
+        data=data,
+        out_dir=out_dir,
+        exp_name="lines",
+        metric_left="hausdorff",
+        metric_right="facet_gap",
+        figure_title="Lines Perturbed Sweep: Method Comparison",
+        out_filename="lines_all_methods_2x2.png",
+    )
+
+
+def _generate_lines_method_summary_plots(data, out_dir):
+    plots = _generate_experiment_method_summary_plots(
+        data,
+        "lines",
+        ("hausdorff", "facet_gap"),
+        out_dir,
+    )
+    plots.extend(_generate_lines_method_axes_grid_plot(data, out_dir))
+    return plots
+
+
+def _generate_two_metric_axes_grid_plot(
+    data,
+    out_dir,
+    exp_name,
+    metric_left,
+    metric_right,
+    figure_title,
+    out_filename=None,
+):
+    import matplotlib.pyplot as plt
+
+    exp_data = data.get(exp_name, {})
+    if not exp_data:
+        return []
+
+    metrics = (metric_left, metric_right)
+    wiggle_curves = {}
+    resolution_curves = {}
+    for metric in metrics:
+        curves_w = _build_method_curves(exp_data, metric)
+        if curves_w:
+            wiggle_curves[metric] = curves_w
+        curves_r = _build_method_curves_by_resolution(exp_data, metric)
+        if curves_r:
+            resolution_curves[metric] = curves_r
+
+    if not wiggle_curves and not resolution_curves:
+        return []
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    fig, axes = plt.subplots(2, 2, figsize=(12, 9.5))
+
+    def _metric_title(metric):
+        return metric.replace("_", " ").title()
+
+    subplot_defs = [
+        (
+            0,
+            0,
+            metric_left,
+            wiggle_curves,
+            "Perturbation Magnitude",
+            f"{_metric_title(metric_left)} vs Perturbation Magnitude",
+        ),
+        (
+            0,
+            1,
+            metric_right,
+            wiggle_curves,
+            "Perturbation Magnitude",
+            f"{_metric_title(metric_right)} vs Perturbation Magnitude",
+        ),
+        (
+            1,
+            0,
+            metric_left,
+            resolution_curves,
+            "Resolution",
+            f"{_metric_title(metric_left)} vs Resolution",
+        ),
+        (
+            1,
+            1,
+            metric_right,
+            resolution_curves,
+            "Resolution",
+            f"{_metric_title(metric_right)} vs Resolution",
+        ),
+    ]
+
+    legend_handles = None
+    legend_labels = None
+    for row, col, metric, curves_by_metric, x_label, title in subplot_defs:
+        ax = axes[row][col]
+        curves = curves_by_metric.get(metric)
+        if not curves:
+            ax.set_axis_off()
+            continue
+        _draw_method_curves(ax, curves, metric, x_label=x_label)
+        ax.set_title(title, fontsize=11.5, fontweight="bold")
+        if legend_handles is None:
+            handles, labels = ax.get_legend_handles_labels()
+            if handles:
+                legend_handles, legend_labels = handles, labels
+
+    if legend_handles:
+        fig.legend(
+            legend_handles,
+            legend_labels,
+            loc="lower center",
+            ncol=min(6, len(legend_labels)),
+            fontsize=9,
+            frameon=True,
+            bbox_to_anchor=(0.5, -0.01),
+        )
+
+    fig.suptitle(figure_title, fontsize=14, fontweight="bold")
+    fig.tight_layout(rect=[0, 0.03, 1, 0.95])
+
+    output_name = out_filename or f"{exp_name}_all_methods_2x2.png"
+    out_path = out_dir / output_name
+    fig.savefig(out_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    return [str(out_path)]
+
+
+def _generate_circle_method_axes_grid_plot(data, out_dir):
+    import matplotlib.pyplot as plt
+
+    exp_data = data.get("circles", {})
+    if not exp_data:
+        return []
+
+    metrics = (
+        "hausdorff",
+        "facet_gap",
+        "curvature_error",
+        "tangent_error",
+        "curvature_proxy_error",
+    )
+
+    wiggle_curves = {}
+    resolution_curves = {}
+    for metric in metrics:
+        curves_w = _build_method_curves(exp_data, metric)
+        if curves_w:
+            wiggle_curves[metric] = curves_w
+        curves_r = _build_method_curves_by_resolution(exp_data, metric)
+        if curves_r:
+            resolution_curves[metric] = curves_r
+
+    available_metrics = [
+        metric
+        for metric in metrics
+        if metric in wiggle_curves or metric in resolution_curves
+    ]
+    if not available_metrics:
+        return []
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    plots = []
+
+    for metric in available_metrics:
+        metric_label = metric.replace("_", " ").title()
+        curves_w = wiggle_curves.get(metric)
+        if curves_w:
+            fig, ax = plt.subplots(figsize=(8, 6))
+            _draw_method_curves(
+                ax, curves_w, metric, x_label="Perturbation Magnitude"
+            )
+            ax.set_title(
+                f"Circles All Methods: {metric_label} vs Perturbation Magnitude",
+                fontsize=12.5,
+                fontweight="bold",
+            )
+            ax.legend(fontsize=10, frameon=True)
+            fig.tight_layout()
+            out_path = out_dir / f"circles_all_methods_{metric}_vs_perturbation.png"
+            fig.savefig(out_path, dpi=300, bbox_inches="tight")
+            plt.close(fig)
+            plots.append(str(out_path))
+
+        curves_r = resolution_curves.get(metric)
+        if curves_r:
+            fig, ax = plt.subplots(figsize=(8, 6))
+            _draw_method_curves(ax, curves_r, metric, x_label="Resolution")
+            ax.set_title(
+                f"Circles All Methods: {metric_label} vs Resolution",
+                fontsize=12.5,
+                fontweight="bold",
+            )
+            ax.legend(fontsize=10, frameon=True)
+            fig.tight_layout()
+            out_path = out_dir / f"circles_all_methods_{metric}_vs_resolution.png"
+            fig.savefig(out_path, dpi=300, bbox_inches="tight")
+            plt.close(fig)
+            plots.append(str(out_path))
+
+    rows = len(available_metrics)
+    fig, axes = plt.subplots(rows, 2, figsize=(14, 4.2 * rows))
+    if rows == 1:
+        axes = np.array([axes])
+
+    legend_handles = None
+    legend_labels = None
+    for row, metric in enumerate(available_metrics):
+        metric_label = metric.replace("_", " ").title()
+
+        ax_w = axes[row][0]
+        curves_w = wiggle_curves.get(metric)
+        if curves_w:
+            _draw_method_curves(
+                ax_w, curves_w, metric, x_label="Perturbation Magnitude"
+            )
+            ax_w.set_title(
+                f"{metric_label} vs Perturbation Magnitude",
+                fontsize=11.5,
+                fontweight="bold",
+            )
+            if legend_handles is None:
+                handles, labels = ax_w.get_legend_handles_labels()
+                if handles:
+                    legend_handles, legend_labels = handles, labels
+        else:
+            ax_w.set_axis_off()
+
+        ax_r = axes[row][1]
+        curves_r = resolution_curves.get(metric)
+        if curves_r:
+            _draw_method_curves(ax_r, curves_r, metric, x_label="Resolution")
+            ax_r.set_title(
+                f"{metric_label} vs Resolution",
+                fontsize=11.5,
+                fontweight="bold",
+            )
+            if legend_handles is None:
+                handles, labels = ax_r.get_legend_handles_labels()
+                if handles:
+                    legend_handles, legend_labels = handles, labels
+        else:
+            ax_r.set_axis_off()
+
+    if legend_handles:
+        fig.legend(
+            legend_handles,
+            legend_labels,
+            loc="lower center",
+            ncol=min(6, len(legend_labels)),
+            fontsize=9,
+            frameon=True,
+            bbox_to_anchor=(0.5, -0.005),
+        )
+
+    fig.suptitle(
+        "Circles Perturbed Sweep: Methods Across Both X-Axes",
+        fontsize=15,
+        fontweight="bold",
+    )
+    fig.tight_layout(rect=[0, 0.03, 1, 0.97])
+
+    grid_path = out_dir / "circles_all_methods_5x2_axes.png"
+    fig.savefig(grid_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    plots.append(str(grid_path))
+    return plots
+
+
+def _generate_ellipse_method_axes_grid_plot(data, out_dir):
+    import matplotlib.pyplot as plt
+
+    exp_data = data.get("ellipses", {})
+    if not exp_data:
+        return []
+
+    metrics = (
+        "hausdorff",
+        "facet_gap",
+        "curvature_error",
+        "tangent_error",
+        "curvature_proxy_error",
+    )
+
+    wiggle_curves = {}
+    resolution_curves = {}
+    for metric in metrics:
+        curves_w = _build_method_curves(exp_data, metric)
+        if curves_w:
+            wiggle_curves[metric] = curves_w
+        curves_r = _build_method_curves_by_resolution(exp_data, metric)
+        if curves_r:
+            resolution_curves[metric] = curves_r
+
+    available_metrics = [
+        metric
+        for metric in metrics
+        if metric in wiggle_curves or metric in resolution_curves
+    ]
+    if not available_metrics:
+        return []
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    plots = []
+
+    for metric in available_metrics:
+        metric_label = metric.replace("_", " ").title()
+        curves_w = wiggle_curves.get(metric)
+        if curves_w:
+            fig, ax = plt.subplots(figsize=(8, 6))
+            _draw_method_curves(
+                ax, curves_w, metric, x_label="Perturbation Magnitude"
+            )
+            ax.set_title(
+                f"Ellipses All Methods: {metric_label} vs Perturbation Magnitude",
+                fontsize=12.5,
+                fontweight="bold",
+            )
+            ax.legend(fontsize=10, frameon=True)
+            fig.tight_layout()
+            out_path = out_dir / f"ellipses_all_methods_{metric}_vs_perturbation.png"
+            fig.savefig(out_path, dpi=300, bbox_inches="tight")
+            plt.close(fig)
+            plots.append(str(out_path))
+
+        curves_r = resolution_curves.get(metric)
+        if curves_r:
+            fig, ax = plt.subplots(figsize=(8, 6))
+            _draw_method_curves(ax, curves_r, metric, x_label="Resolution")
+            ax.set_title(
+                f"Ellipses All Methods: {metric_label} vs Resolution",
+                fontsize=12.5,
+                fontweight="bold",
+            )
+            ax.legend(fontsize=10, frameon=True)
+            fig.tight_layout()
+            out_path = out_dir / f"ellipses_all_methods_{metric}_vs_resolution.png"
+            fig.savefig(out_path, dpi=300, bbox_inches="tight")
+            plt.close(fig)
+            plots.append(str(out_path))
+
+    rows = len(available_metrics)
+    fig, axes = plt.subplots(rows, 2, figsize=(14, 4.2 * rows))
+    if rows == 1:
+        axes = np.array([axes])
+
+    legend_handles = None
+    legend_labels = None
+    for row, metric in enumerate(available_metrics):
+        metric_label = metric.replace("_", " ").title()
+
+        ax_w = axes[row][0]
+        curves_w = wiggle_curves.get(metric)
+        if curves_w:
+            _draw_method_curves(
+                ax_w, curves_w, metric, x_label="Perturbation Magnitude"
+            )
+            ax_w.set_title(
+                f"{metric_label} vs Perturbation Magnitude",
+                fontsize=11.5,
+                fontweight="bold",
+            )
+            if legend_handles is None:
+                handles, labels = ax_w.get_legend_handles_labels()
+                if handles:
+                    legend_handles, legend_labels = handles, labels
+        else:
+            ax_w.set_axis_off()
+
+        ax_r = axes[row][1]
+        curves_r = resolution_curves.get(metric)
+        if curves_r:
+            _draw_method_curves(ax_r, curves_r, metric, x_label="Resolution")
+            ax_r.set_title(
+                f"{metric_label} vs Resolution",
+                fontsize=11.5,
+                fontweight="bold",
+            )
+            if legend_handles is None:
+                handles, labels = ax_r.get_legend_handles_labels()
+                if handles:
+                    legend_handles, legend_labels = handles, labels
+        else:
+            ax_r.set_axis_off()
+
+    if legend_handles:
+        fig.legend(
+            legend_handles,
+            legend_labels,
+            loc="lower center",
+            ncol=min(6, len(legend_labels)),
+            fontsize=9,
+            frameon=True,
+            bbox_to_anchor=(0.5, -0.005),
+        )
+
+    fig.suptitle(
+        "Ellipses Perturbed Sweep: Methods Across Both X-Axes",
+        fontsize=15,
+        fontweight="bold",
+    )
+    fig.tight_layout(rect=[0, 0.03, 1, 0.97])
+
+    grid_path = out_dir / "ellipses_all_methods_5x2_axes.png"
+    fig.savefig(grid_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    plots.append(str(grid_path))
+    return plots
+
+
+def _generate_circle_method_summary_plots(data, out_dir):
+    plots = _generate_experiment_method_summary_plots(
+        data,
+        "circles",
+        ("hausdorff", "facet_gap", "curvature_error"),
+        out_dir,
+    )
+    plots.extend(_generate_circle_method_axes_grid_plot(data, out_dir))
+    return plots
+
+
+def _generate_ellipse_method_summary_plots(data, out_dir):
+    plots = _generate_experiment_method_summary_plots(
+        data,
+        "ellipses",
+        ("hausdorff", "facet_gap", "curvature_error"),
+        out_dir,
+    )
+    plots.extend(_generate_ellipse_method_axes_grid_plot(data, out_dir))
+    return plots
+
+
+def _generate_square_method_summary_plots(data, out_dir):
+    plots = _generate_experiment_method_summary_plots(
+        data,
+        "squares",
+        ("area_error", "edge_alignment_error"),
+        out_dir,
+    )
+    plots.extend(
+        _generate_two_metric_axes_grid_plot(
+            data=data,
+            out_dir=out_dir,
+            exp_name="squares",
+            metric_left="area_error",
+            metric_right="edge_alignment_error",
+            figure_title="Squares Perturbed Sweep: Method Comparison",
+            out_filename="squares_all_methods_2x2.png",
+        )
+    )
+    return plots
+
+
+def _generate_zalesak_method_summary_plots(data, out_dir):
+    plots = _generate_experiment_method_summary_plots(
+        data,
+        "zalesak",
+        ("area_error", "facet_gap"),
+        out_dir,
+    )
+    plots.extend(
+        _generate_two_metric_axes_grid_plot(
+            data=data,
+            out_dir=out_dir,
+            exp_name="zalesak",
+            metric_left="area_error",
+            metric_right="facet_gap",
+            figure_title="Zalesak Perturbed Sweep: Method Comparison",
+            out_filename="zalesak_all_methods_2x2.png",
+        )
+    )
+    return plots
+
+
 def _generate_summary_plots(csv_path, out_dir):
     rows = _load_sweep_rows(csv_path)
     data = _build_metric_index(rows)
@@ -390,6 +1091,26 @@ def _generate_summary_plots(csv_path, out_dir):
                     exp, algo, metric, res_map, out_dir
                 )
                 plots_by_exp.setdefault(exp, []).append(plot_path)
+
+    circle_summary_plots = _generate_circle_method_summary_plots(data, out_dir)
+    if circle_summary_plots:
+        plots_by_exp.setdefault("circles", []).extend(circle_summary_plots)
+
+    ellipse_summary_plots = _generate_ellipse_method_summary_plots(data, out_dir)
+    if ellipse_summary_plots:
+        plots_by_exp.setdefault("ellipses", []).extend(ellipse_summary_plots)
+
+    lines_summary_plots = _generate_lines_method_summary_plots(data, out_dir)
+    if lines_summary_plots:
+        plots_by_exp.setdefault("lines", []).extend(lines_summary_plots)
+
+    squares_summary_plots = _generate_square_method_summary_plots(data, out_dir)
+    if squares_summary_plots:
+        plots_by_exp.setdefault("squares", []).extend(squares_summary_plots)
+
+    zalesak_summary_plots = _generate_zalesak_method_summary_plots(data, out_dir)
+    if zalesak_summary_plots:
+        plots_by_exp.setdefault("zalesak", []).extend(zalesak_summary_plots)
 
     return plots_by_exp
 
@@ -445,11 +1166,43 @@ def main():
         default=None,
         help="output CSV path (default: results/static/perturbed_sweep_<timestamp>.csv)",
     )
+    parser.add_argument(
+        "--summary_dir",
+        type=str,
+        default=None,
+        help="directory for generated summary plots (default: results/static/perturbed_plots)",
+    )
+    parser.add_argument(
+        "--plot_from_csv",
+        type=str,
+        default=None,
+        help="skip sweep execution and generate summary plots from an existing CSV",
+    )
 
     args = parser.parse_args()
 
     load_slack_env()
     notify = args.notify or os.getenv("SLACK_NOTIFY", "").lower() in {"1", "true", "yes"}
+    summary_dir = Path(
+        args.summary_dir
+        or os.path.join("results", "static", "perturbed_plots")
+    ).resolve()
+
+    if args.plot_from_csv:
+        csv_path = Path(args.plot_from_csv)
+        if not csv_path.exists():
+            raise FileNotFoundError(f"CSV not found: {csv_path}")
+        plots_by_exp = _generate_summary_plots(str(csv_path), summary_dir)
+        print(f"Generated perturbed summary plots from {csv_path}")
+        if notify:
+            for exp, plot_paths in plots_by_exp.items():
+                if plot_paths:
+                    resolved_paths = [str(Path(path).resolve()) for path in plot_paths]
+                    send_results_to_slack(
+                        f"Perturbed sweep plots: {exp}",
+                        resolved_paths,
+                    )
+        return
 
     resolutions_override = _parse_list(args.resolutions, float)
     wiggles = _parse_list(args.wiggles, float) or DEFAULT_WIGGLES
@@ -580,7 +1333,6 @@ def main():
             f"- {failure['experiment']} / {failure['algo']} / r={failure['resolution']} / w={failure['wiggle']} / s={failure['seed']} (code {failure['code']})"
         )
 
-    summary_dir = (Path("results") / "static" / "perturbed_plots").resolve()
     plots_by_exp = _generate_summary_plots(out_csv, summary_dir)
 
     if notify:

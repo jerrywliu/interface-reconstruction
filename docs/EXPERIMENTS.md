@@ -21,19 +21,37 @@ Both sweep scripts run the same set of static experiments:
 
 ### Algorithms by Experiment
 
-- **Circles / Ellipses / Lines**
+- **Lines**
   - `Youngs`
   - `LVIRA`
   - `safe_linear`
   - `linear`
 
-- **Squares / Zalesak**
+- **Circles / Ellipses**
   - `Youngs`
   - `LVIRA`
   - `safe_linear`
   - `linear`
-  - `safe_linear_corner`
+  - `safe_circle`
+  - `circular`
+
+- **Squares**
+  - `Youngs`
+  - `LVIRA`
+  - `safe_linear`
+  - `linear`
   - `linear+corner`
+  - `safe_circle`
+  - `circular`
+
+- **Zalesak**
+  - `Youngs`
+  - `LVIRA`
+  - `safe_linear`
+  - `linear`
+  - `safe_circle`
+  - `circular`
+  - `circular+corner`
 
 ---
 
@@ -67,6 +85,15 @@ Script: `experiments/static/run_perturbed_sweeps.py`
 - Writes a **CSV** of results to `results/static/perturbed_sweep_<timestamp>.csv`.
 - Generates **summary plots** of *metric vs wiggle* (one line per resolution),
   saved under `results/static/perturbed_plots/`.
+- Also generates **lines all-method summaries**:
+  - `results/static/perturbed_plots/lines_all_methods_hausdorff.png`
+  - `results/static/perturbed_plots/lines_all_methods_facet_gap.png`
+  - `results/static/perturbed_plots/lines_all_methods_combined.png`
+- Also generates **circles all-method summaries** (when circles data exists in CSV):
+  - `results/static/perturbed_plots/circles_all_methods_hausdorff.png`
+  - `results/static/perturbed_plots/circles_all_methods_facet_gap.png`
+  - `results/static/perturbed_plots/circles_all_methods_curvature_error.png`
+  - `results/static/perturbed_plots/circles_all_methods_combined.png`
 - Sends summary plots + CSV to Slack (if Slack notify is enabled).
 
 **Default resolutions**
@@ -99,6 +126,12 @@ python -m experiments.static.run_perturbed_sweeps
 ```bash
 # Only run lines
 python -m experiments.static.run_perturbed_sweeps --only lines --notify
+```
+
+### Regenerate summary plots from an existing perturb CSV
+```bash
+python -m experiments.static.run_perturbed_sweeps \
+  --plot_from_csv results/static/perturbed_sweep_<timestamp>.csv
 ```
 
 ### Enable Slack notifications

@@ -110,6 +110,19 @@ def inverse_transform_points(points, matrix, center):
     arr = np.array(points) @ matrix + np.array(center)
     return arr
 
+def ellipse_parameter_angle(point, center, ellipse_to_circle_matrix):
+    """Compute ellipse parameter angle t for a point near a rotated ellipse."""
+    rel = np.array(point) - np.array(center)
+    mapped = ellipse_to_circle_matrix @ rel
+    return math.atan2(mapped[1], mapped[0])
+
+def ellipse_true_curvature(major_axis, minor_axis, t):
+    """Compute true ellipse curvature k(t) at parameter angle t."""
+    denom = (
+        major_axis**2 * math.sin(t) ** 2 + minor_axis**2 * math.cos(t) ** 2
+    ) ** (3 / 2)
+    return (major_axis * minor_axis) / denom
+
 def sample_arc_points(center, radius, p1, p2, n=100):
     """Sample n points along the arc from p1 to p2 (in circle space)."""
     # Compute angles
@@ -302,6 +315,8 @@ def main(
         # Hausdorff distance calculation
         total_hausdorff = 0
         cnt_hausdorff = 0
+        ellipse_to_circle = get_ellipse_to_circle_matrix(major_axis, minor_axis, theta)
+        circle_to_ellipse = get_circle_to_ellipse_matrix(major_axis, minor_axis, theta)
 
         for poly, reconstructed_facet in zip(
             m.merged_polys.values(), reconstructed_facets
@@ -311,20 +326,14 @@ def main(
                 (reconstructed_facet.pLeft[0] + reconstructed_facet.pRight[0]) / 2,
                 (reconstructed_facet.pLeft[1] + reconstructed_facet.pRight[1]) / 2,
             ]
-            dx = facet_center[0] - center[0]
-            dy = facet_center[1] - center[1]
-            phi = math.atan2(dy, dx) - theta
-            true_curvature = (major_axis * minor_axis) / (
-                major_axis**2 * math.sin(phi) ** 2 + minor_axis**2 * math.cos(phi) ** 2
-            ) ** (3 / 2)
+            t = ellipse_parameter_angle(facet_center, center, ellipse_to_circle)
+            true_curvature = ellipse_true_curvature(major_axis, minor_axis, t)
             curvature_error = abs(reconstructed_facet.curvature - true_curvature)
             avg_curvature_error += curvature_error
             cnt_curvature += 1
 
             # Hausdorff distance calculation (ellipse arc vs reconstructed facet)
             # Use the circle trick: transform cell polygon to circle space, get arcpoints, then back to ellipse space
-            ellipse_to_circle = get_ellipse_to_circle_matrix(major_axis, minor_axis, theta)
-            circle_to_ellipse = get_circle_to_ellipse_matrix(major_axis, minor_axis, theta)
             poly_points_circ = transform_points(poly.points, ellipse_to_circle, center)
             area, arcpoints = getCircleIntersectArea([0, 0], 1, poly_points_circ)
             if len(arcpoints) >= 2:

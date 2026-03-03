@@ -7,16 +7,41 @@ This directory contains experiments for evaluating interface reconstruction algo
 All experiments use a 100x100 Cartesian grid with varying resolutions. The shapes are centered in the grid cell with corners (50, 50) and (51, 51) to avoid boundary effects. Each experiment uses a fixed random seed (42) for reproducibility.
 
 ### Reconstruction Algorithms Tested
-- **Youngs**: Standard Youngs' method for interface reconstruction
-- **LVIRA**: Least Squares Volume-of-Fluid Interface Reconstruction Algorithm
-- **Linear**: Linear facet reconstruction
-- **Safe Circle**: Circular facet reconstruction without merging
-- **Circular**: Circular facet reconstruction with merging
+- **Lines**: `Youngs`, `LVIRA`, `safe_linear`, `linear`
+- **Circles / Ellipses**: `Youngs`, `LVIRA`, `safe_linear`, `linear`, `safe_circle`, `circular`
+- **Squares**: `Youngs`, `LVIRA`, `safe_linear`, `linear`, `linear+corner`, `safe_circle`, `circular`
+- **Zalesak**: `Youngs`, `LVIRA`, `safe_linear`, `linear`, `safe_circle`, `circular`, `circular+corner`
 
 ### Resolution Range
-Experiments are conducted at resolutions: [0.32, 0.50, 0.64, 1.00, 1.28, 2.00]
+- **Lines / Circles / Ellipses**: [0.32, 0.50, 0.64, 1.00, 1.28, 1.50]
+- **Squares / Zalesak**: [0.50, 0.64, 1.00, 1.28, 1.50]
 
 ## Running the Experiments
+
+### Camera-Ready Pipelines
+
+```bash
+# One-command static camera-ready pipeline (perturbed + cartesian + bundle)
+./experiments/static/run_cameraready_static_all.sh
+
+# Perturbed-only camera-ready sweep (default: lines,circles,ellipses)
+./experiments/static/run_cameraready_static_perturbed.sh
+
+# Perturbed sweeps for all Section 6 static tests
+ONLY=lines,circles,ellipses,squares,zalesak ./experiments/static/run_cameraready_static_perturbed.sh
+
+# Cartesian-only camera-ready sweep (default: squares,zalesak)
+./experiments/static/run_cameraready_static_cartesian.sh
+
+# Bundle/sync existing outputs into a release folder
+./experiments/static/bundle_static_cameraready_release.sh
+
+# Retro-wire already finished outputs (no reruns)
+./experiments/static/retro_wire_static_cameraready_existing.sh
+
+# Optional: disable Slack notifications for a run
+NOTIFY=0 ./experiments/static/run_cameraready_static_all.sh
+```
 
 ### Line Reconstruction
 ```bash

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Run linear-only resolution sweeps for all static experiments and optionally
+Run Cartesian resolution sweeps for all static experiments and optionally
 send plots to Slack.
 """
 
@@ -21,7 +21,11 @@ from experiments.static import circles, ellipses, lines, squares, zalesak
 
 
 LINEAR_ALGOS = ["Youngs", "LVIRA", "safe_linear", "linear"]
-CORNER_ALGOS = ["safe_linear_corner", "linear+corner"]
+LINE_ALGOS = LINEAR_ALGOS
+CIRCLE_ALGOS = LINEAR_ALGOS + ["safe_circle", "circular"]
+ELLIPSE_ALGOS = LINEAR_ALGOS + ["safe_circle", "circular"]
+SQUARE_ALGOS = LINEAR_ALGOS + ["linear+corner", "safe_circle", "circular"]
+ZALESAK_ALGOS = LINEAR_ALGOS + ["safe_circle", "circular", "circular+corner"]
 
 DEFAULT_RESOLUTIONS = [0.32, 0.50, 0.64, 1.00, 1.28, 1.50]
 DEFAULT_RESOLUTIONS_SHORT = [0.50, 0.64, 1.00, 1.28, 1.50]
@@ -255,7 +259,7 @@ def run_circle_sweep(
 ):
     min_error = 1e-14
     resolutions = DEFAULT_RESOLUTIONS
-    algos = LINEAR_ALGOS
+    algos = CIRCLE_ALGOS
 
     curvature_results = {algo: [] for algo in algos}
     gap_results = {algo: [] for algo in algos}
@@ -405,7 +409,7 @@ def run_ellipse_sweep(
 ):
     min_error = 1e-14
     resolutions = DEFAULT_RESOLUTIONS
-    algos = LINEAR_ALGOS
+    algos = ELLIPSE_ALGOS
 
     curvature_results = {algo: [] for algo in algos}
     gap_results = {algo: [] for algo in algos}
@@ -544,7 +548,7 @@ def run_line_sweep(
 ):
     min_error = 1e-14
     resolutions = DEFAULT_RESOLUTIONS
-    algos = LINEAR_ALGOS
+    algos = LINE_ALGOS
 
     results = {algo: [] for algo in algos}
     gap_results = {algo: [] for algo in algos}
@@ -680,7 +684,7 @@ def run_square_sweep(
 ):
     min_error = 1e-14
     resolutions = DEFAULT_RESOLUTIONS_SHORT
-    algos = LINEAR_ALGOS + CORNER_ALGOS
+    algos = SQUARE_ALGOS
 
     area_results = {algo: [] for algo in algos}
     edge_results = {algo: [] for algo in algos}
@@ -787,7 +791,7 @@ def run_zalesak_sweep(
 ):
     min_error = 1e-14
     resolutions = DEFAULT_RESOLUTIONS_SHORT
-    algos = LINEAR_ALGOS + CORNER_ALGOS
+    algos = ZALESAK_ALGOS
 
     area_results = {algo: [] for algo in algos}
     gap_results = {algo: [] for algo in algos}
@@ -876,7 +880,7 @@ def run_zalesak_sweep(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run linear-only sweeps for static experiments.")
+    parser = argparse.ArgumentParser(description="Run Cartesian resolution sweeps for static experiments.")
     parser.add_argument("--circles", type=int, default=25, help="num circles")
     parser.add_argument("--ellipses", type=int, default=25, help="num ellipses")
     parser.add_argument("--lines", type=int, default=25, help="num lines")
@@ -912,7 +916,7 @@ def main():
     failures = []
     all_plots = []
 
-    print(f"Linear sweeps started at {datetime.now().isoformat()}")
+    print(f"Cartesian sweeps started at {datetime.now().isoformat()}")
 
     load_slack_env()
     auto_notify = os.getenv("SLACK_NOTIFY", "").lower() in {"1", "true", "yes"}
@@ -983,7 +987,7 @@ def main():
                 args.aggregate_samples,
             )
 
-    print("\n=== Linear sweep summary ===")
+    print("\n=== Cartesian sweep summary ===")
     print(f"Failures: {len(failures)}")
     for failure in failures:
         print(
@@ -991,7 +995,7 @@ def main():
         )
 
     if notify:
-        message = "Linear sweep plots generated."
+        message = "Cartesian sweep plots generated."
         if failures:
             message += f" Failures: {len(failures)} (see console)."
         send_results_to_slack(message, [])

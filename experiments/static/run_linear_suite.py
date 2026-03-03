@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Run all static experiments with linear / linear-corner algorithms only.
+Run all static experiments with configured method sets.
 Continues on errors and reports a summary at the end.
 """
 
@@ -10,55 +10,49 @@ import sys
 from datetime import datetime
 
 
+LINEAR_ALGOS = ["Youngs", "LVIRA", "safe_linear", "linear"]
+LINE_ALGOS = LINEAR_ALGOS
+CIRCLE_ALGOS = LINEAR_ALGOS + ["safe_circle", "circular"]
+ELLIPSE_ALGOS = LINEAR_ALGOS + ["safe_circle", "circular"]
+SQUARE_ALGOS = LINEAR_ALGOS + ["linear+corner", "safe_circle", "circular"]
+ZALESAK_ALGOS = LINEAR_ALGOS + ["safe_circle", "circular", "circular+corner"]
+
+
 EXPERIMENTS = [
     {
         "name": "circles",
         "module": "experiments.static.circles",
         "config": "static/circle",
         "num_arg": "--num_circles",
-        "algorithms": ["Youngs", "LVIRA", "safe_linear", "linear"],
+        "algorithms": CIRCLE_ALGOS,
     },
     {
         "name": "ellipses",
         "module": "experiments.static.ellipses",
         "config": "static/ellipse",
         "num_arg": "--num_ellipses",
-        "algorithms": ["Youngs", "LVIRA", "safe_linear", "linear"],
+        "algorithms": ELLIPSE_ALGOS,
     },
     {
         "name": "lines",
         "module": "experiments.static.lines",
         "config": "static/line",
         "num_arg": "--num_lines",
-        "algorithms": ["Youngs", "LVIRA", "safe_linear", "linear"],
+        "algorithms": LINE_ALGOS,
     },
     {
         "name": "squares",
         "module": "experiments.static.squares",
         "config": "static/square",
         "num_arg": "--num_squares",
-        "algorithms": [
-            "Youngs",
-            "LVIRA",
-            "safe_linear",
-            "linear",
-            "safe_linear_corner",
-            "linear+corner",
-        ],
+        "algorithms": SQUARE_ALGOS,
     },
     {
         "name": "zalesak",
         "module": "experiments.static.zalesak",
         "config": "static/zalesak",
         "num_arg": "--num_cases",
-        "algorithms": [
-            "Youngs",
-            "LVIRA",
-            "safe_linear",
-            "linear",
-            "safe_linear_corner",
-            "linear+corner",
-        ],
+        "algorithms": ZALESAK_ALGOS,
     },
 ]
 
@@ -92,7 +86,7 @@ def build_command(exp, algo, args):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Run all static experiments with linear-only methods."
+        description="Run all static experiments with configured method sets."
     )
     parser.add_argument(
         "--resolution",
@@ -142,7 +136,7 @@ def main():
     failures = []
     total = 0
 
-    print(f"Linear static suite started at {datetime.now().isoformat()}")
+    print(f"Static suite started at {datetime.now().isoformat()}")
     for exp in EXPERIMENTS:
         for algo in exp["algorithms"]:
             total += 1
@@ -165,7 +159,7 @@ def main():
                     f"[ERROR] {exp['name']} {algo} failed with code {result.returncode}"
                 )
 
-    print("\n=== Linear static suite summary ===")
+    print("\n=== Static suite summary ===")
     print(f"Total runs: {total}")
     print(f"Failures: {len(failures)}")
     if failures:
