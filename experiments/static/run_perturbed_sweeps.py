@@ -747,7 +747,6 @@ def _generate_circle_method_axes_grid_plot(data, out_dir):
         "facet_gap",
         "curvature_error",
         "tangent_error",
-        "curvature_proxy_error",
     )
 
     wiggle_curves = {}
@@ -889,7 +888,6 @@ def _generate_ellipse_method_axes_grid_plot(data, out_dir):
         "facet_gap",
         "curvature_error",
         "tangent_error",
-        "curvature_proxy_error",
     )
 
     wiggle_curves = {}
