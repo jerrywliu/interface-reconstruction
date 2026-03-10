@@ -3,222 +3,380 @@ Analyze getArcFacet call log files to extract challenging test cases.
 
 Usage:
     python -m util.logging.analyze_log get_arc_facet_calls.log
-    python -m util.logging.analyze_log get_arc_facet_calls.log --extract-failed
-    python -m util.logging.analyze_log get_arc_facet_calls.log --extract-slow --threshold 1.0
     python -m util.logging.analyze_log get_arc_facet_calls.log --extract-problematic
-    
-Note: "Infinite loop" cases that hit maxTimestep quickly will show up as "failed"
-      (not "slow") because they complete in <1 second. Use --extract-problematic
-      to get both failed and slow cases.
+    python -m util.logging.analyze_log get_arc_facet_calls.log --extract-slow --threshold 1.0
 """
 
-import json
-import sys
 import argparse
+import json
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+
+
+DEFAULT_OUTPUT = "test/geoms/getarcfacet/zalesak_harvest_cases.py"
+TERMINAL_STATUSES = {"success", "failed", "exception"}
+NON_SUCCESS_STATUSES = {"started_only", "failed", "exception"}
 
 
 def load_log_entries(log_file: str) -> List[Dict[str, Any]]:
-    """Load all log entries from a log file."""
+    """Load raw JSONL entries from a log file."""
     entries = []
-    with open(log_file, "r") as f:
-        for line in f:
+    with open(log_file, "r", encoding="utf-8") as handle:
+        for line in handle:
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
             try:
-                entry = json.loads(line)
-                entries.append(entry)
-            except json.JSONDecodeError as e:
-                print(f"Warning: Could not parse line: {line[:100]}... Error: {e}")
+                entries.append(json.loads(line))
+            except json.JSONDecodeError as error:
+                print(f"Warning: Could not parse line: {line[:100]}... Error: {error}")
     return entries
 
 
-def print_summary(entries: List[Dict[str, Any]], infinite_loop_threshold: float = 0.01):
-    """Print summary statistics."""
-    total = len(entries)
-    success = sum(1 for e in entries if e.get("status") == "success")
-    failed = sum(1 for e in entries if e.get("status") == "failed")
-    exceptions = sum(1 for e in entries if e.get("status") == "exception")
+def consolidate_log_entries(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Collapse started/terminal events into one logical call entry per call_id."""
+    buckets: Dict[Any, Dict[str, Optional[Dict[str, Any]]]] = {}
+    for entry in entries:
+        call_id = entry.get("call_id")
+        bucket = buckets.setdefault(call_id, {"started": None, "terminal": None})
+        status = entry.get("status")
+        if status == "started":
+            bucket["started"] = entry
+        elif status in TERMINAL_STATUSES:
+            bucket["terminal"] = entry
+        else:
+            bucket["terminal"] = entry
 
-    execution_times = [e.get("execution_time_seconds", 0) for e in entries]
-    avg_time = sum(execution_times) / len(execution_times) if execution_times else 0
-    max_time = max(execution_times) if execution_times else 0
+    consolidated = []
+    for call_id in sorted(buckets.keys(), key=lambda value: (value is None, value)):
+        started = buckets[call_id]["started"]
+        terminal = buckets[call_id]["terminal"]
+        if terminal is not None:
+            merged = {}
+            if started is not None:
+                merged.update(started)
+                merged["started_timestamp"] = started.get("timestamp")
+            merged.update(terminal)
+            merged.setdefault("inputs", (started or {}).get("inputs", {}))
+            merged.setdefault("metadata", (started or {}).get("metadata", {}))
+            consolidated.append(merged)
+        elif started is not None:
+            merged = dict(started)
+            merged["started_timestamp"] = started.get("timestamp")
+            merged["status"] = "started_only"
+            merged["execution_time_seconds"] = None
+            consolidated.append(merged)
+    return consolidated
+
+
+def _parse_filter_list(raw_value: Optional[str], cast=None) -> Optional[List[Any]]:
+    if raw_value is None:
+        return None
+    values = []
+    for part in raw_value.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        values.append(cast(part) if cast else part)
+    return values or None
+
+
+def _metadata_value(entry: Dict[str, Any], key: str) -> Any:
+    return entry.get("metadata", {}).get(key)
+
+
+def filter_entries(
+    entries: Sequence[Dict[str, Any]],
+    experiment: Optional[Sequence[str]] = None,
+    algo: Optional[Sequence[str]] = None,
+    resolution: Optional[Sequence[float]] = None,
+    source: Optional[Sequence[str]] = None,
+    status: Optional[Sequence[str]] = None,
+) -> List[Dict[str, Any]]:
+    filtered = []
+    for entry in entries:
+        if experiment and _metadata_value(entry, "experiment") not in experiment:
+            continue
+        if algo and _metadata_value(entry, "algo") not in algo:
+            continue
+        if resolution is not None:
+            entry_resolution = _metadata_value(entry, "resolution")
+            if entry_resolution is None or float(entry_resolution) not in resolution:
+                continue
+        if source and _metadata_value(entry, "call_source") not in source:
+            continue
+        if status and entry.get("status") not in status:
+            continue
+        filtered.append(entry)
+    return filtered
+
+
+def print_summary(
+    entries: Sequence[Dict[str, Any]],
+    infinite_loop_threshold: float = 0.01,
+    slow_threshold: float = 1.0,
+):
+    """Print summary statistics for consolidated logical calls."""
+    total = len(entries)
+    success = sum(1 for entry in entries if entry.get("status") == "success")
+    failed = sum(1 for entry in entries if entry.get("status") == "failed")
+    exceptions = sum(1 for entry in entries if entry.get("status") == "exception")
+    started_only = sum(1 for entry in entries if entry.get("status") == "started_only")
+
+    execution_times = [
+        entry.get("execution_time_seconds", 0.0)
+        for entry in entries
+        if entry.get("execution_time_seconds") is not None
+    ]
+    avg_time = sum(execution_times) / len(execution_times) if execution_times else 0.0
+    max_time = max(execution_times) if execution_times else 0.0
     total_time = sum(execution_times)
 
     print("=" * 80)
     print("LOG FILE SUMMARY")
     print("=" * 80)
-    print(f"Total calls: {total}")
-    print(f"  ✓ Success: {success} ({100*success/total:.1f}%)")
-    print(f"  ✗ Failed: {failed} ({100*failed/total:.1f}%)")
-    print(f"  ⚠ Exceptions: {exceptions} ({100*exceptions/total:.1f}%)")
+    print(f"Total logical calls: {total}")
+    print(f"  Success: {success}")
+    print(f"  Failed: {failed}")
+    print(f"  Exceptions: {exceptions}")
+    print(f"  Started only: {started_only}")
     print()
-    print(f"Execution time:")
+    print("Execution time:")
     print(f"  Average: {avg_time:.4f}s")
     print(f"  Maximum: {max_time:.4f}s")
     print(f"  Total: {total_time:.2f}s")
-    
-    # Categorize failed cases
+
     if failed > 0:
-        instant_failures, infinite_loop_failures = categorize_failed_cases(
+        instant_failures, slow_failures = categorize_failed_cases(
             entries, infinite_loop_threshold
         )
         print()
         print(f"Failed cases breakdown (threshold: {infinite_loop_threshold}s):")
-        print(f"  ⚡ Instant failures (likely no valid solution): {len(instant_failures)} ({100*len(instant_failures)/failed:.1f}%)")
-        print(f"  🔄 Infinite loop failures (hit maxTimestep): {len(infinite_loop_failures)} ({100*len(infinite_loop_failures)/failed:.1f}%)")
-    
-    # Count slow cases (>1s)
-    slow_count = sum(1 for e in entries if e.get("execution_time_seconds", 0) > 1.0)
-    if slow_count > 0:
-        print(f"  Slow cases (>1.0s): {slow_count}")
+        print(f"  Instant failures: {len(instant_failures)}")
+        print(f"  Slow failures: {len(slow_failures)}")
+
+    slow_successes = sum(
+        1
+        for entry in entries
+        if entry.get("status") == "success"
+        and (entry.get("execution_time_seconds") or 0.0) >= slow_threshold
+    )
+    if slow_successes > 0:
+        print(f"  Slow successes (>={slow_threshold}s): {slow_successes}")
     print()
 
 
-def extract_failed_cases(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Extract all failed cases."""
-    return [e for e in entries if e.get("status") == "failed"]
+def extract_failed_cases(entries: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [entry for entry in entries if entry.get("status") == "failed"]
 
 
 def categorize_failed_cases(
-    entries: List[Dict[str, Any]], 
-    infinite_loop_threshold: float = 0.01
-) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-    """
-    Categorize failed cases into:
-    1. Instant failures: Likely no valid solution exists (fail quickly)
-    2. Infinite loop failures: Hit maxTimestep after many iterations (take longer)
-    
-    Args:
-        entries: List of log entries
-        infinite_loop_threshold: Time threshold (seconds) to distinguish infinite loops.
-                                 Cases taking longer than this are considered "infinite loops".
-                                 Default 0.01s (10ms) - infinite loops iterate many times.
-    
-    Returns:
-        (instant_failures, infinite_loop_failures)
-    """
+    entries: Sequence[Dict[str, Any]],
+    infinite_loop_threshold: float = 0.01,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     failed = extract_failed_cases(entries)
-    
     instant_failures = []
-    infinite_loop_failures = []
-    
-    for e in failed:
-        exec_time = e.get("execution_time_seconds", 0)
+    slow_failures = []
+    for entry in failed:
+        exec_time = entry.get("execution_time_seconds", 0.0) or 0.0
         if exec_time >= infinite_loop_threshold:
-            infinite_loop_failures.append(e)
+            slow_failures.append(entry)
         else:
-            instant_failures.append(e)
-    
-    return instant_failures, infinite_loop_failures
+            instant_failures.append(entry)
+    return instant_failures, slow_failures
 
 
 def extract_slow_cases(
-    entries: List[Dict[str, Any]], threshold: float = 1.0
+    entries: Sequence[Dict[str, Any]], threshold: float = 1.0
 ) -> List[Dict[str, Any]]:
-    """Extract cases that took longer than threshold seconds."""
-    return [e for e in entries if e.get("execution_time_seconds", 0) > threshold]
+    return [
+        entry
+        for entry in entries
+        if (entry.get("execution_time_seconds") or 0.0) >= threshold
+    ]
 
 
 def extract_problematic_cases(
-    entries: List[Dict[str, Any]], 
+    entries: Sequence[Dict[str, Any]],
     slow_threshold: float = 1.0,
-    include_failed: bool = True,
-    include_slow: bool = True,
 ) -> List[Dict[str, Any]]:
-    """
-    Extract problematic cases: slow cases, failed cases, or both.
-    
-    Args:
-        entries: List of log entries
-        slow_threshold: Time threshold for slow cases (seconds)
-        include_failed: Include cases that failed to converge
-        include_slow: Include cases that took longer than threshold
-    
-    Returns:
-        List of problematic entries
-    """
     result = []
-    for e in entries:
-        status = e.get("status", "unknown")
-        exec_time = e.get("execution_time_seconds", 0)
-        
-        is_failed = (status == "failed") and include_failed
-        is_slow = (exec_time > slow_threshold) and include_slow
-        
-        if is_failed or is_slow:
-            result.append(e)
-    
+    for entry in entries:
+        status = entry.get("status")
+        exec_time = entry.get("execution_time_seconds") or 0.0
+        if status in NON_SUCCESS_STATUSES:
+            result.append(entry)
+        elif status == "success" and exec_time >= slow_threshold:
+            result.append(entry)
     return result
 
 
 def extract_extreme_area_fractions(
-    entries: List[Dict[str, Any]], min_frac: float = 0.0, max_frac: float = 1.0
+    entries: Sequence[Dict[str, Any]], min_frac: float = 0.0, max_frac: float = 1.0
 ) -> List[Dict[str, Any]]:
-    """Extract cases with extreme area fractions."""
     result = []
-    for e in entries:
-        inputs = e.get("inputs", {})
-        a1 = inputs.get("a1", 0.5)
-        a2 = inputs.get("a2", 0.5)
-        a3 = inputs.get("a3", 0.5)
-
-        if (
-            a1 < min_frac
-            or a1 > max_frac
-            or a2 < min_frac
-            or a2 > max_frac
-            or a3 < min_frac
-            or a3 > max_frac
-        ):
-            result.append(e)
+    for entry in entries:
+        inputs = entry.get("inputs", {})
+        fractions = [inputs.get("a1", 0.5), inputs.get("a2", 0.5), inputs.get("a3", 0.5)]
+        if any(frac < min_frac or frac > max_frac for frac in fractions):
+            result.append(entry)
     return result
 
 
-def format_test_case(entry: Dict[str, Any], infinite_loop_threshold: float = 0.01) -> str:
-    """Format a log entry as a test case."""
+def _serialize_case_key(entry: Dict[str, Any]) -> str:
     inputs = entry.get("inputs", {})
+    key = (
+        inputs.get("poly1"),
+        inputs.get("poly2"),
+        inputs.get("poly3"),
+        inputs.get("a1"),
+        inputs.get("a2"),
+        inputs.get("a3"),
+        inputs.get("epsilon"),
+    )
+    return json.dumps(key, sort_keys=True)
+
+
+def dedupe_extracted_cases(entries: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    unique = []
+    seen = set()
+    for entry in entries:
+        key = _serialize_case_key(entry)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(entry)
+    return unique
+
+
+def limit_slow_success_cases(
+    entries: Sequence[Dict[str, Any]], per_bucket_limit: int = 10
+) -> List[Dict[str, Any]]:
+    kept = []
+    slow_success_buckets: Dict[Tuple[Any, Any], List[Dict[str, Any]]] = {}
+
+    for entry in entries:
+        if entry.get("status") in NON_SUCCESS_STATUSES:
+            kept.append(entry)
+            continue
+        bucket = (
+            _metadata_value(entry, "algo"),
+            _metadata_value(entry, "resolution"),
+        )
+        slow_success_buckets.setdefault(bucket, []).append(entry)
+
+    for bucket_entries in slow_success_buckets.values():
+        bucket_entries.sort(
+            key=lambda entry: entry.get("execution_time_seconds", 0.0) or 0.0,
+            reverse=True,
+        )
+        kept.extend(bucket_entries[:per_bucket_limit])
+
+    return kept
+
+
+def _format_resolution_tag(resolution: Any) -> str:
+    if resolution is None:
+        return "unknown"
+    return f"{float(resolution):.2f}".replace(".", "p")
+
+
+def _build_case_name(entry: Dict[str, Any]) -> str:
+    metadata = entry.get("metadata", {})
+    experiment = metadata.get("experiment", "case")
+    algo = metadata.get("algo", "unknown").replace("+", "plus")
+    resolution_tag = _format_resolution_tag(metadata.get("resolution"))
     call_id = entry.get("call_id", "unknown")
+    return f"{experiment}_{algo}_r{resolution_tag}_call{call_id}"
+
+
+def _build_case_description(entry: Dict[str, Any], infinite_loop_threshold: float) -> str:
     status = entry.get("status", "unknown")
-    exec_time = entry.get("execution_time_seconds", 0)
-    
-    # Determine failure type for failed cases
+    exec_time = entry.get("execution_time_seconds")
+    metadata = entry.get("metadata", {})
+    source = metadata.get("call_source")
+    grid_coords = metadata.get("grid_coords")
+    merge_id = metadata.get("merge_id")
     failure_type = ""
     if status == "failed":
-        if exec_time >= infinite_loop_threshold:
-            failure_type = " (infinite loop - hit maxTimestep)"
+        effective_time = exec_time or 0.0
+        if effective_time >= infinite_loop_threshold:
+            failure_type = ", slow failure"
         else:
-            failure_type = " (instant failure - likely no valid solution)"
+            failure_type = ", instant failure"
+    parts = [f"status={status}{failure_type}"]
+    if exec_time is not None:
+        parts.append(f"time={exec_time:.4f}s")
+    if source is not None:
+        parts.append(f"source={source}")
+    if grid_coords is not None:
+        parts.append(f"grid={grid_coords}")
+    if merge_id is not None:
+        parts.append(f"merge_id={merge_id}")
+    return ", ".join(parts)
 
-    return f"""TestCase(
-    name="case_from_log_{call_id}",
-    poly1={inputs.get('poly1')},
-    poly2={inputs.get('poly2')},
-    poly3={inputs.get('poly3')},
-    a1={inputs.get('a1')},
-    a2={inputs.get('a2')},
-    a3={inputs.get('a3')},
-    epsilon={inputs.get('epsilon')},
-    description="From log: status={status}{failure_type}, time={exec_time:.4f}s"
-),"""
+
+def format_test_case(
+    entry: Dict[str, Any], infinite_loop_threshold: float = 0.01
+) -> str:
+    inputs = entry.get("inputs", {})
+    metadata = entry.get("metadata", {})
+    name = _build_case_name(entry)
+    description = _build_case_description(entry, infinite_loop_threshold)
+    return f"""    TestCase(
+        name={name!r},
+        poly1={inputs.get('poly1')!r},
+        poly2={inputs.get('poly2')!r},
+        poly3={inputs.get('poly3')!r},
+        a1={inputs.get('a1')!r},
+        a2={inputs.get('a2')!r},
+        a3={inputs.get('a3')!r},
+        epsilon={inputs.get('epsilon')!r},
+        description={description!r},
+        source_suite="zalesak_harvest",
+        metadata={metadata!r},
+    ),"""
+
+
+def render_test_case_module(
+    entries: Sequence[Dict[str, Any]], infinite_loop_threshold: float = 0.01
+) -> str:
+    lines = [
+        '"""Auto-generated harvested getArcFacet cases from Zalesak runs."""',
+        "",
+        "from test.geoms.getarcfacet.case_harness import TestCase",
+        "",
+        "TEST_CASES = [",
+    ]
+    for entry in entries:
+        lines.append(format_test_case(entry, infinite_loop_threshold))
+    lines.append("]")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def write_test_case_module(
+    output_path: str,
+    entries: Sequence[Dict[str, Any]],
+    infinite_loop_threshold: float = 0.01,
+):
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        render_test_case_module(entries, infinite_loop_threshold),
+        encoding="utf-8",
+    )
 
 
 def main():
     parser = argparse.ArgumentParser(description="Analyze getArcFacet call logs")
     parser.add_argument("log_file", help="Path to log file")
-    parser.add_argument(
-        "--extract-failed", action="store_true", help="Extract failed test cases"
-    )
-    parser.add_argument(
-        "--extract-slow", action="store_true", help="Extract slow test cases"
-    )
+    parser.add_argument("--extract-failed", action="store_true", help="Extract failed test cases")
+    parser.add_argument("--extract-slow", action="store_true", help="Extract slow test cases")
     parser.add_argument(
         "--extract-problematic",
         action="store_true",
-        help="Extract problematic cases (failed OR slow). This is useful for finding "
-             "'infinite loop' cases that hit maxTimestep quickly (failed) or take a long time (slow).",
+        help="Extract started_only, exception, failed, and slow-success cases",
     )
     parser.add_argument(
         "--threshold",
@@ -230,52 +388,77 @@ def main():
         "--infinite-loop-threshold",
         type=float,
         default=0.01,
-        help="Time threshold to distinguish infinite loop failures from instant failures (seconds). "
-             "Failed cases taking longer than this are considered 'infinite loops'. Default: 0.01s",
+        help="Time threshold to distinguish instant and slow failures",
     )
     parser.add_argument(
         "--extract-instant-failures",
         action="store_true",
-        help="Extract instant failures (likely no valid solution exists, fail quickly)",
+        help="Extract failures that completed quickly",
     )
     parser.add_argument(
         "--extract-infinite-loops",
         action="store_true",
-        help="Extract infinite loop failures (hit maxTimestep after many iterations)",
+        help="Extract failures above the slow-failure threshold",
     )
     parser.add_argument(
         "--extract-extreme",
         action="store_true",
         help="Extract cases with extreme area fractions",
     )
+    parser.add_argument("--min-frac", type=float, default=0.0, help="Minimum area fraction")
+    parser.add_argument("--max-frac", type=float, default=1.0, help="Maximum area fraction")
     parser.add_argument(
-        "--min-frac",
-        type=float,
-        default=0.0,
-        help="Minimum area fraction for extreme cases",
+        "--experiment",
+        type=str,
+        help="Comma-separated experiment filter applied to metadata.experiment",
     )
     parser.add_argument(
-        "--max-frac",
-        type=float,
-        default=1.0,
-        help="Maximum area fraction for extreme cases",
+        "--algo",
+        type=str,
+        help="Comma-separated algorithm filter applied to metadata.algo",
     )
     parser.add_argument(
-        "--output", type=str, help="Output file for extracted test cases"
+        "--resolution",
+        type=str,
+        help="Comma-separated resolution filter applied to metadata.resolution",
+    )
+    parser.add_argument(
+        "--source",
+        type=str,
+        help="Comma-separated source filter applied to metadata.call_source",
+    )
+    parser.add_argument(
+        "--status",
+        type=str,
+        help="Comma-separated logical status filter",
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default=DEFAULT_OUTPUT,
+        help=f"Output file for extracted Python module (default: {DEFAULT_OUTPUT})",
     )
 
     args = parser.parse_args()
 
-    # Load entries
     print(f"Loading log file: {args.log_file}")
-    entries = load_log_entries(args.log_file)
-    print(f"Loaded {len(entries)} entries\n")
+    raw_entries = load_log_entries(args.log_file)
+    entries = consolidate_log_entries(raw_entries)
+    print(f"Loaded {len(raw_entries)} raw events")
+    print(f"Consolidated to {len(entries)} logical calls\n")
 
-    # Print summary
-    print_summary(entries, args.infinite_loop_threshold)
+    entries = filter_entries(
+        entries,
+        experiment=_parse_filter_list(args.experiment),
+        algo=_parse_filter_list(args.algo),
+        resolution=_parse_filter_list(args.resolution, float),
+        source=_parse_filter_list(args.source),
+        status=_parse_filter_list(args.status),
+    )
 
-    # Extract cases based on flags
-    extracted = []
+    print_summary(entries, args.infinite_loop_threshold, args.threshold)
+
+    extracted: List[Dict[str, Any]] = []
 
     if args.extract_failed:
         failed = extract_failed_cases(entries)
@@ -284,27 +467,22 @@ def main():
 
     if args.extract_instant_failures:
         instant_failures, _ = categorize_failed_cases(entries, args.infinite_loop_threshold)
-        print(f"Found {len(instant_failures)} instant failures (<{args.infinite_loop_threshold}s)")
+        print(f"Found {len(instant_failures)} instant failures")
         extracted.extend(instant_failures)
 
     if args.extract_infinite_loops:
-        _, infinite_loop_failures = categorize_failed_cases(entries, args.infinite_loop_threshold)
-        print(f"Found {len(infinite_loop_failures)} infinite loop failures (>={args.infinite_loop_threshold}s)")
-        extracted.extend(infinite_loop_failures)
+        _, slow_failures = categorize_failed_cases(entries, args.infinite_loop_threshold)
+        print(f"Found {len(slow_failures)} slow failures")
+        extracted.extend(slow_failures)
 
     if args.extract_slow:
         slow = extract_slow_cases(entries, args.threshold)
-        print(f"Found {len(slow)} slow cases (>{args.threshold}s)")
+        print(f"Found {len(slow)} slow cases")
         extracted.extend(slow)
 
     if args.extract_problematic:
-        problematic = extract_problematic_cases(
-            entries, 
-            slow_threshold=args.threshold,
-            include_failed=True,
-            include_slow=True,
-        )
-        print(f"Found {len(problematic)} problematic cases (failed OR slow >{args.threshold}s)")
+        problematic = extract_problematic_cases(entries, slow_threshold=args.threshold)
+        print(f"Found {len(problematic)} problematic cases")
         extracted.extend(problematic)
 
     if args.extract_extreme:
@@ -312,40 +490,13 @@ def main():
         print(f"Found {len(extreme)} cases with extreme area fractions")
         extracted.extend(extreme)
 
-    # Remove duplicates (by call_id)
-    seen_ids = set()
-    unique_extracted = []
-    for e in extracted:
-        call_id = e.get("call_id")
-        if call_id not in seen_ids:
-            seen_ids.add(call_id)
-            unique_extracted.append(e)
-
-    if unique_extracted:
-        print(f"\nTotal unique extracted cases: {len(unique_extracted)}")
-
-        # Format as test cases
-        test_cases = [format_test_case(e, args.infinite_loop_threshold) for e in unique_extracted]
-
-        if args.output:
-            with open(args.output, "w") as f:
-                f.write("# Extracted test cases from log file\n")
-                f.write(
-                    "# Format: TestCase objects for test_get_arc_facet_error.py\n\n"
-                )
-                for tc in test_cases:
-                    f.write(tc + "\n\n")
-            print(f"\n✓ Test cases written to {args.output}")
-        else:
-            print("\n" + "=" * 80)
-            print("EXTRACTED TEST CASES")
-            print("=" * 80)
-            for tc in test_cases:
-                print(tc)
-                print()
+    if extracted:
+        extracted = dedupe_extracted_cases(extracted)
+        extracted = limit_slow_success_cases(extracted, per_bucket_limit=10)
+        print(f"\nTotal extracted cases after dedupe/cap: {len(extracted)}")
+        write_test_case_module(args.output, extracted, args.infinite_loop_threshold)
+        print(f"\nWrote harvested test module to {args.output}")
 
 
 if __name__ == "__main__":
     main()
-
-

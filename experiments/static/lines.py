@@ -251,7 +251,7 @@ def main(
     do_c0 = config["GEOMS"]["DO_C0"]
 
     # Setup output directories
-    output_dirs = setupOutputDirs(save_name)
+    output_dirs = setupOutputDirs(save_name, clean_existing=True)
 
     # Initialize metrics files with headers
     with open(os.path.join(output_dirs["metrics"], "hausdorff.txt"), "w") as f:

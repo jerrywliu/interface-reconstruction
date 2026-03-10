@@ -202,17 +202,21 @@ def _collect_metrics(exp_name, save_name):
         return metrics
     if exp_name == "squares":
         area = _parse_numeric_values(metrics_dir / "area_error.txt")
-        edge = _parse_numeric_values(metrics_dir / "edge_alignment_error.txt")
+        gaps = _parse_numeric_values(metrics_dir / "facet_gap.txt")
+        hausdorff = _parse_numeric_values(metrics_dir / "hausdorff.txt")
         metrics = {}
         metrics.update(_metric_stats("area_error", area))
-        metrics.update(_metric_stats("edge_alignment_error", edge))
+        metrics.update(_metric_stats("facet_gap", gaps))
+        metrics.update(_metric_stats("hausdorff", hausdorff))
         return metrics
     if exp_name == "zalesak":
         area = _parse_numeric_values(metrics_dir / "area_error.txt")
         gaps = _parse_numeric_values(metrics_dir / "facet_gap.txt")
+        hausdorff = _parse_numeric_values(metrics_dir / "hausdorff.txt")
         metrics = {}
         metrics.update(_metric_stats("area_error", area))
         metrics.update(_metric_stats("facet_gap", gaps))
+        metrics.update(_metric_stats("hausdorff", hausdorff))
         return metrics
     return {}
 
@@ -1041,7 +1045,7 @@ def _generate_square_method_summary_plots(data, out_dir):
     plots = _generate_experiment_method_summary_plots(
         data,
         "squares",
-        ("area_error", "edge_alignment_error"),
+        ("hausdorff", "facet_gap"),
         out_dir,
     )
     plots.extend(
@@ -1049,8 +1053,8 @@ def _generate_square_method_summary_plots(data, out_dir):
             data=data,
             out_dir=out_dir,
             exp_name="squares",
-            metric_left="area_error",
-            metric_right="edge_alignment_error",
+            metric_left="hausdorff",
+            metric_right="facet_gap",
             figure_title="Squares Perturbed Sweep: Method Comparison",
             out_filename="squares_all_methods_2x2.png",
         )
@@ -1062,7 +1066,7 @@ def _generate_zalesak_method_summary_plots(data, out_dir):
     plots = _generate_experiment_method_summary_plots(
         data,
         "zalesak",
-        ("area_error", "facet_gap"),
+        ("hausdorff", "facet_gap"),
         out_dir,
     )
     plots.extend(
@@ -1070,7 +1074,7 @@ def _generate_zalesak_method_summary_plots(data, out_dir):
             data=data,
             out_dir=out_dir,
             exp_name="zalesak",
-            metric_left="area_error",
+            metric_left="hausdorff",
             metric_right="facet_gap",
             figure_title="Zalesak Perturbed Sweep: Method Comparison",
             out_filename="zalesak_all_methods_2x2.png",
@@ -1113,6 +1117,41 @@ def _generate_summary_plots(csv_path, out_dir):
         plots_by_exp.setdefault("zalesak", []).extend(zalesak_summary_plots)
 
     return plots_by_exp
+
+
+def _filter_all_methods_summary_paths(plot_paths):
+    return [
+        path
+        for path in plot_paths
+        if "_all_methods_" in Path(path).name.lower()
+    ]
+
+
+def _send_results_to_slack_logged(message, file_paths):
+    try:
+        ok = send_results_to_slack(message, file_paths)
+    except Exception as exc:
+        print(f"[SLACK] failed: {message} ({exc})")
+        return False
+
+    if ok:
+        print(f"[SLACK] sent: {message}")
+    else:
+        print(f"[SLACK] failed: {message}")
+    return ok
+
+
+def _notify_stage_summary(csv_path, out_dir, exp_name):
+    plots_by_exp = _generate_summary_plots(csv_path, out_dir)
+    plot_paths = plots_by_exp.get(exp_name, [])
+    summary_paths = _filter_all_methods_summary_paths(plot_paths)
+    if summary_paths:
+        resolved_paths = [str(Path(path).resolve()) for path in summary_paths]
+        return _send_results_to_slack_logged(
+            f"Perturbed sweep stage complete: {exp_name}",
+            resolved_paths,
+        )
+    return False
 
 
 def main():
@@ -1196,10 +1235,11 @@ def main():
         print(f"Generated perturbed summary plots from {csv_path}")
         if notify:
             for exp, plot_paths in plots_by_exp.items():
-                if plot_paths:
-                    resolved_paths = [str(Path(path).resolve()) for path in plot_paths]
-                    send_results_to_slack(
-                        f"Perturbed sweep plots: {exp}",
+                summary_paths = _filter_all_methods_summary_paths(plot_paths)
+                if summary_paths:
+                    resolved_paths = [str(Path(path).resolve()) for path in summary_paths]
+                    _send_results_to_slack_logged(
+                        f"Perturbed sweep all-method summaries: {exp}",
                         resolved_paths,
                     )
         return
@@ -1219,6 +1259,7 @@ def main():
     Path(out_csv).parent.mkdir(parents=True, exist_ok=True)
 
     failures = []
+    stage_notified = set()
 
     with open(out_csv, "w", newline="") as csvfile:
         fieldnames = [
@@ -1321,10 +1362,15 @@ def main():
                                     save_name, sample_count=args.aggregate_samples
                                 )
                                 if agg_path:
-                                    send_results_to_slack(
+                                    _send_results_to_slack_logged(
                                         f"{exp['name']} {algo} r={resolution} w={wiggle} s={seed}: aggregate samples {indices}",
                                         [agg_path],
                                     )
+
+            csvfile.flush()
+            if notify:
+                if _notify_stage_summary(out_csv, summary_dir, exp["name"]):
+                    stage_notified.add(exp["name"])
 
     print("\n=== Perturbed sweep summary ===")
     print(f"Failures: {len(failures)}")
@@ -1337,13 +1383,16 @@ def main():
 
     if notify:
         for exp, plot_paths in plots_by_exp.items():
-            if plot_paths:
-                resolved_paths = [str(Path(path).resolve()) for path in plot_paths]
-                send_results_to_slack(
-                    f"Perturbed sweep plots: {exp}",
+            if exp in stage_notified:
+                continue
+            summary_paths = _filter_all_methods_summary_paths(plot_paths)
+            if summary_paths:
+                resolved_paths = [str(Path(path).resolve()) for path in summary_paths]
+                _send_results_to_slack_logged(
+                    f"Perturbed sweep all-method summaries: {exp}",
                     resolved_paths,
                 )
-        send_results_to_slack(
+        _send_results_to_slack_logged(
             f"Perturbed sweep complete. CSV: {out_csv}",
             [str(Path(out_csv).resolve())],
         )

@@ -123,12 +123,14 @@ def _collect_metrics(exp_name, save_name):
         return hausdorff, gaps
     if exp_name == "squares":
         area = _parse_numeric_values(metrics_dir / "area_error.txt")
-        edge = _parse_numeric_values(metrics_dir / "edge_alignment_error.txt")
-        return area, edge
+        gaps = _parse_numeric_values(metrics_dir / "facet_gap.txt")
+        hausdorff = _parse_numeric_values(metrics_dir / "hausdorff.txt")
+        return area, gaps, hausdorff
     if exp_name == "zalesak":
         area = _parse_numeric_values(metrics_dir / "area_error.txt")
         gaps = _parse_numeric_values(metrics_dir / "facet_gap.txt")
-        return area, gaps
+        hausdorff = _parse_numeric_values(metrics_dir / "hausdorff.txt")
+        return area, gaps, hausdorff
     return []
 
 
@@ -687,7 +689,8 @@ def run_square_sweep(
     algos = SQUARE_ALGOS
 
     area_results = {algo: [] for algo in algos}
-    edge_results = {algo: [] for algo in algos}
+    gap_results = {algo: [] for algo in algos}
+    hausdorff_results = {algo: [] for algo in algos}
 
     for resolution in resolutions:
         for algo in algos:
@@ -715,12 +718,13 @@ def run_square_sweep(
                     print(f"[squares] {algo} r={resolution} failed. Log: {log_path}")
                     _log_tail(log_path)
                     area_results[algo].append(float("nan"))
-                    edge_results[algo].append(float("nan"))
+                    gap_results[algo].append(float("nan"))
+                    hausdorff_results[algo].append(float("nan"))
                     continue
-                areas, edges = _collect_metrics("squares", save_name)
+                areas, gaps, hausdorff_values = _collect_metrics("squares", save_name)
             else:
                 try:
-                    areas, edges = squares.main(
+                    areas, gaps, hausdorff_values = squares.main(
                         config_setting=config,
                         resolution=resolution,
                         facet_algo=algo,
@@ -730,12 +734,14 @@ def run_square_sweep(
                 except Exception as err:
                     _record_failure(failures, "squares", algo, resolution, err)
                     area_results[algo].append(float("nan"))
-                    edge_results[algo].append(float("nan"))
+                    gap_results[algo].append(float("nan"))
+                    hausdorff_results[algo].append(float("nan"))
                     _cleanup_memory()
                     continue
 
             area_results[algo].append(_safe_mean(areas, min_error))
-            edge_results[algo].append(_safe_mean(edges, min_error))
+            gap_results[algo].append(_safe_mean(gaps, min_error))
+            hausdorff_results[algo].append(_safe_mean(hausdorff_values, min_error))
 
             agg_path, indices = _build_aggregate_plot(
                 save_name, sample_count=aggregate_samples
@@ -747,27 +753,33 @@ def run_square_sweep(
                 )
             _cleanup_memory()
 
-    squares.create_plots(
+    squares.create_primary_plots(
+        resolutions,
+        hausdorff_results,
+        gap_results,
+        hausdorff_save_path="results/static/linear_square_reconstruction_hausdorff.png",
+        gap_save_path="results/static/linear_square_reconstruction_facet_gap.png",
+    )
+    squares.create_area_plot(
         resolutions,
         area_results,
-        edge_results,
-        area_save_path="results/static/linear_square_reconstruction_area.png",
-        edge_save_path="results/static/linear_square_reconstruction_edge.png",
+        save_path="results/static/linear_square_reconstruction_area.png",
     )
     if notify:
         send_results_to_slack(
-            "Squares sweep: area error plot",
-            ["results/static/linear_square_reconstruction_area.png"],
+            "Squares sweep: Hausdorff plot",
+            ["results/static/linear_square_reconstruction_hausdorff.png"],
         )
         send_results_to_slack(
-            "Squares sweep: edge alignment plot",
-            ["results/static/linear_square_reconstruction_edge.png"],
+            "Squares sweep: facet gap plot",
+            ["results/static/linear_square_reconstruction_facet_gap.png"],
         )
 
     with open("results/static/linear_square_reconstruction_results.txt", "w") as f:
         f.write(f"Resolutions: {resolutions}\n")
         f.write(f"Area Results: {area_results}\n")
-        f.write(f"Edge Results: {edge_results}\n")
+        f.write(f"Gap Results: {gap_results}\n")
+        f.write(f"Hausdorff Results: {hausdorff_results}\n")
     if notify:
         send_results_to_slack(
             "Squares sweep: results",
@@ -775,8 +787,8 @@ def run_square_sweep(
         )
 
     return [
-        "results/static/linear_square_reconstruction_area.png",
-        "results/static/linear_square_reconstruction_edge.png",
+        "results/static/linear_square_reconstruction_hausdorff.png",
+        "results/static/linear_square_reconstruction_facet_gap.png",
     ]
 
 
@@ -795,6 +807,7 @@ def run_zalesak_sweep(
 
     area_results = {algo: [] for algo in algos}
     gap_results = {algo: [] for algo in algos}
+    hausdorff_results = {algo: [] for algo in algos}
 
     for resolution in resolutions:
         for algo in algos:
@@ -823,11 +836,12 @@ def run_zalesak_sweep(
                     _log_tail(log_path)
                     area_results[algo].append(float("nan"))
                     gap_results[algo].append(float("nan"))
+                    hausdorff_results[algo].append(float("nan"))
                     continue
-                areas, gaps = _collect_metrics("zalesak", save_name)
+                areas, gaps, hausdorff_values = _collect_metrics("zalesak", save_name)
             else:
                 try:
-                    areas, gaps = zalesak.main(
+                    areas, gaps, hausdorff_values = zalesak.main(
                         config_setting=config,
                         resolution=resolution,
                         facet_algo=algo,
@@ -838,11 +852,13 @@ def run_zalesak_sweep(
                     _record_failure(failures, "zalesak", algo, resolution, err)
                     area_results[algo].append(float("nan"))
                     gap_results[algo].append(float("nan"))
+                    hausdorff_results[algo].append(float("nan"))
                     _cleanup_memory()
                     continue
 
             area_results[algo].append(_safe_mean(areas, min_error))
             gap_results[algo].append(_safe_mean(gaps, min_error))
+            hausdorff_results[algo].append(_safe_mean(hausdorff_values, min_error))
 
             agg_path, indices = _build_aggregate_plot(
                 save_name, sample_count=aggregate_samples
@@ -856,9 +872,14 @@ def run_zalesak_sweep(
 
     zalesak.create_combined_plot(
         resolutions,
-        area_results,
+        hausdorff_results,
         gap_results,
         save_path="results/static/linear_zalesak_reconstruction_combined.png",
+    )
+    zalesak.create_area_plot(
+        resolutions,
+        area_results,
+        save_path="results/static/linear_zalesak_reconstruction_area.png",
     )
     if notify:
         send_results_to_slack(
@@ -870,6 +891,7 @@ def run_zalesak_sweep(
         f.write(f"Resolutions: {resolutions}\n")
         f.write(f"Area Results: {area_results}\n")
         f.write(f"Gap Results: {gap_results}\n")
+        f.write(f"Hausdorff Results: {hausdorff_results}\n")
     if notify:
         send_results_to_slack(
             "Zalesak sweep: results",

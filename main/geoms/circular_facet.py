@@ -4,6 +4,25 @@ from main.geoms.geoms import getArea, getDistance, lerp, getPolyLineArea, getPol
 from main.geoms.linear_facet import getLinearFacet, getLinearFacetFromNormal
 from scipy.optimize import minimize, root, newton
 
+
+# Keep in sync with BasePolygon / NeighboredPolygon circular prechecks.
+ARC_FIT_LINEARITY_THRESHOLD = 1e-6
+ARC_FIT_OPTIMIZATION_THRESHOLD = 1e-10
+
+
+class LinearFacetShortcut(Exception):
+    def __init__(self, pLeft, pRight, linear_fraction, target_fraction):
+        super().__init__(
+            "Linear facet shortcut triggered in getArcFacet "
+            f"(linear_fraction={linear_fraction:.6e}, "
+            f"target_fraction={target_fraction:.6e})"
+        )
+        self.pLeft = pLeft
+        self.pRight = pRight
+        self.linear_fraction = linear_fraction
+        self.target_fraction = target_fraction
+
+
 #True if major arc
 def isMajorArc(pLeft, pRight, center, radius):
     return pointLeftOfLine(pRight, center, pLeft) == (radius < 0)
@@ -277,7 +296,19 @@ def _unique_points(points, tol):
 
 #Newton's method to match a1, a2, a3s
 #Matches area fractions a1, a2, a3
-def getArcFacet(poly1, poly2, poly3, afrac1, afrac2, afrac3, epsilon, gcenterx=None, gcentery=None, gradius=None):
+def getArcFacet(
+    poly1,
+    poly2,
+    poly3,
+    afrac1,
+    afrac2,
+    afrac3,
+    epsilon,
+    gcenterx=None,
+    gcentery=None,
+    gradius=None,
+    _orientation_retry=False,
+):
     #Basic sanity tests:
     assert afrac1 >= 0 and afrac1 <= 1 and afrac2 >= 0 and afrac2 <= 1 and afrac3 >= 0 and afrac3 <= 1, print("Given areas for circular facet are not valid")
 
@@ -291,9 +322,41 @@ def getArcFacet(poly1, poly2, poly3, afrac1, afrac2, afrac3, epsilon, gcenterx=N
     #Rotate so that x-axis is linear facet
     l1, l2 = getLinearFacet(poly1, poly3, afrac1, afrac3, epsilon/10)
 
+    poly2area = getArea(poly2)
+    poly2_linear_fraction = getPolyLineArea(poly2, l1, l2) / poly2area
+    if (
+        abs(poly2_linear_fraction - afrac2) < ARC_FIT_LINEARITY_THRESHOLD
+        and poly2_linear_fraction > ARC_FIT_OPTIMIZATION_THRESHOLD
+        and poly2_linear_fraction < 1 - ARC_FIT_OPTIMIZATION_THRESHOLD
+    ):
+        linear_intersects = getPolyLineIntersects(poly2, l1, l2)
+        if len(linear_intersects) >= 2:
+            raise LinearFacetShortcut(
+                linear_intersects[0],
+                linear_intersects[-1],
+                poly2_linear_fraction,
+                afrac2,
+            )
+
     #Center to left of line l1 to l2
     if getPolyLineArea(poly2, l1, l2) > afrac2*getArea(poly2):
-        retcenter, retradius, retintersects = getArcFacet(poly3, poly2, poly1, 1-afrac3, 1-afrac2, 1-afrac1, epsilon)
+        if _orientation_retry:
+            print(
+                "Orientation flip did not resolve getArcFacet({}, {}, {}, {}, {}, {}, {})".format(
+                    poly1, poly2, poly3, afrac1, afrac2, afrac3, epsilon
+                )
+            )
+            return None, None, None
+        retcenter, retradius, retintersects = getArcFacet(
+            poly3,
+            poly2,
+            poly1,
+            1-afrac3,
+            1-afrac2,
+            1-afrac1,
+            epsilon,
+            _orientation_retry=True,
+        )
         if retcenter is not None:
             retintersects.reverse()
             retradius *= -1
@@ -303,7 +366,6 @@ def getArcFacet(poly1, poly2, poly3, afrac1, afrac2, afrac3, epsilon, gcenterx=N
 
     #Convert area fractions to areas
     poly1area = getArea(poly1)
-    poly2area = getArea(poly2)
     poly3area = getArea(poly3)
     a1 = afrac1*poly1area
     a2 = afrac2*poly2area

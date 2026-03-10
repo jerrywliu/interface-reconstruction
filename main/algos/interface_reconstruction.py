@@ -1,6 +1,6 @@
 from geoms import getDistance, lerp, getArea, mergePolys, getPolyIntersectArea, getPolyLineArea, getPolyLineIntersects, lineIntersect, getCentroid
 from linear_facet import getLinearFacet, getLinearFacetFromNormal
-from circular_facet import getCircleIntersectArea, getCircleCircleIntersects, getArcFacet, getArcFacetNewton, getCircleLineIntersects2, getCenter, getCircumcircle, getArcFacetRoot, getArcFacetNewton2
+from circular_facet import getCircleIntersectArea, getCircleCircleIntersects, getArcFacet, getArcFacetNewton, getCircleLineIntersects2, getCenter, getCircumcircle, getArcFacetRoot, getArcFacetNewton2, LinearFacetShortcut
 from corner_facet import getPolyCornerArea, getPolyCurvedCornerArea, getCurvedCornerFacet
 import math
 import random
@@ -506,6 +506,9 @@ def makeFacets(mergedpolyindices, mergedpolyinfos, mergedcoords, mergedareafract
                                         print("getArcFacet({}, {}, {}, {}, {}, {}, {})".format(prevpolygon, curpolygon, nextpolygon, prevpolygonarea, curpolygonarea, nextpolygonarea, threshold))
                                         print("Arc face newton: {}, {}, {}".format(arccenter2, arcradius2, arcintersects2))
                                     """
+                            except LinearFacetShortcut as shortcut:
+                                facetfitted[pathelement-1] = ['linear', [shortcut.pLeft, shortcut.pRight]]
+                                continue
                             except:
                                 print("Failed run: getArcFacet({}, {}, {}, {}, {}, {}, {})".format(prevpolygon, curpolygon, nextpolygon, prevpolygonarea, curpolygonarea, nextpolygonarea, threshold))
                                 continue

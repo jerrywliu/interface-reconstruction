@@ -13,6 +13,7 @@ from util.io.setup import setupOutputDirs
 from util.reconstruction import runReconstruction
 from util.initialize.mesh_factory import make_points_from_config, apply_mesh_overrides
 from util.initialize.areas import initializePoly
+from util.metrics.metrics import calculate_facet_gaps, hausdorff_interface
 from util.plotting.plt_utils import plotAreas, plotPartialAreas
 from util.plotting.vtk_utils import writeMesh
 from util.write_facets import writeFacets
@@ -137,7 +138,7 @@ def main(
     do_c0 = config["GEOMS"]["DO_C0"]
 
     # Setup output directories
-    output_dirs = setupOutputDirs(save_name)
+    output_dirs = setupOutputDirs(save_name, clean_existing=True)
 
     # Generate squares with different sizes
     side_lengths = np.linspace(10, 30, num_squares)  # Vary side length from 10 to 30
@@ -165,7 +166,8 @@ def main(
 
     # Store metrics for all squares
     area_errors = []
-    edge_alignment_errors = []
+    facet_gaps = []
+    hausdorff_distances = []
 
     for i, side_length in enumerate(side_lengths):
         print(f"Processing square {i+1}/{num_squares}")
@@ -259,50 +261,27 @@ def main(
             true_total_area, 1e-12
         )
 
-        edge_alignment_error_sum = 0.0
-        cnt_edges = 0
-
-        for poly, reconstructed_facet in zip(
-            m.merged_polys.values(), reconstructed_facets
-        ):
-            try:
-                mx, my = _facet_midpoint(
-                    reconstructed_facet.pLeft, reconstructed_facet.pRight
-                )
-            except Exception:
-                continue
-
-            # min distance from facet midpoint to any of the 4 square edges (as segments)
-            mind = float("inf")
-            for j in range(4):
-                ax, ay = rotated_square[j]
-                bx, by = rotated_square[(j + 1) % 4]
-                d = _point_segment_distance(mx, my, ax, ay, bx, by)
-                if d < mind:
-                    mind = d
-
-            # Normalize by side length to make scale-free
-            edge_alignment_error_sum += mind / max(side_length, 1e-12)
-            cnt_edges += 1
-
-        avg_edge_error = edge_alignment_error_sum / max(cnt_edges, 1)
+        avg_gap = calculate_facet_gaps(m, reconstructed_facets)
+        hausdorff_distance = hausdorff_interface(true_facets, reconstructed_facets)
 
         print(f"Area error for square {i+1}: {area_error:.3e}")
-        print(f"Average edge alignment error for square {i+1}: {avg_edge_error:.3e}")
+        print(f"Average facet gap for square {i+1}: {avg_gap:.3e}")
+        print(f"Hausdorff distance for square {i+1}: {hausdorff_distance:.3e}")
 
         # Save metrics to file
         with open(os.path.join(output_dirs["metrics"], "area_error.txt"), "a") as f:
             f.write(f"{area_error}\n")
 
-        with open(
-            os.path.join(output_dirs["metrics"], "edge_alignment_error.txt"), "a"
-        ) as f:
-            f.write(f"{avg_edge_error}\n")
+        with open(os.path.join(output_dirs["metrics"], "facet_gap.txt"), "a") as f:
+            f.write(f"{avg_gap}\n")
+        with open(os.path.join(output_dirs["metrics"], "hausdorff.txt"), "a") as f:
+            f.write(f"{hausdorff_distance}\n")
 
         area_errors.append(area_error)
-        edge_alignment_errors.append(avg_edge_error)
+        facet_gaps.append(avg_gap)
+        hausdorff_distances.append(hausdorff_distance)
 
-    return area_errors, edge_alignment_errors
+    return area_errors, facet_gaps, hausdorff_distances
 
 
 def run_parameter_sweep(config_setting, num_squares=25):
@@ -333,14 +312,15 @@ def run_parameter_sweep(config_setting, num_squares=25):
 
     # Store results
     area_results = {algo: [] for algo in facet_algos}
-    edge_results = {algo: [] for algo in facet_algos}
+    gap_results = {algo: [] for algo in facet_algos}
+    hausdorff_results = {algo: [] for algo in facet_algos}
 
     # Run experiments
     for resolution in resolutions:
         print(f"\nRunning experiments for resolution {resolution}")
         for algo, save_name in zip(facet_algos, save_names):
             print(f"Testing {algo} algorithm...")
-            area_errors, edge_errors = main(
+            area_errors, facet_gap_values, hausdorff_values = main(
                 config_setting=config_setting,
                 resolution=resolution,
                 facet_algo=algo,
@@ -348,60 +328,75 @@ def run_parameter_sweep(config_setting, num_squares=25):
                 num_squares=num_squares,
             )
             area_results[algo].append(max(np.mean(np.array(area_errors)), MIN_ERROR))
-            edge_results[algo].append(max(np.mean(np.array(edge_errors)), MIN_ERROR))
+            gap_results[algo].append(
+                max(np.mean(np.array(facet_gap_values)), MIN_ERROR)
+            )
+            hausdorff_results[algo].append(
+                max(np.mean(np.array(hausdorff_values)), MIN_ERROR)
+            )
 
-    # Create summary plots
-    # Area error plot
-    plt.figure(figsize=(10, 6))
-    for algo in facet_algos:
-        plt.plot(resolutions, area_results[algo], marker="o", label=algo)
-
-    plt.xscale("log")
-    plt.xlabel("Resolution")
-    plt.yscale("log")
-    plt.ylabel("Average Area Error")
-    plt.title("Square Reconstruction Performance")
-    plt.legend()
-    plt.grid(True, which="both", ls="-", alpha=0.2)
-    plt.savefig(
-        "results/static/square_reconstruction_area.png", dpi=300, bbox_inches="tight"
+    create_primary_plots(
+        resolutions,
+        hausdorff_results,
+        gap_results,
+        hausdorff_save_path="results/static/square_reconstruction_hausdorff.png",
+        gap_save_path="results/static/square_reconstruction_facet_gap.png",
     )
-    plt.close()
-
-    # Edge alignment error plot
-    plt.figure(figsize=(10, 6))
-    for algo in facet_algos:
-        plt.plot(resolutions, edge_results[algo], marker="o", label=algo)
-
-    plt.xscale("log")
-    plt.xlabel("Resolution")
-    plt.yscale("log")
-    plt.ylabel("Average Edge Alignment Error")
-    plt.title("Square Reconstruction Edge Alignment")
-    plt.legend()
-    plt.grid(True, which="both", ls="-", alpha=0.2)
-    plt.savefig(
-        "results/static/square_reconstruction_edge.png", dpi=300, bbox_inches="tight"
+    create_area_plot(
+        resolutions,
+        area_results,
+        save_path="results/static/square_reconstruction_area.png",
     )
-    plt.close()
 
     # Dump results to file
     with open("results/static/square_reconstruction_results.txt", "w") as f:
         f.write(f"Resolutions: {resolutions}\n")
         f.write(f"Area Results: {area_results}\n")
-        f.write(f"Edge Results: {edge_results}\n")
+        f.write(f"Gap Results: {gap_results}\n")
+        f.write(f"Hausdorff Results: {hausdorff_results}\n")
 
-    return area_results, edge_results
+    return area_results, gap_results, hausdorff_results
 
 
-def create_plots(
+def create_primary_plots(
+    resolutions,
+    hausdorff_results,
+    gap_results,
+    hausdorff_save_path="results/static/square_reconstruction_hausdorff.png",
+    gap_save_path="results/static/square_reconstruction_facet_gap.png",
+):
+    plt.figure(figsize=(10, 6))
+    for algo, values in hausdorff_results.items():
+        plt.plot(resolutions, values, marker="o", label=algo)
+    plt.xscale("log")
+    plt.xlabel("Resolution")
+    plt.yscale("log")
+    plt.ylabel("Average Hausdorff Distance")
+    plt.title("Square Reconstruction Hausdorff Distance")
+    plt.legend()
+    plt.grid(True, which="both", ls="-", alpha=0.2)
+    plt.savefig(hausdorff_save_path, dpi=300, bbox_inches="tight")
+    plt.close()
+
+    plt.figure(figsize=(10, 6))
+    for algo, values in gap_results.items():
+        plt.plot(resolutions, values, marker="o", label=algo)
+    plt.xscale("log")
+    plt.xlabel("Resolution")
+    plt.yscale("log")
+    plt.ylabel("Average Facet Gap")
+    plt.title("Square Reconstruction Facet Gap")
+    plt.legend()
+    plt.grid(True, which="both", ls="-", alpha=0.2)
+    plt.savefig(gap_save_path, dpi=300, bbox_inches="tight")
+    plt.close()
+
+
+def create_area_plot(
     resolutions,
     area_results,
-    edge_results,
-    area_save_path="results/static/square_reconstruction_area.png",
-    edge_save_path="results/static/square_reconstruction_edge.png",
+    save_path="results/static/square_reconstruction_area.png",
 ):
-    # Area error plot
     plt.figure(figsize=(10, 6))
     for algo, values in area_results.items():
         plt.plot(resolutions, values, marker="o", label=algo)
@@ -409,24 +404,10 @@ def create_plots(
     plt.xlabel("Resolution")
     plt.yscale("log")
     plt.ylabel("Average Area Error")
-    plt.title("Square Reconstruction Performance")
+    plt.title("Square Reconstruction Area Error")
     plt.legend()
     plt.grid(True, which="both", ls="-", alpha=0.2)
-    plt.savefig(area_save_path, dpi=300, bbox_inches="tight")
-    plt.close()
-
-    # Edge alignment error plot
-    plt.figure(figsize=(10, 6))
-    for algo, values in edge_results.items():
-        plt.plot(resolutions, values, marker="o", label=algo)
-    plt.xscale("log")
-    plt.xlabel("Resolution")
-    plt.yscale("log")
-    plt.ylabel("Average Edge Alignment Error")
-    plt.title("Square Reconstruction Edge Alignment")
-    plt.legend()
-    plt.grid(True, which="both", ls="-", alpha=0.2)
-    plt.savefig(edge_save_path, dpi=300, bbox_inches="tight")
+    plt.savefig(save_path, dpi=300, bbox_inches="tight")
     plt.close()
 
 
@@ -440,18 +421,24 @@ def load_results_from_file(file_path):
     area_line = lines[1]
     area_str = area_line.split("Area Results: ")[1]
     area_results = eval(area_str)
-    edge_line = lines[2]
-    edge_str = edge_line.split("Edge Results: ")[1]
-    edge_results = eval(edge_str)
-    return resolutions, area_results, edge_results
+    gap_line = lines[2]
+    gap_str = gap_line.split("Gap Results: ")[1]
+    gap_results = eval(gap_str)
+    hausdorff_line = lines[3]
+    hausdorff_str = hausdorff_line.split("Hausdorff Results: ")[1]
+    hausdorff_results = eval(hausdorff_str)
+    return resolutions, area_results, gap_results, hausdorff_results
 
 
 def plot_from_results_file(
     file_path="results/static/square_reconstruction_results.txt",
 ):
     try:
-        resolutions, area_results, edge_results = load_results_from_file(file_path)
-        create_plots(resolutions, area_results, edge_results)
+        resolutions, area_results, gap_results, hausdorff_results = load_results_from_file(
+            file_path
+        )
+        create_primary_plots(resolutions, hausdorff_results, gap_results)
+        create_area_plot(resolutions, area_results)
         print(f"Plots created from {file_path}")
     except FileNotFoundError:
         print(f"Error: File {file_path} not found")
@@ -545,13 +532,18 @@ if __name__ == "__main__":
     elif args.plot_only:
         plot_from_results_file(args.results_file)
     elif args.sweep:
-        area_results, edge_results = run_parameter_sweep(args.config, args.num_squares)
+        area_results, gap_results, hausdorff_results = run_parameter_sweep(
+            args.config, args.num_squares
+        )
         print("\nParameter sweep results:")
         print("\nArea Error:")
         for algo, values in area_results.items():
             print(f"{algo}: {values}")
-        print("\nEdge Alignment Error:")
-        for algo, values in edge_results.items():
+        print("\nFacet Gap:")
+        for algo, values in gap_results.items():
+            print(f"{algo}: {values}")
+        print("\nHausdorff Distance:")
+        for algo, values in hausdorff_results.items():
             print(f"{algo}: {values}")
     else:
         main(

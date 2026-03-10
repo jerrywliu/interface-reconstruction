@@ -5,22 +5,32 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from main.structs.meshes.merge_mesh import MergeMesh
-from util.metrics.metrics import calculate_facet_gaps
-from main.geoms.geoms import getArea, getPolyIntersectArea
-from main.geoms.circular_facet import getCircleIntersectArea
+from main.geoms.geoms import (
+    getArea,
+    getDistance,
+    getPolyIntersectArea,
+    getPolyLineArea,
+    pointInPoly,
+)
+from main.geoms.circular_facet import getCircleIntersectArea, getCircleLineIntersects
+from main.geoms.corner_facet import getPolyCurvedCornerArea
 
 from util.config import read_yaml
 from util.io.setup import setupOutputDirs
 from util.reconstruction import runReconstruction
 from util.initialize.mesh_factory import make_points_from_config, apply_mesh_overrides
+from util.metrics.metrics import calculate_facet_gaps, hausdorff_interface
 from util.plotting.plt_utils import plotAreas, plotPartialAreas
 from util.plotting.vtk_utils import writeMesh
 from util.write_facets import writeFacets
+from util.logging.get_arc_facet_logger import arc_facet_log_context
 from main.structs.facets.circular_facet import ArcFacet
+from main.structs.facets.corner_facet import CornerFacet
 from main.structs.facets.linear_facet import LinearFacet
 
 # Global seed for reproducibility
 RANDOM_SEED = 43
+ZALESAK_POINT_TOL = 1e-8
 
 
 def rotate_point_around_center(point, center, theta):
@@ -47,57 +57,84 @@ def create_true_facets_zalesak(center, radius, slot_rect, theta=0.0):
     Returns:
         List of ArcFacet and LinearFacet objects representing the true interface
     """
-    from main.geoms.circular_facet import getCircleLineIntersects
+    def _dedupe_points(points):
+        unique = []
+        for point in points:
+            if not any(getDistance(point, existing) < ZALESAK_POINT_TOL for existing in unique):
+                unique.append(list(point))
+        return unique
 
-    true_facets = []
+    def _pick_wall_intersection(edge_start, intersections):
+        candidates = _dedupe_points(intersections)
+        if not candidates:
+            return None
+        return min(candidates, key=lambda point: getDistance(point, edge_start))
 
-    # Get intersection points between rectangle and circle
-    # We need to find where each edge of the rectangle intersects the circle
-    intersections = []
-    for i in range(4):
-        p1 = slot_rect[i]
-        p2 = slot_rect[(i + 1) % 4]
-        edge_intersects = getCircleLineIntersects(
-            p1, p2, center, radius, checkWithinLine=True
+    left_hits = getCircleLineIntersects(
+        slot_rect[0], slot_rect[3], center, radius, checkWithinLine=True
+    )
+    right_hits = getCircleLineIntersects(
+        slot_rect[1], slot_rect[2], center, radius, checkWithinLine=True
+    )
+    left_intersection = _pick_wall_intersection(slot_rect[0], left_hits)
+    right_intersection = _pick_wall_intersection(slot_rect[1], right_hits)
+
+    if left_intersection is None or right_intersection is None:
+        raise RuntimeError(
+            "Failed to build Zalesak true facets: expected one circle-slot intersection on each wall"
         )
-        if len(edge_intersects) == 2:
-            intersections.extend(edge_intersects)
 
-    # If we have exactly 2 intersections, the slot divides the circle
-    # Create the large arc from intersection[0] to intersection[1]
-    if len(intersections) == 2:
-        # Create the large arc (the part of circle not cut by slot)
-        true_facets.append(ArcFacet(center, radius, intersections[0], intersections[1]))
-    elif len(intersections) > 2:
-        # Multiple intersections - handle edge cases
-        # For now, just take first two
-        true_facets.append(ArcFacet(center, radius, intersections[0], intersections[1]))
+    # The correct outer interface is the long circular arc that avoids the slot interior.
+    arc_candidates = [
+        ArcFacet(center, radius, right_intersection, left_intersection),
+        ArcFacet(center, radius, left_intersection, right_intersection),
+    ]
+    outer_arc = next(
+        (candidate for candidate in arc_candidates if not pointInPoly(candidate.midpoint, slot_rect)),
+        None,
+    )
+    if outer_arc is None:
+        slot_center = [
+            sum(point[0] for point in slot_rect) / len(slot_rect),
+            sum(point[1] for point in slot_rect) / len(slot_rect),
+        ]
+        outer_arc = max(
+            arc_candidates,
+            key=lambda candidate: getDistance(candidate.midpoint, slot_center),
+        )
 
-    # Add rectangle edges. The slot typically has 3 visible edges in the interface:
-    # left (from bottom-left to top-left), top (from top-left to top-right),
-    # right (from top-right to bottom-right)
-    # The bottom edge is typically below the circle and not part of the interface
+    return [
+        outer_arc,
+        LinearFacet(left_intersection, slot_rect[3]),
+        LinearFacet(slot_rect[3], slot_rect[2]),
+        LinearFacet(slot_rect[2], right_intersection),
+    ]
 
-    # For a properly aligned Zalesak slot, intersections occur on the left and right edges
-    # We want to show the 3 edges: left, top, right
-    # Slot rect vertices: [bottom-left, bottom-right, top-right, top-left]
 
-    # Check if we have intersections on left/right edges to determine what to show
-    has_intersections = len(intersections) >= 2
-
-    if has_intersections:
-        # Add the three visible edges: left, top, right
-        true_facets.append(LinearFacet(slot_rect[0], slot_rect[3]))  # left edge
-        true_facets.append(LinearFacet(slot_rect[3], slot_rect[2]))  # top edge
-        true_facets.append(LinearFacet(slot_rect[2], slot_rect[1]))  # right edge
+def _reconstructed_facet_area(poly, facet, target_area=None):
+    if isinstance(facet, CornerFacet):
+        area = getPolyCurvedCornerArea(
+            poly,
+            facet.pLeft,
+            facet.corner,
+            facet.pRight,
+            facet.radiusLeft,
+            facet.radiusRight,
+        )
+    elif isinstance(facet, ArcFacet):
+        area = facet.getPolyIntersectArea(poly)
     else:
-        # Fallback: add all edges if no clear intersections
-        for i in range(4):
-            p1 = slot_rect[i]
-            p2 = slot_rect[(i + 1) % 4]
-            true_facets.append(LinearFacet(p1, p2))
+        area = getPolyLineArea(poly, facet.pLeft, facet.pRight)
 
-    return true_facets
+    poly_area = abs(getArea(poly))
+    area = min(max(area, 0.0), poly_area)
+    if target_area is None:
+        return area
+
+    complement = poly_area - area
+    if abs(complement - target_area) < abs(area - target_area):
+        return complement
+    return area
 
 
 def zalesak_removed_area(radius: float, slot_width: float, y_top_rel: float) -> float:
@@ -203,7 +240,7 @@ def main(
     do_c0 = config["GEOMS"]["DO_C0"]
 
     # Setup output directories
-    output_dirs = setupOutputDirs(save_name)
+    output_dirs = setupOutputDirs(save_name, clean_existing=True)
 
     # Initialize mesh once
     print("Generating mesh...")
@@ -228,6 +265,7 @@ def main(
     # Store metrics across cases
     area_errors = []
     facet_gaps = []
+    hausdorff_distances = []
 
     # True reference area (top strictly inside, bottom at/below rim)
     true_area = zalesak_total_area(radius, slot_width, slot_top_rel)
@@ -254,73 +292,98 @@ def main(
             m, os.path.join(output_dirs["plt_partial"], f"initial_zalesak{i}.png")
         )
 
-        # Run reconstruction
+        # Run reconstruction and any optional geometry logging under one case context.
         print(f"Reconstructing Zalesak {i+1}")
-        reconstructed_facets = runReconstruction(
-            m,
-            facet_algo,
-            do_c0,
-            i,
-            output_dirs,
-            algo_kwargs={},
-        )
+        with arc_facet_log_context(
+            experiment="zalesak",
+            algo=facet_algo,
+            resolution=resolution,
+            wiggle=perturb_wiggle,
+            seed=perturb_seed,
+            save_name=save_name,
+            case_index=i,
+        ):
+            reconstructed_facets, reconstructed_polys = runReconstruction(
+                m,
+                facet_algo,
+                do_c0,
+                i,
+                output_dirs,
+                algo_kwargs={},
+                return_polys=True,
+            )
 
-        # ---------- Save true facets to VTK ----------
-        # Reconstruct the slot rectangle
-        Cx, Cy = center
-        half_w = slot_width * 0.5
-        y_bottom = Cy - radius - 1.0e-6
-        y_top = Cy + slot_top_rel
-        rect = [
-            [Cx - half_w, y_bottom],
-            [Cx + half_w, y_bottom],
-            [Cx + half_w, y_top],
-            [Cx - half_w, y_top],
-        ]
-        # Rotate rectangle by theta around center
-        rect = [rotate_point_around_center(p, center, theta) for p in rect]
+            # ---------- Save true facets to VTK ----------
+            # Reconstruct the slot rectangle
+            Cx, Cy = center
+            half_w = slot_width * 0.5
+            y_bottom = Cy - radius - 1.0e-6
+            y_top = Cy + slot_top_rel
+            rect = [
+                [Cx - half_w, y_bottom],
+                [Cx + half_w, y_bottom],
+                [Cx + half_w, y_top],
+                [Cx - half_w, y_top],
+            ]
+            # Rotate rectangle by theta around center
+            rect = [rotate_point_around_center(p, center, theta) for p in rect]
 
-        true_facets = create_true_facets_zalesak(center, radius, rect, theta)
-        writeFacets(
-            true_facets,
-            os.path.join(output_dirs["vtk_true"], f"true_zalesak{i}.vtp"),
-        )
+            true_facets = create_true_facets_zalesak(center, radius, rect, theta)
+            writeFacets(
+                true_facets,
+                os.path.join(output_dirs["vtk_true"], f"true_zalesak{i}.vtp"),
+            )
 
-        # Area error vs analytical area
-        reconstructed_total_area = 0.0
-        for poly, facet in zip(m.merged_polys.values(), reconstructed_facets):
-            # Approximate area from facet by splitting polygon with linear facet endpoints
-            try:
-                from main.geoms.geoms import getPolyLineArea
+            # Area error vs analytical area
+            reconstructed_total_area = 0.0
+            for row in m.polys:
+                for poly in row:
+                    if poly.getFraction() >= 1 - threshold:
+                        reconstructed_total_area += poly.getMaxArea()
 
-                reconstructed_total_area += getPolyLineArea(
-                    poly.points, facet.pLeft, facet.pRight
-                )
-            except Exception:
-                continue
+            for facet_index, (poly, facet) in enumerate(
+                zip(reconstructed_polys, reconstructed_facets)
+            ):
+                try:
+                    with arc_facet_log_context(
+                        metric_stage="area_error",
+                        facet_index=facet_index,
+                    ):
+                        reconstructed_total_area += _reconstructed_facet_area(
+                            poly.points,
+                            facet,
+                            target_area=poly.getFraction() * poly.getMaxArea(),
+                        )
+                except Exception:
+                    continue
 
-        area_error = abs(reconstructed_total_area - true_area) / max(true_area, 1e-12)
-        print(f"Area error for case {i+1}: {area_error:.3e}")
+            area_error = abs(reconstructed_total_area - true_area) / max(true_area, 1e-12)
+            print(f"Area error for case {i+1}: {area_error:.3e}")
 
-        # Facet gaps
-        avg_gap = calculate_facet_gaps(m, reconstructed_facets)
-        print(f"Average facet gap for case {i+1}: {avg_gap:.3e}")
+            # Facet gaps / Hausdorff
+            avg_gap = calculate_facet_gaps(m, reconstructed_facets)
+            hausdorff_distance = hausdorff_interface(true_facets, reconstructed_facets)
+            print(f"Average facet gap for case {i+1}: {avg_gap:.3e}")
+            print(f"Hausdorff distance for case {i+1}: {hausdorff_distance:.3e}")
 
-        # Save metrics
-        with open(os.path.join(output_dirs["metrics"], "area_error.txt"), "a") as f:
-            f.write(f"{area_error}\n")
-        with open(os.path.join(output_dirs["metrics"], "facet_gap.txt"), "a") as f:
-            f.write(f"{avg_gap}\n")
+            # Save metrics
+            with open(os.path.join(output_dirs["metrics"], "area_error.txt"), "a") as f:
+                f.write(f"{area_error}\n")
+            with open(os.path.join(output_dirs["metrics"], "facet_gap.txt"), "a") as f:
+                f.write(f"{avg_gap}\n")
+            with open(os.path.join(output_dirs["metrics"], "hausdorff.txt"), "a") as f:
+                f.write(f"{hausdorff_distance}\n")
 
-        area_errors.append(area_error)
-        facet_gaps.append(avg_gap)
+            area_errors.append(area_error)
+            facet_gaps.append(avg_gap)
+            hausdorff_distances.append(hausdorff_distance)
 
-    return area_errors, facet_gaps
+    return area_errors, facet_gaps, hausdorff_distances
 
 
 def create_combined_plot(
     resolutions,
-    area_results,
+    hausdorff_results,
     gap_results,
     save_path="results/static/zalesak_reconstruction_combined.png",
 ):
@@ -353,19 +416,40 @@ def create_combined_plot(
     ax1.legend(fontsize=12, frameon=True, fancybox=True, shadow=False, loc="best")
     ax1.grid(True, which="both", ls="-", alpha=0.3)
 
-    # Area errors
-    for algo, values in area_results.items():
+    # Hausdorff distances
+    for algo, values in hausdorff_results.items():
         plt.sca(ax2)
         plt.plot(x_values, values, marker="o", label=algo)
     ax2.set_xscale("log", base=2)
     ax2.set_xlabel(r"Resolution", fontsize=14)
     ax2.set_yscale("log")
-    ax2.set_ylabel("Average Area Error", fontsize=14)
-    ax2.set_title("Area Error", fontsize=16, fontweight="bold")
+    ax2.set_ylabel("Average Hausdorff Distance", fontsize=14)
+    ax2.set_title("Hausdorff Distance", fontsize=16, fontweight="bold")
     ax2.legend(fontsize=12, frameon=True, fancybox=True, shadow=False, loc="best")
     ax2.grid(True, which="both", ls="-", alpha=0.3)
 
     plt.suptitle("Zalesak Static Reconstruction", fontsize=18, fontweight="bold")
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.close()
+
+
+def create_area_plot(
+    resolutions,
+    area_results,
+    save_path="results/static/zalesak_reconstruction_area.png",
+):
+    plt.figure(figsize=(8, 6))
+    x_values = [int(100 * r) for r in resolutions]
+    for algo, values in area_results.items():
+        plt.plot(x_values, values, marker="o", label=algo)
+    plt.xscale("log", base=2)
+    plt.xlabel(r"Resolution", fontsize=14)
+    plt.yscale("log")
+    plt.ylabel("Average Area Error", fontsize=14)
+    plt.title("Zalesak Area Error", fontsize=16, fontweight="bold")
+    plt.legend(fontsize=12, frameon=True, fancybox=True, shadow=False, loc="best")
+    plt.grid(True, which="both", ls="-", alpha=0.3)
     plt.tight_layout()
     plt.savefig(save_path, dpi=300, bbox_inches="tight")
     plt.close()
@@ -379,15 +463,19 @@ def load_results_from_file(file_path):
     resolutions = eval(resolutions_line.split("Resolutions: ")[1])
     area_results = eval(lines[1].split("Area Results: ")[1])
     gap_results = eval(lines[2].split("Gap Results: ")[1])
-    return resolutions, area_results, gap_results
+    hausdorff_results = eval(lines[3].split("Hausdorff Results: ")[1])
+    return resolutions, area_results, gap_results, hausdorff_results
 
 
 def plot_from_results_file(
     file_path="results/static/zalesak_reconstruction_results.txt",
 ):
     try:
-        resolutions, area_results, gap_results = load_results_from_file(file_path)
-        create_combined_plot(resolutions, area_results, gap_results)
+        resolutions, area_results, gap_results, hausdorff_results = load_results_from_file(
+            file_path
+        )
+        create_combined_plot(resolutions, hausdorff_results, gap_results)
+        create_area_plot(resolutions, area_results)
         print(f"Combined plot created from {file_path}")
     except FileNotFoundError:
         print(f"Error: File {file_path} not found")
@@ -420,11 +508,12 @@ def run_parameter_sweep(
     ]
     area_results = {algo: [] for algo in facet_algos}
     gap_results = {algo: [] for algo in facet_algos}
+    hausdorff_results = {algo: [] for algo in facet_algos}
     for resolution in resolutions:
         print(f"\nRunning experiments for resolution {resolution}")
         for algo, save_name in zip(facet_algos, save_names):
             print(f"Testing {algo} algorithm...")
-            areas, gaps = main(
+            areas, gaps, hausdorff_values = main(
                 config_setting=config_setting,
                 resolution=resolution,
                 facet_algo=algo,
@@ -436,13 +525,18 @@ def run_parameter_sweep(
             )
             area_results[algo].append(max(np.mean(np.array(areas)), MIN_ERROR))
             gap_results[algo].append(max(np.mean(np.array(gaps)), MIN_ERROR))
+            hausdorff_results[algo].append(
+                max(np.mean(np.array(hausdorff_values)), MIN_ERROR)
+            )
 
-    create_combined_plot(resolutions, area_results, gap_results)
+    create_combined_plot(resolutions, hausdorff_results, gap_results)
+    create_area_plot(resolutions, area_results)
     with open("results/static/zalesak_reconstruction_results.txt", "w") as f:
         f.write(f"Resolutions: {resolutions}\n")
         f.write(f"Area Results: {area_results}\n")
         f.write(f"Gap Results: {gap_results}\n")
-    return area_results, gap_results
+        f.write(f"Hausdorff Results: {hausdorff_results}\n")
+    return area_results, gap_results, hausdorff_results
 
 
 if __name__ == "__main__":
@@ -509,7 +603,7 @@ if __name__ == "__main__":
     if args.plot_only:
         plot_from_results_file(args.results_file)
     elif args.sweep:
-        area_results, gap_results = run_parameter_sweep(
+        area_results, gap_results, hausdorff_results = run_parameter_sweep(
             args.config, args.num_cases, args.radius, args.slot_width
         )
         print("\nParameter sweep results:")
@@ -518,6 +612,9 @@ if __name__ == "__main__":
             print(f"{algo}: {values}")
         print("\nFacet Gaps:")
         for algo, values in gap_results.items():
+            print(f"{algo}: {values}")
+        print("\nHausdorff Distance:")
+        for algo, values in hausdorff_results.items():
             print(f"{algo}: {values}")
     else:
         main(

@@ -22,6 +22,7 @@ from main.structs.facets.base_facet import advectPoint
 from main.structs.facets.circular_facet import ArcFacet
 from main.structs.facets.corner_facet import CornerFacet
 from main.structs.facets.linear_facet import LinearFacet
+from util.logging.get_arc_facet_logger import arc_facet_log_context
 
 """
 A class for meshes that merge cells.
@@ -322,8 +323,16 @@ class MergeMesh(BaseMesh):
                 if self.polys[x][y].isMixed():
                     mixed_poly: BasePolygon = self.polys[x][y]
                     mixed_poly.set3x3Stencil(self.get3x3Stencil(x, y))
-                    mixed_facet = mixed_poly.runSafeCircle(ret=True)
-                    self.merged_polys[self._get_merge_id(x, y)].setFacet(mixed_facet)
+                    merge_id = self._get_merge_id(x, y)
+                    merge_coords = self._get_merge_coords(merge_id)
+                    with arc_facet_log_context(
+                        call_source="safe_circle",
+                        grid_coords=[x, y],
+                        merge_id=merge_id,
+                        merge_coords=merge_coords,
+                    ):
+                        mixed_facet = mixed_poly.runSafeCircle(ret=True)
+                    self.merged_polys[merge_id].setFacet(mixed_facet)
 
     # 1. Runs linear on all mixed cells
     # 2. Tries linear corners on all mixed cells
@@ -2000,7 +2009,12 @@ class MergeMesh(BaseMesh):
                         merged_poly.fitLinearFacet()
                         merged_poly.getFacet().name = "linear_deadend"
                     else:
-                        merged_poly.fitCircularFacet()
+                        with arc_facet_log_context(
+                            call_source="circular",
+                            merge_id=merge_id,
+                            merge_coords=self._get_merge_coords(merge_id),
+                        ):
+                            merged_poly.fitCircularFacet()
                         # If circular facet fitter failed, default to linear
                         if not (merged_poly.hasFacet()):
                             merged_poly.fitLinearFacet()

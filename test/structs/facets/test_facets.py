@@ -12,6 +12,7 @@ from main.geoms.geoms import getDistance
 from main.structs.facets.circular_facet import ArcFacet
 from main.structs.facets.corner_facet import CornerFacet
 from main.structs.facets.linear_facet import LinearFacet
+from main.structs.interface_geometry import ArcPrimitive, LinePrimitive, composite_from_facet
 
 
 def assert_close(a, b, tol=1e-9):
@@ -83,6 +84,27 @@ def test_arc_facet_advected_zero_velocity():
     assert_close(abs(adv.radius), 1.0, tol=1e-6)
 
 
+def test_arc_facet_poly_intersect_area_handles_endpoint_roundoff_case():
+    poly = [
+        [46.9930902846328, 57.98514685599057],
+        [48.035304846342704, 57.80830608587295],
+        [47.700198930048906, 58.9957116764918],
+        [47.12791288380223, 58.75634041000361],
+    ]
+    facet = ArcFacet(
+        [215.81150889003243, 63.016632740100164],
+        -167.98597195255488,
+        [47.90561606954499, 57.83031140417026],
+        [47.89123912574505, 58.318784814348184],
+    )
+
+    area = facet.getPolyIntersectArea(poly)
+
+    assert math.isfinite(area)
+    assert area >= 0.0
+    assert area <= abs(getDistance(poly[0], poly[1]) * getDistance(poly[1], poly[2])) * 2
+
+
 def test_corner_facet_sample_and_advected_zero_velocity():
     facet = CornerFacet(
         centerLeft=None,
@@ -111,10 +133,94 @@ def test_corner_facet_sample_and_advected_zero_velocity():
     assert_point_close(adv.pRight, facet.pRight)
 
 
+def test_linear_facet_canonicalization():
+    facet = LinearFacet([0.0, 0.0], [2.0, 0.0])
+    composite = composite_from_facet(facet)
+
+    assert len(composite.primitives) == 1
+    assert isinstance(composite.primitives[0], LinePrimitive)
+    assert composite.joints == []
+    assert_point_close(composite.primitives[0].pLeft, facet.pLeft)
+    assert_point_close(composite.primitives[0].pRight, facet.pRight)
+
+
+def test_arc_facet_canonicalization():
+    facet = ArcFacet([0.0, 0.0], 1.0, [1.0, 0.0], [0.0, 1.0])
+    composite = composite_from_facet(facet)
+
+    assert len(composite.primitives) == 1
+    assert isinstance(composite.primitives[0], ArcPrimitive)
+    assert composite.joints == []
+    assert_point_close(composite.primitives[0].pLeft, facet.pLeft)
+    assert_point_close(composite.primitives[0].pRight, facet.pRight)
+
+
+def test_linear_linear_corner_canonicalization():
+    facet = CornerFacet(
+        centerLeft=None,
+        centerRight=None,
+        radiusLeft=None,
+        radiusRight=None,
+        pLeft=[0.0, 0.0],
+        corner=[1.0, 0.0],
+        pRight=[1.0, 1.0],
+    )
+    composite = composite_from_facet(facet)
+
+    assert len(composite.primitives) == 2
+    assert isinstance(composite.primitives[0], LinePrimitive)
+    assert isinstance(composite.primitives[1], LinePrimitive)
+    assert len(composite.joints) == 1
+    assert composite.joints[0].kind == "corner"
+    assert_point_close(composite.primitives[0].pRight, facet.corner)
+    assert_point_close(composite.primitives[1].pLeft, facet.corner)
+
+
+def test_line_arc_corner_canonicalization():
+    facet = CornerFacet(
+        centerLeft=None,
+        centerRight=[0.0, 0.0],
+        radiusLeft=None,
+        radiusRight=1.0,
+        pLeft=[0.0, 0.0],
+        corner=[1.0, 0.0],
+        pRight=[0.0, 1.0],
+    )
+    composite = composite_from_facet(facet)
+
+    assert len(composite.primitives) == 2
+    assert isinstance(composite.primitives[0], LinePrimitive)
+    assert isinstance(composite.primitives[1], ArcPrimitive)
+    assert composite.joints[0].kind == "corner"
+    assert_point_close(composite.primitives[1].pLeft, facet.corner)
+    assert_point_close(composite.primitives[1].pRight, facet.pRight)
+
+
+def test_arc_arc_corner_canonicalization():
+    facet = CornerFacet(
+        centerLeft=[0.0, 0.0],
+        centerRight=[0.0, 0.0],
+        radiusLeft=1.0,
+        radiusRight=1.0,
+        pLeft=[0.0, 1.0],
+        corner=[1.0, 0.0],
+        pRight=[0.0, -1.0],
+    )
+    composite = composite_from_facet(facet)
+
+    assert len(composite.primitives) == 2
+    assert isinstance(composite.primitives[0], ArcPrimitive)
+    assert isinstance(composite.primitives[1], ArcPrimitive)
+    assert composite.joints[0].kind == "corner"
+    assert_point_close(composite.primitives[0].pRight, facet.corner)
+    assert_point_close(composite.primitives[1].pLeft, facet.corner)
+
+
 if __name__ == "__main__":
     test_linear_facet_sample_and_tangent()
     test_linear_facet_advected_zero_velocity()
     test_arc_facet_sample_and_tangent()
     test_arc_facet_advected_zero_velocity()
+    test_arc_facet_poly_intersect_area_handles_endpoint_roundoff_case()
     test_corner_facet_sample_and_advected_zero_velocity()
     print("Facet tests completed.")

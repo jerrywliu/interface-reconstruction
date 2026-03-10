@@ -1,37 +1,67 @@
 import math
-from typing import Iterable, Sequence, Union
+from typing import Iterable, Optional, Sequence, Union
 
 import numpy as np
 from scipy.spatial import cKDTree
 
 from main.geoms.geoms import getDistance
-from main.structs.facets.base_facet import getNormal
 from main.structs.facets.circular_facet import ArcFacet
 from main.structs.facets.corner_facet import CornerFacet
 from main.structs.facets.linear_facet import LinearFacet
 from main.structs.interface import Interface
+from main.structs.interface_geometry import (
+    ArcPrimitive,
+    LinePrimitive,
+    Primitive,
+    iter_primitives_from_facets,
+)
+
+FacetLike = Union[LinearFacet, ArcFacet, CornerFacet, LinePrimitive, ArcPrimitive]
 
 
-def hausdorffFacets(
-    facet1: Union[LinearFacet, ArcFacet, CornerFacet],
-    facet2: Union[LinearFacet, ArcFacet, CornerFacet],
-    n=100,
-):
-    """
-    Compute Hausdorff distance between two facets using numerical approximation.
-    
-    Args:
-        facet1: First facet (LinearFacet, ArcFacet, or CornerFacet)
-        facet2: Second facet (LinearFacet, ArcFacet, or CornerFacet)
-        n: Number of equispaced points to sample along each facet (default: 100)
-        
-    Returns:
-        float: Hausdorff distance
-    """
-    
-    points1 = facet1.sample(n)
-    points2 = facet2.sample(n)
-    return hausdorff_points(points1, points2)
+def _normalize(vec: Sequence[float]):
+    arr = np.asarray(vec, dtype=float)
+    norm = float(np.linalg.norm(arr))
+    if norm < 1e-12:
+        return None
+    return arr / norm
+
+
+def _as_primitive_list(geometry) -> list[Primitive]:
+    if geometry is None:
+        return []
+    if isinstance(geometry, Interface):
+        primitives = []
+        for component in geometry.components:
+            for record in component.records:
+                primitives.extend(iter_primitives_from_facets([record.facet]))
+        return primitives
+    if isinstance(
+        geometry,
+        (LinearFacet, ArcFacet, CornerFacet, LinePrimitive, ArcPrimitive),
+    ):
+        return list(iter_primitives_from_facets([geometry]))
+    return list(iter_primitives_from_facets(geometry))
+
+
+def _point_to_line_distance(point, primitive: LinePrimitive) -> float:
+    return primitive.distance_to_point(point)
+
+
+def _point_to_arc_distance(point, primitive: ArcPrimitive) -> float:
+    return primitive.distance_to_point(point)
+
+
+def point_to_primitive_distance(point, primitive: Primitive) -> float:
+    if isinstance(primitive, LinePrimitive):
+        return _point_to_line_distance(point, primitive)
+    return _point_to_arc_distance(point, primitive)
+
+
+def point_to_primitives_distance(point, primitives: Sequence[Primitive]) -> float:
+    if not primitives:
+        return float("inf")
+    return min(point_to_primitive_distance(point, primitive) for primitive in primitives)
 
 
 def hausdorff_points(points1: Iterable, points2: Iterable) -> float:
@@ -53,7 +83,133 @@ def hausdorff_points(points1: Iterable, points2: Iterable) -> float:
     return max(np.max(d1), np.max(d2))
 
 
+def _bbox_diameter_from_primitives(primitives: Sequence[Primitive]) -> float:
+    bbox_points = []
+    for primitive in primitives:
+        bbox_points.extend(primitive.bbox_points())
+    if not bbox_points:
+        return 0.0
+    pts = np.asarray(bbox_points, dtype=float)
+    mins = np.min(pts, axis=0)
+    maxs = np.max(pts, axis=0)
+    return float(np.linalg.norm(maxs - mins))
+
+
+def _sample_primitives_by_spacing(
+    primitives: Sequence[Primitive], max_spacing: float
+) -> np.ndarray:
+    points = []
+    prev = None
+    for primitive in primitives:
+        sample_points = primitive.sample_by_max_spacing(max_spacing)
+        for point in sample_points:
+            point_arr = np.asarray(point, dtype=float)
+            if prev is not None and np.linalg.norm(point_arr - prev) < 1e-14:
+                continue
+            points.append(point_arr)
+            prev = point_arr
+    if not points:
+        return np.zeros((0, 2))
+    return np.asarray(points, dtype=float)
+
+
+def directed_hausdorff_primitives(
+    source_primitives: Sequence[Primitive],
+    target_primitives: Sequence[Primitive],
+    tol_abs: float,
+    ds_min: float,
+    initial_samples_per_primitive: int = 8,
+) -> float:
+    if not source_primitives or not target_primitives:
+        return float("inf")
+
+    max_length = max((primitive.length() for primitive in source_primitives), default=0.0)
+    if max_length < 1e-12:
+        point = source_primitives[0].pLeft
+        return point_to_primitives_distance(point, target_primitives)
+
+    initial_samples_per_primitive = max(2, int(initial_samples_per_primitive))
+    spacing = max(max_length / (initial_samples_per_primitive - 1), ds_min)
+    previous_estimate = None
+
+    while True:
+        sample_points = _sample_primitives_by_spacing(source_primitives, spacing)
+        if sample_points.size == 0:
+            return float("inf")
+        estimate = max(
+            point_to_primitives_distance(point, target_primitives)
+            for point in sample_points
+        )
+
+        if previous_estimate is not None and abs(estimate - previous_estimate) <= tol_abs:
+            return max(estimate, previous_estimate)
+        if spacing <= ds_min * (1.0 + 1e-12):
+            return estimate if previous_estimate is None else max(estimate, previous_estimate)
+
+        previous_estimate = estimate
+        spacing = max(spacing * 0.5, ds_min)
+
+
+def hausdorff_interface(
+    geometry1,
+    geometry2,
+    tol_abs: Optional[float] = None,
+    ds_min: Optional[float] = None,
+    initial_samples_per_primitive: int = 8,
+) -> float:
+    primitives1 = _as_primitive_list(geometry1)
+    primitives2 = _as_primitive_list(geometry2)
+    if not primitives1 or not primitives2:
+        return float("inf")
+
+    bbox_diameter = _bbox_diameter_from_primitives(primitives1 + primitives2)
+    scale = max(bbox_diameter, 1.0)
+    tol_abs = 1e-12 * scale if tol_abs is None else tol_abs
+    ds_min = 1e-4 * scale if ds_min is None else ds_min
+
+    d12 = directed_hausdorff_primitives(
+        primitives1,
+        primitives2,
+        tol_abs=tol_abs,
+        ds_min=ds_min,
+        initial_samples_per_primitive=initial_samples_per_primitive,
+    )
+    d21 = directed_hausdorff_primitives(
+        primitives2,
+        primitives1,
+        tol_abs=tol_abs,
+        ds_min=ds_min,
+        initial_samples_per_primitive=initial_samples_per_primitive,
+    )
+    return max(d12, d21)
+
+
+def hausdorffFacets(
+    facet1: FacetLike,
+    facet2: FacetLike,
+    n=100,
+):
+    """
+    Compute Hausdorff distance between two facets using adaptive sampling over
+    their canonical primitive representation.
+    """
+    return hausdorff_interface(
+        [facet1],
+        [facet2],
+        initial_samples_per_primitive=max(8, int(n)),
+    )
+
+
 def interface_gap_stats(interface: Interface, mode: str = "euclidean"):
+    def _euclidean_gap(record_i, record_j):
+        endpoints_i = (record_i.facet.pLeft, record_i.facet.pRight)
+        endpoints_j = (record_j.facet.pLeft, record_j.facet.pRight)
+        return min(
+            getDistance(point_i, point_j)
+            for point_i in endpoints_i
+            for point_j in endpoints_j
+        )
+
     gaps = []
     for component in interface.components:
         records = component.records
@@ -63,17 +219,19 @@ def interface_gap_stats(interface: Interface, mode: str = "euclidean"):
             j = (i + 1) % len(records) if component.is_closed else i + 1
             if j >= len(records):
                 continue
-            p_right = records[i].right_point()
-            p_left = records[j].left_point()
-            if mode == "normal":
-                normal = getNormal(records[i].facet, p_right)
+            record_i = records[i]
+            record_j = records[j]
+            p_right = record_i.right_point()
+            p_left = record_j.left_point()
+            if mode == "normal" and record_i.right_joint() != "corner":
+                normal = getattr(record_i.facet, "normal_at_point", lambda p: None)(p_right)
                 if normal is None:
-                    gap = getDistance(p_right, p_left)
+                    gap = _euclidean_gap(record_i, record_j)
                 else:
-                    delta = np.asarray(p_right) - np.asarray(p_left)
+                    delta = np.asarray(p_right, dtype=float) - np.asarray(p_left, dtype=float)
                     gap = abs(float(np.dot(delta, normal)))
             else:
-                gap = getDistance(p_right, p_left)
+                gap = _euclidean_gap(record_i, record_j)
             gaps.append(gap)
 
     if not gaps:
@@ -117,38 +275,19 @@ def calculate_facet_gaps(
     return stats if return_stats else stats["mean"]
 
 
-def _normalize(vec: Sequence[float]):
-    arr = np.asarray(vec, dtype=float)
-    norm = float(np.linalg.norm(arr))
-    if norm < 1e-12:
-        return None
-    return arr / norm
-
-
-def _flatten_facets(facets: Iterable):
-    for facet in facets:
-        if isinstance(facet, CornerFacet):
-            yield facet.facetLeft
-            yield facet.facetRight
-        else:
-            yield facet
-
-
 def sample_facets_with_tangents(
-    facets: Iterable[Union[LinearFacet, ArcFacet, CornerFacet]],
+    facets: Iterable[FacetLike],
     n_per_facet: int = 50,
 ):
     points = []
     tangents = []
-    for facet in _flatten_facets(facets):
-        if facet is None:
-            continue
-        samples = facet.sample(max(2, n_per_facet))
-        for p in samples:
-            tangent = _normalize(facet.getTangent(p))
+    for primitive in iter_primitives_from_facets(facets):
+        samples = primitive.sample(max(2, n_per_facet))
+        for point in samples:
+            tangent = _normalize(primitive.getTangent(point))
             if tangent is None:
                 continue
-            points.append(p)
+            points.append(point)
             tangents.append(tangent)
 
     if not points:
@@ -157,7 +296,7 @@ def sample_facets_with_tangents(
 
 
 def tangent_error_to_curve(
-    reconstructed_facets: Iterable[Union[LinearFacet, ArcFacet, CornerFacet]],
+    reconstructed_facets: Iterable[FacetLike],
     true_points: Sequence[Sequence[float]],
     true_tangents: Sequence[Sequence[float]],
     n_per_facet: int = 50,
@@ -187,7 +326,7 @@ def tangent_error_to_curve(
             continue
         t_recon = recon_tans[idx]
         dot = float(np.clip(np.dot(t_true, t_recon), -1.0, 1.0))
-        dot = abs(dot)  # tangent direction is sign-invariant
+        dot = abs(dot)
         angle = math.acos(dot)
         angles.append(angle)
 
@@ -277,8 +416,10 @@ def interface_turning_curvature(interface: Interface):
 
             rec_i = records[i]
             rec_j = records[j]
-            p_joint = rec_i.right_point()
+            if rec_i.right_joint() == "corner":
+                continue
 
+            p_joint = rec_i.right_point()
             tan_i = _normalize(rec_i.facet.getTangent(p_joint))
             tan_j = _normalize(rec_j.facet.getTangent(p_joint))
             if tan_i is None or tan_j is None:
@@ -288,8 +429,8 @@ def interface_turning_curvature(interface: Interface):
             cross = float(tan_i[0] * tan_j[1] - tan_i[1] * tan_j[0])
             angle = abs(math.atan2(cross, dot))
 
-            len_i = getDistance(rec_i.left_point(), rec_i.right_point())
-            len_j = getDistance(rec_j.left_point(), rec_j.right_point())
+            len_i = rec_i.facet.length()
+            len_j = rec_j.facet.length()
             avg_len = 0.5 * (len_i + len_j)
             if avg_len < 1e-12:
                 continue

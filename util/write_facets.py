@@ -1,6 +1,8 @@
 import vtk
 import os
 
+from main.structs.interface_geometry import ArcPrimitive, iter_primitives_from_facets
+
 ARC_RESOLUTION = 8
 
 # TODO JL 3/12/25: edit this to visualize facets as VTK if necessary
@@ -89,14 +91,8 @@ def writeFacets(facets, path):
 
     vtkappend = vtk.vtkAppendPolyData()
 
-    for facet in facets:
-        if facet.name == "linear":
-            line = vtk.vtkLineSource()
-            line.SetPoint1(facet.pLeft[0], facet.pLeft[1], 0)
-            line.SetPoint2(facet.pRight[0], facet.pRight[1], 0)
-            line.Update()
-            vtkappend.AddInputData(line.GetOutput())
-        elif facet.name == "arc":
+    for facet in iter_primitives_from_facets(facets):
+        if isinstance(facet, ArcPrimitive):
             arc = vtk.vtkArcSource()
             arc.SetPoint1(facet.pLeft[0], facet.pLeft[1], 0)
             arc.SetPoint2(facet.pRight[0], facet.pRight[1], 0)
@@ -104,39 +100,12 @@ def writeFacets(facets, path):
             arc.SetResolution(ARC_RESOLUTION)
             arc.Update()
             vtkappend.AddInputData(arc.GetOutput())
-        elif facet.name == "corner":
-            # Left
-            if facet.centerLeft is None and facet.radiusLeft is None:
-                line = vtk.vtkLineSource()
-                line.SetPoint1(facet.pLeft[0], facet.pLeft[1], 0)
-                line.SetPoint2(facet.corner[0], facet.corner[1], 0)
-                line.Update()
-                vtkappend.AddInputData(line.GetOutput())
-            else:
-                arc = vtk.vtkArcSource()
-                arc.SetPoint1(facet.pLeft[0], facet.pLeft[1], 0)
-                arc.SetPoint2(facet.corner[0], facet.corner[1], 0)
-                arc.SetCenter(facet.centerLeft[0], facet.centerLeft[1], 0)
-                arc.SetResolution(ARC_RESOLUTION)
-                arc.Update()
-                vtkappend.AddInputData(arc.GetOutput())
-            # Right
-            if facet.centerRight is None and facet.radiusRight is None:
-                line = vtk.vtkLineSource()
-                line.SetPoint1(facet.corner[0], facet.corner[1], 0)
-                line.SetPoint2(facet.pRight[0], facet.pRight[1], 0)
-                line.Update()
-                vtkappend.AddInputData(line.GetOutput())
-            else:
-                arc = vtk.vtkArcSource()
-                arc.SetPoint1(facet.corner[0], facet.corner[1], 0)
-                arc.SetPoint2(facet.pRight[0], facet.pRight[1], 0)
-                arc.SetCenter(facet.centerRight[0], facet.centerRight[1], 0)
-                arc.SetResolution(ARC_RESOLUTION)
-                arc.Update()
-                vtkappend.AddInputData(arc.GetOutput())
         else:
-            print(f"Unknown facet type: {facet.name}")
+            line = vtk.vtkLineSource()
+            line.SetPoint1(facet.pLeft[0], facet.pLeft[1], 0)
+            line.SetPoint2(facet.pRight[0], facet.pRight[1], 0)
+            line.Update()
+            vtkappend.AddInputData(line.GetOutput())
 
     vtkappend.Update()
     writer = vtk.vtkXMLPolyDataWriter()

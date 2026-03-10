@@ -1,12 +1,16 @@
 import os
+import shutil
 
 
-def setupOutputDirs(save_name):
+def setupOutputDirs(save_name, clean_existing=False):
     """
     Create all necessary output directories if they don't exist.
     Returns a dictionary of directory paths.
     """
     base_dir = os.path.join("plots", save_name)
+
+    if clean_existing and os.path.isdir(base_dir):
+        shutil.rmtree(base_dir)
 
     # Define directory structure
     dirs = {

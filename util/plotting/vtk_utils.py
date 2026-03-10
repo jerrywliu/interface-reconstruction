@@ -3,6 +3,7 @@ import vtk
 
 from main.structs.meshes.base_mesh import BaseMesh
 from main.structs.meshes.merge_mesh import MergeMesh
+from main.structs.interface_geometry import ArcPrimitive, iter_primitives_from_facets, primitive_type_code
 
 # Plot mesh as vtk file
 def writeMesh(m: BaseMesh, path):
@@ -68,31 +69,10 @@ def writeFacets(facets, path):
     vtkappend = vtk.vtkAppendPolyData()
     facet_types = vtk.vtkIntArray()
 
-    for facet in facets:
+    for facet in iter_primitives_from_facets(facets):
         if facet is None:
-            continue # TODO: Fix this
-        if facet.name == "linear" or facet.name == "default_linear" or facet.name == "linear_deadend" or facet.name == "Youngs" or facet.name == "LVIRA":
-            line = vtk.vtkLineSource()
-            line.SetPoint1(facet.pLeft[0], facet.pLeft[1], 0)
-            line.SetPoint2(facet.pRight[0], facet.pRight[1], 0)
-            line.Update()
-            vtkappend.AddInputData(line.GetOutput())
-            if facet.name == "linear":
-                # Facet type: linear = 0
-                facet_types.InsertNextTypedTuple([0])
-            elif facet.name == "default_linear":
-                # Facet type: default_linear = 4
-                facet_types.InsertNextTypedTuple([4])
-            elif facet.name == "linear_deadend":
-                # Facet type: linear_deadend = 5
-                facet_types.InsertNextTypedTuple([5])
-            elif facet.name == "Youngs":
-                # Facet type: Youngs = 6
-                facet_types.InsertNextTypedTuple([6])
-            else:
-                # Facet type: LVIRA = 7
-                facet_types.InsertNextTypedTuple([7])
-        elif facet.name == 'arc':
+            continue
+        if isinstance(facet, ArcPrimitive):
             arc = vtk.vtkArcSource()
             arc.SetPoint1(facet.pLeft[0], facet.pLeft[1], 0)
             arc.SetPoint2(facet.pRight[0], facet.pRight[1], 0)
@@ -100,51 +80,14 @@ def writeFacets(facets, path):
             arc.SetResolution(ARC_RESOLUTION)
             arc.Update()
             vtkappend.AddInputData(arc.GetOutput())
-            # Facet type: arc = 1
-            facet_types.InsertNextTypedTuple([1])
-        elif facet.name == 'corner':
-            # Left
-            if facet.centerLeft is None and facet.radiusLeft is None:
-                line = vtk.vtkLineSource()
-                line.SetPoint1(facet.pLeft[0], facet.pLeft[1], 0)
-                line.SetPoint2(facet.corner[0], facet.corner[1], 0)
-                line.Update()
-                vtkappend.AddInputData(line.GetOutput())
-            else:
-                arc = vtk.vtkArcSource()
-                arc.SetPoint1(facet.pLeft[0], facet.pLeft[1], 0)
-                arc.SetPoint2(facet.corner[0], facet.corner[1], 0)
-                arc.SetCenter(facet.centerLeft[0], facet.centerLeft[1], 0)
-                arc.SetResolution(ARC_RESOLUTION)
-                arc.Update()
-                vtkappend.AddInputData(arc.GetOutput())
-            # Right
-            if facet.centerRight is None and facet.radiusRight is None:
-                line = vtk.vtkLineSource()
-                line.SetPoint1(facet.corner[0], facet.corner[1], 0)
-                line.SetPoint2(facet.pRight[0], facet.pRight[1], 0)
-                line.Update()
-                vtkappend.AddInputData(line.GetOutput())
-            else:
-                arc = vtk.vtkArcSource()
-                arc.SetPoint1(facet.corner[0], facet.corner[1], 0)
-                arc.SetPoint2(facet.pRight[0], facet.pRight[1], 0)
-                arc.SetCenter(facet.centerRight[0], facet.centerRight[1], 0)
-                arc.SetResolution(ARC_RESOLUTION)
-                arc.Update()
-                vtkappend.AddInputData(arc.GetOutput())
-
-            # Facet type:
-            if facet.centerLeft is None and facet.radiusLeft is None and facet.centerRight is None and facet.radiusRight is None:
-                # Linear corner = 2
-                facet_types.InsertNextTypedTuple([2])
-                facet_types.InsertNextTypedTuple([2])
-            else:
-                # Arc corner = 3
-                facet_types.InsertNextTypedTuple([3])
-                facet_types.InsertNextTypedTuple([3])
+            facet_types.InsertNextTypedTuple([primitive_type_code(facet)])
         else:
-            print(f"Unknown facet type: {facet.name}")
+            line = vtk.vtkLineSource()
+            line.SetPoint1(facet.pLeft[0], facet.pLeft[1], 0)
+            line.SetPoint2(facet.pRight[0], facet.pRight[1], 0)
+            line.Update()
+            vtkappend.AddInputData(line.GetOutput())
+            facet_types.InsertNextTypedTuple([primitive_type_code(facet)])
     
     vtkappend.Update()
     vtkappend.GetOutput().GetCellData().SetScalars(facet_types)

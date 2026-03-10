@@ -50,38 +50,10 @@ def LinfErrorFractions(final, true):
 
 
 def calculate_facet_gaps(mesh, reconstructed_facets):
-    """Calculate average gap distance between adjacent facets."""
-    interface = Interface.from_merge_mesh(
-        mesh, reconstructed_facets=reconstructed_facets, infer_missing_neighbors=False
-    )
-    has_oriented = any(
-        record.left_cell_id is not None or record.right_cell_id is not None
-        for component in interface.components
-        for record in component.records
-    )
-    if not has_oriented:
-        interface = Interface.from_merge_mesh(
-            mesh,
-            reconstructed_facets=reconstructed_facets,
-            infer_missing_neighbors=True,
-        )
+    """Compatibility wrapper for canonical primitive-level gap evaluation."""
+    from util.metrics.metrics import calculate_facet_gaps as _calculate_facet_gaps
 
-    gaps = []
-    for component in interface.components:
-        records = component.records
-        if len(records) < 2:
-            continue
-        for i in range(len(records)):
-            j = (i + 1) % len(records) if component.is_closed else i + 1
-            if j >= len(records):
-                continue
-            p_right = records[i].right_point()
-            p_left = records[j].left_point()
-            gaps.append(getDistance(p_right, p_left))
-
-    if not gaps:
-        return 0
-    return float(np.mean(np.asarray(gaps)))
+    return _calculate_facet_gaps(mesh, reconstructed_facets)
 
 
 def computeFinalMetrics(m, true_final_areas, output_dirs):

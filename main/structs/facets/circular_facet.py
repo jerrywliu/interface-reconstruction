@@ -1,6 +1,7 @@
 import math
 
 from main.geoms.circular_facet import (
+    _unique_points,
     getArcArea,
     getCenter,
     getCircleLineIntersects,
@@ -153,10 +154,16 @@ class ArcFacet(Facet):
 
         # Hyperparameter
         adjustcorneramount = 1e-14
+        max_corner_retries = 16
+        endpoint_snap_tol = max(
+            10 * point_equality_threshold,
+            1e-12 * max(1.0, abs(self.radius)),
+        )
+        parity_tol = endpoint_snap_tol
+        retries = 0
         notmod = True
         while notmod:
             startAt = 1
-            foundArc = False
             intersectpoints = []
             arcpoints = []
             for i in range(len(poly)):
@@ -168,6 +175,10 @@ class ArcFacet(Facet):
                     curpoint, nextpoint, self.center, abs(self.radius)
                 )
                 for intersect in lineintersects:
+                    if getDistance(intersect, self.pLeft) <= endpoint_snap_tol:
+                        intersect = list(self.pLeft)
+                    elif getDistance(intersect, self.pRight) <= endpoint_snap_tol:
+                        intersect = list(self.pRight)
                     if self.pointInArcRange(intersect):
                         if len(arcpoints) == 0:
                             if curin:
@@ -177,17 +188,25 @@ class ArcFacet(Facet):
                                 intersectpoints = []
                         intersectpoints.append(intersect)
                         arcpoints.append(intersect)
+            arcpoints = _unique_points(arcpoints, parity_tol)
             # If not 0 mod 2, circle intersects a corner, perturb poly and rerun
             if len(arcpoints) % 2 == 1:
+                if retries >= max_corner_retries:
+                    raise RuntimeError(
+                        "ArcFacet.getPolyIntersectArea: odd number of arc intersection "
+                        f"points after {max_corner_retries} retries"
+                    )
+                perturb = adjustcorneramount * (retries + 1)
                 poly = list(
                     map(
                         lambda x: [
-                            x[0] + adjustcorneramount,
-                            x[1] + adjustcorneramount,
+                            x[0] + perturb,
+                            x[1] + perturb,
                         ],
                         poly,
                     )
                 )
+                retries += 1
             else:
                 notmod = False
 
@@ -202,7 +221,6 @@ class ArcFacet(Facet):
         for i in range(0, len(arcpoints), 2):
             area += getArcArea(arcpoints[i], arcpoints[i + 1], self.center, abs(self.radius))
         area += getArea(intersectpoints)
-        print(intersectpoints)
 
         if len(arcpoints) == 0:
             if pointInPoly(self.center, poly):

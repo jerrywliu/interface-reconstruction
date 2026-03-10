@@ -15,8 +15,6 @@ CANONICAL_FIGURES = [
     "ellipse_reconstruction_perturbed_all_methods_5x2_axes.png",
     "square_reconstruction_perturbed_all_methods_2x2.png",
     "zalesak_reconstruction_perturbed_all_methods_2x2.png",
-    "square_reconstruction_area.png",
-    "zalesak_reconstruction_combined.png",
 ]
 
 
@@ -36,7 +34,7 @@ def collect_files(release_dir):
             files.append(str(candidate))
 
     if not files and paper_dir.exists():
-        for candidate in sorted(paper_dir.glob("*.png")):
+        for candidate in sorted(paper_dir.glob("*all_methods*.png")):
             files.append(str(candidate))
 
     manifest = release / "manifest.md"

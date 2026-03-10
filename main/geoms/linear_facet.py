@@ -11,6 +11,8 @@ def getLinearFacet(poly1, poly2, a1, a2, epsilon):
     #Hyperparameters:
     dtbase = 1e-8 #Timestep used to calculate numerical estimates of derivatives
     centroidscale = 1 #Scale initial guesses apart from each other
+    max_newton_iters = 200
+    max_search_iters = 2000
 
     #Convert from area fractions to areas
     poly1area = getArea(poly1)
@@ -27,7 +29,9 @@ def getLinearFacet(poly1, poly2, a1, a2, epsilon):
     l2 = lerp(centroid2, centroid1, 1-centroidscale)
     converged = False
     
-    while not(converged):
+    newton_iters = 0
+    while not(converged) and newton_iters < max_newton_iters:
+        newton_iters += 1
         #Normal
         normal = [(l1[1]-l2[1])/math.sqrt((l1[1]-l2[1])**2 + (l2[0]-l1[0])**2), (l2[0]-l1[0])/math.sqrt((l1[1]-l2[1])**2 + (l2[0]-l1[0])**2)]
         
@@ -74,7 +78,9 @@ def getLinearFacet(poly1, poly2, a1, a2, epsilon):
                 cura1 = getPolyLineArea(poly1, l1, l2)
                 cura1dir = (cura1 > a1)
                 cura1converged = False
-                while abs(cura1 - a1)/poly1area > epsilon:
+                search_iters = 0
+                while abs(cura1 - a1)/poly1area > epsilon and search_iters < max_search_iters:
+                    search_iters += 1
                     if cura1 < a1:
                         t1 -= t1gap
                     else:
@@ -88,6 +94,10 @@ def getLinearFacet(poly1, poly2, a1, a2, epsilon):
                     if not(cura1converged) and (cura1 > a1) != cura1dir:
                         cura1converged = True
                         t1gap /= 4
+                if abs(cura1 - a1)/poly1area > epsilon:
+                    raise RuntimeError(
+                        f"getLinearFacet stalled matching a1 (iters={search_iters}, target1={a1/poly1area:.6e}, current1={cura1/poly1area:.6e}, target2={a2/poly2area:.6e}, current2={cura2/poly2area:.6e}, epsilon={epsilon:.3e})"
+                    )
                 
                 #match a2 by moving l2
                 t2 = 0
@@ -96,7 +106,9 @@ def getLinearFacet(poly1, poly2, a1, a2, epsilon):
                 cura2 = getPolyLineArea(poly2, l1, l2)
                 cura2dir = (cura2 > a2)
                 cura2converged = False
-                while abs(cura2 - a2)/poly2area > epsilon:
+                search_iters = 0
+                while abs(cura2 - a2)/poly2area > epsilon and search_iters < max_search_iters:
+                    search_iters += 1
                     if cura2 < a2:
                         t2 -= t2gap
                     else:
@@ -110,6 +122,10 @@ def getLinearFacet(poly1, poly2, a1, a2, epsilon):
                     if not(cura2converged) and (cura2 > a2) != cura2dir:
                         cura2converged = True
                         t2gap /= 4
+                if abs(cura2 - a2)/poly2area > epsilon:
+                    raise RuntimeError(
+                        f"getLinearFacet stalled matching a2 (iters={search_iters}, target1={a1/poly1area:.6e}, current1={cura1/poly1area:.6e}, target2={a2/poly2area:.6e}, current2={cura2/poly2area:.6e}, epsilon={epsilon:.3e})"
+                    )
             
             else:
                 #inverse 2x2 = 1/det * [da2dl2, -da1dl2; -da2dl1, da1dl1]
@@ -118,7 +134,17 @@ def getLinearFacet(poly1, poly2, a1, a2, epsilon):
 
                 l1 = [l1[0]+t1*normal[0], l1[1]+t1*normal[1]]
                 l2 = [l2[0]+t2*normal[0], l2[1]+t2*normal[1]]
-            
+    if not converged:
+        cura1 = getPolyLineArea(poly1, l1, l2)
+        cura2 = getPolyLineArea(poly2, l1, l2)
+        if abs(cura1 - a1)/poly1area < epsilon and abs(cura2 - a2)/poly2area < epsilon:
+            converged = True
+
+    if not converged:
+        raise RuntimeError(
+            f"getLinearFacet did not converge (iters={newton_iters}, target1={a1/poly1area:.6e}, current1={cura1/poly1area:.6e}, err1={abs(cura1 - a1)/poly1area:.6e}, target2={a2/poly2area:.6e}, current2={cura2/poly2area:.6e}, err2={abs(cura2 - a2)/poly2area:.6e}, epsilon={epsilon:.3e})"
+        )
+
     return l1, l2
 
 #Alternate linear facet finder, without Newton's method or numerical derivatives

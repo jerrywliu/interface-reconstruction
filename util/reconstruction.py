@@ -7,7 +7,7 @@ from util.plotting.vtk_utils import writePartialCells, writeFacets
 
 
 def runReconstruction(
-    m: MergeMesh, facet_algo, do_c0, iter, output_dirs, algo_kwargs={}
+    m: MergeMesh, facet_algo, do_c0, iter, output_dirs, algo_kwargs={}, return_polys=False
 ):
     """
     Run interface reconstruction based on specified algorithm.
@@ -37,11 +37,11 @@ def runReconstruction(
     plotPartialAreas(m, os.path.join(output_dirs["plt_partial"], f"{iter}.png"))
 
     if facet_algo in no_merge_algos:
-        reconstructed_facets = _run_no_merge(
+        reconstructed_facets, reconstructed_polys = _run_no_merge(
             m, facet_algo, iter, output_dirs, algo_kwargs
         )
     else:
-        reconstructed_facets = _run_with_merge(
+        reconstructed_facets, reconstructed_polys = _run_with_merge(
             m, facet_algo, do_c0, iter, output_dirs, algo_kwargs
         )
 
@@ -51,6 +51,8 @@ def runReconstruction(
         os.path.join(output_dirs["vtk_reconstructed_facets"], f"{iter}.vtp"),
     )
 
+    if return_polys:
+        return reconstructed_facets, reconstructed_polys
     return reconstructed_facets
 
 
@@ -76,7 +78,8 @@ def _run_no_merge(m: MergeMesh, facet_algo, iter, output_dirs, algo_kwargs={}):
         _ = m.findSafeOrientations()  # basic orientation finding
         m.runSafeLinearCorner()
 
-    return [p.getFacet() for p in m.merged_polys.values()]
+    merged_polys = list(m.merged_polys.values())
+    return [p.getFacet() for p in merged_polys], merged_polys
 
 
 def _run_with_merge(
@@ -104,4 +107,4 @@ def _run_with_merge(
             C0_facets, os.path.join(output_dirs["vtk_reconstructed_c0"], f"{iter}.vtp")
         )
 
-    return reconstructed_facets
+    return reconstructed_facets, merged_polys

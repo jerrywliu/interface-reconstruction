@@ -238,7 +238,7 @@ def main(
     do_c0 = config["GEOMS"]["DO_C0"]
 
     # Setup output directories
-    output_dirs = setupOutputDirs(save_name)
+    output_dirs = setupOutputDirs(save_name, clean_existing=True)
 
     # Generate ellipses with different aspect ratios
     aspect_ratios = np.linspace(1.5, 3.0, num_ellipses)  # Major axis / minor axis

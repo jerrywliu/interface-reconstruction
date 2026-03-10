@@ -1,3 +1,6 @@
+import signal
+import threading
+
 from main.geoms.geoms import (
     getArea,
     getDistance,
@@ -13,7 +16,12 @@ from main.geoms.linear_facet import (
     getPolyLineIntersects,
     getLinearFacetFromNormal,
 )
-from main.geoms.circular_facet import getArcFacet, matchArcArea, getCenter
+from main.geoms.circular_facet import (
+    LinearFacetShortcut,
+    getArcFacet,
+    matchArcArea,
+    getCenter,
+)
 
 
 class BasePolygon:
@@ -23,6 +31,7 @@ class BasePolygon:
 
     linearity_threshold = 1e-6  # if area fraction error in linear facet < this value, use linear facet at this cell
     optimization_threshold = 1e-10  # in optimizations
+    arc_fit_timeout_seconds = 2.0
 
     # Invariant: self.fraction should always be between 0 and 1
     def __init__(self, points):
@@ -117,6 +126,33 @@ class BasePolygon:
 
     def has3x3Stencil(self):
         return self.stencil is not None
+
+    @staticmethod
+    def _run_arc_fit_with_timeout(*args):
+        timeout_seconds = BasePolygon.arc_fit_timeout_seconds
+        if (
+            timeout_seconds is None
+            or timeout_seconds <= 0
+            or threading.current_thread() is not threading.main_thread()
+            or not hasattr(signal, "SIGALRM")
+            or not hasattr(signal, "setitimer")
+            or not hasattr(signal, "ITIMER_REAL")
+        ):
+            return getArcFacet(*args)
+
+        def _handle_timeout(signum, frame):
+            raise TimeoutError(
+                f"getArcFacet timed out after {timeout_seconds:.1f}s"
+            )
+
+        previous_handler = signal.getsignal(signal.SIGALRM)
+        try:
+            signal.signal(signal.SIGALRM, _handle_timeout)
+            signal.setitimer(signal.ITIMER_REAL, timeout_seconds)
+            return getArcFacet(*args)
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0.0)
+            signal.signal(signal.SIGALRM, previous_handler)
 
     # If orientation is "easy" (only 2 mixed neighbors with consistent orientation), return those neighbors
     def findSafeOrientation(self, fit_1neighbor=False):
@@ -247,13 +283,28 @@ class BasePolygon:
         else:
             left_neighbor: BasePolygon = orientation[0]
             right_neighbor: BasePolygon = orientation[1]
-            l1, l2 = getLinearFacet(
-                left_neighbor.points,
-                right_neighbor.points,
-                left_neighbor.getFraction(),
-                right_neighbor.getFraction(),
-                BasePolygon.optimization_threshold,
-            )
+            try:
+                l1, l2 = getLinearFacet(
+                    left_neighbor.points,
+                    right_neighbor.points,
+                    left_neighbor.getFraction(),
+                    right_neighbor.getFraction(),
+                    BasePolygon.optimization_threshold,
+                )
+            except RuntimeError as error:
+                print(f"runSafeLinear fallback to PLIC after getLinearFacet failure: {error}")
+                if default_to_youngs:
+                    facet = self.runYoungs(ret=True)
+                elif default_to_lvira:
+                    facet = self.runLVIRA(ret=True)
+                else:
+                    facet = None
+                if ret:
+                    return facet
+                else:
+                    if facet is not None:
+                        self.setFacet(facet)
+                    return
             if check_threshold:
                 # Check whether middle area fraction is close to target area fraction
                 if (
@@ -334,13 +385,27 @@ class BasePolygon:
         else:
             left_neighbor: BasePolygon = orientation[0]
             right_neighbor: BasePolygon = orientation[1]
-            l1, l2 = getLinearFacet(
-                left_neighbor.points,
-                right_neighbor.points,
-                left_neighbor.getFraction(),
-                right_neighbor.getFraction(),
-                BasePolygon.optimization_threshold,
-            )
+            try:
+                l1, l2 = getLinearFacet(
+                    left_neighbor.points,
+                    right_neighbor.points,
+                    left_neighbor.getFraction(),
+                    right_neighbor.getFraction(),
+                    BasePolygon.optimization_threshold,
+                )
+            except RuntimeError as error:
+                print(f"runSafeCircle fallback to PLIC after getLinearFacet failure: {error}")
+                if default_to_youngs:
+                    facet = self.runYoungs(ret=True)
+                elif default_to_lvira:
+                    facet = self.runLVIRA(ret=True)
+                else:
+                    facet = None
+                if ret:
+                    return facet
+                else:
+                    self.setFacet(facet)
+                    return
             if (
                 abs(
                     self.getFraction()
@@ -361,7 +426,7 @@ class BasePolygon:
                 facet = LinearFacet(intersects[0], intersects[-1])
             else:
                 try:
-                    arccenter, arcradius, arcintersects = getArcFacet(
+                    arccenter, arcradius, arcintersects = self._run_arc_fit_with_timeout(
                         left_neighbor.points,
                         self.points,
                         right_neighbor.points,
@@ -379,10 +444,25 @@ class BasePolygon:
                             facet = None
                     else:
                         # Arc
-                        facet = ArcFacet(
+                            facet = ArcFacet(
                             arccenter, arcradius, arcintersects[0], arcintersects[-1]
                         )
-                except:
+                except LinearFacetShortcut as shortcut:
+                    facet = LinearFacet(shortcut.pLeft, shortcut.pRight)
+                except (RuntimeError, TimeoutError) as error:
+                    print(
+                        f"runSafeCircle fallback to PLIC after getArcFacet failure: {error}"
+                    )
+                    if default_to_youngs:
+                        facet = self.runYoungs(ret=True)
+                    elif default_to_lvira:
+                        facet = self.runLVIRA(ret=True)
+                    else:
+                        facet = None
+                except Exception as error:
+                    print(
+                        f"runSafeCircle fallback to PLIC after unexpected getArcFacet failure: {error}"
+                    )
                     if default_to_youngs:
                         facet = self.runYoungs(ret=True)
                     elif default_to_lvira:

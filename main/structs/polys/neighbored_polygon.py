@@ -2,6 +2,7 @@ from main.geoms.corner_facet import getPolyCornerArea, getPolyCurvedCornerArea
 from main.structs.polys.base_polygon import BasePolygon
 from main.geoms.geoms import (
     getArea,
+    getCentroid,
     getDistance,
     lineIntersect,
     pointInPoly,
@@ -12,6 +13,7 @@ from main.structs.facets.circular_facet import ArcFacet
 from main.structs.facets.corner_facet import CornerFacet
 from main.structs.facets.linear_facet import LinearFacet
 from main.geoms.circular_facet import (
+    LinearFacetShortcut,
     getArcFacet,
     getCircleLineIntersects,
     getCircleCircleIntersects,
@@ -93,13 +95,20 @@ class NeighboredPolygon(BasePolygon):
     def fitCircularFacet(self):
         # If both neighbors, try linear and circular TODO
         if self.hasLeftNeighbor() and self.hasRightNeighbor():
-            facetline1, facetline2 = getLinearFacet(
-                self.left_neighbor.points,
-                self.right_neighbor.points,
-                self.left_neighbor.getFraction(),
-                self.right_neighbor.getFraction(),
-                NeighboredPolygon.optimization_threshold,
-            )
+            try:
+                facetline1, facetline2 = getLinearFacet(
+                    self.left_neighbor.points,
+                    self.right_neighbor.points,
+                    self.left_neighbor.getFraction(),
+                    self.right_neighbor.getFraction(),
+                    NeighboredPolygon.optimization_threshold,
+                )
+            except RuntimeError as error:
+                print(
+                    f"fitCircularFacet fallback to LVIRA after getLinearFacet failure: {error}"
+                )
+                self._set_default_plic_fallback()
+                return
             if (
                 abs(
                     self.getFraction()
@@ -122,7 +131,7 @@ class NeighboredPolygon(BasePolygon):
                 self.setFacet(LinearFacet(intersects[0], intersects[-1]))
             else:
                 try:
-                    arccenter, arcradius, arcintersects = getArcFacet(
+                    arccenter, arcradius, arcintersects = self._run_arc_fit_with_timeout(
                         self.left_neighbor.points,
                         self.points,
                         self.right_neighbor.points,
@@ -149,8 +158,14 @@ class NeighboredPolygon(BasePolygon):
                             )
                         )
                         print(self)
-                except:
-                    pass
+                except LinearFacetShortcut as shortcut:
+                    self.setFacet(LinearFacet(shortcut.pLeft, shortcut.pRight))
+                except (RuntimeError, TimeoutError) as error:
+                    print(f"fitCircularFacet fallback after getArcFacet failure: {error}")
+                except Exception as error:
+                    print(
+                        f"fitCircularFacet fallback after unexpected getArcFacet failure: {error}"
+                    )
                     # l1 = facetline1
                     # l2 = facetline2
                     # normal = [(-l2[1]+l1[1])/getDistance(l1, l2), (l2[0]-l1[0])/getDistance(l1, l2)]
@@ -162,13 +177,20 @@ class NeighboredPolygon(BasePolygon):
     # if doCollinearityCheck, then only set linear facet if middle area fraction matches within threshold
     def fitLinearFacet(self, doCollinearityCheck=False):
         if self.hasLeftNeighbor() and self.hasRightNeighbor():
-            l1, l2 = getLinearFacet(
-                self.left_neighbor.points,
-                self.right_neighbor.points,
-                self.left_neighbor.getFraction(),
-                self.right_neighbor.getFraction(),
-                NeighboredPolygon.optimization_threshold,
-            )
+            try:
+                l1, l2 = getLinearFacet(
+                    self.left_neighbor.points,
+                    self.right_neighbor.points,
+                    self.left_neighbor.getFraction(),
+                    self.right_neighbor.getFraction(),
+                    NeighboredPolygon.optimization_threshold,
+                )
+            except RuntimeError as error:
+                print(
+                    f"fitLinearFacet fallback to LVIRA after getLinearFacet failure: {error}"
+                )
+                self._set_default_plic_fallback()
+                return
 
             # Check if this facet matches middle area (and actually intersects middle poly in case of nearly empty or full cell)
             isValidLinearFacet = False
@@ -215,6 +237,38 @@ class NeighboredPolygon(BasePolygon):
 
         else:
             print("Not enough neighbors: failed to make linear facet")
+
+    def _set_default_plic_fallback(self):
+        if self.has3x3Stencil():
+            self.setFacet(self.runLVIRA(ret=True))
+            return
+
+        left_centroid = getCentroid(self.left_neighbor.points)
+        right_centroid = getCentroid(self.right_neighbor.points)
+        normal = [
+            left_centroid[1] - right_centroid[1],
+            right_centroid[0] - left_centroid[0],
+        ]
+        if abs(normal[0]) + abs(normal[1]) < 1e-14:
+            normal = [1.0, 0.0]
+
+        try:
+            l1, l2 = getLinearFacetFromNormal(
+                self.points,
+                self.getFraction(),
+                normal,
+                NeighboredPolygon.optimization_threshold,
+            )
+        except:
+            adjusted_fraction = min(max(self.getFraction() * 1e3, 0.0), 1.0)
+            l1, l2 = getLinearFacetFromNormal(
+                self.points,
+                adjusted_fraction,
+                normal,
+                NeighboredPolygon.optimization_threshold,
+            )
+
+        self.setFacet(LinearFacet(l1, l2, name="default_linear"))
 
     # Extends lines l1 to l2, p1 to p2, calculates intersection if it exists, checks whether this corner matches area fraction, updates self.facet if it does
     # (l1, l2, p1, p2) = (l.l, l.r, r.r, r.l)
