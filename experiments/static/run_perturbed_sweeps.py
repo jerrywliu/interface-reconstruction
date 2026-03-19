@@ -19,6 +19,7 @@ import numpy as np
 from util.io.slack import load_slack_env, send_results_to_slack
 
 
+STATIC_GRID_SIZE = 100.0
 LINEAR_ALGOS = ["Youngs", "LVIRA", "safe_linear", "linear"]
 LINE_ALGOS = LINEAR_ALGOS
 CIRCLE_ALGOS = LINEAR_ALGOS + ["safe_circle", "circular"]
@@ -42,6 +43,39 @@ DEFAULT_RESOLUTIONS = [0.32, 0.50, 0.64, 1.00, 1.28, 1.50]
 DEFAULT_RESOLUTIONS_SHORT = [0.50, 0.64, 1.00, 1.28, 1.50]
 DEFAULT_WIGGLES = [0.0, 0.05, 0.1, 0.2, 0.3]
 DEFAULT_SEEDS = [0]
+
+DISPLAY_LABELS = {
+    "Youngs": "Youngs",
+    "LVIRA": "ELVIRA",
+    "safe_linear": "safe linear",
+    "linear": "linear",
+    "linear+corner": "linear+corner",
+    "safe_circle": "safe circle",
+    "circular": "circular",
+    "circular+corner": "circular+corner",
+}
+
+METHOD_STYLES = {
+    "Youngs": {"color": "#6c757d", "linestyle": "-", "linewidth": 1.8},
+    "LVIRA": {"color": "#495057", "linestyle": "--", "linewidth": 1.8},
+    "safe_linear": {"color": "#74a9cf", "linestyle": "--", "linewidth": 1.9},
+    "linear": {"color": "#1d4ed8", "linestyle": "-", "linewidth": 2.3},
+    "linear+corner": {"color": "#0f766e", "linestyle": "-", "linewidth": 2.4},
+    "safe_circle": {"color": "#f59e0b", "linestyle": "--", "linewidth": 1.9},
+    "circular": {"color": "#d97706", "linestyle": "-", "linewidth": 2.3},
+    "circular+corner": {"color": "#b91c1c", "linestyle": "-", "linewidth": 2.5},
+}
+
+METRIC_LABELS = {
+    "hausdorff": "Hausdorff",
+    "facet_gap": "Facet Gap",
+    "curvature_error": "Curvature Error",
+    "tangent_error": "Tangent Error",
+    "area_error": "Area Error",
+}
+
+PERTURBATION_AXIS_LABEL = "Perturbation magnitude"
+RESOLUTION_AXIS_LABEL = "Cells per side, N"
 
 
 EXPERIMENTS = [
@@ -123,6 +157,48 @@ def _safe_stats(values):
 def _metric_stats(metric_name, values):
     stats = _safe_stats(values)
     return {f"{metric_name}_{key}": value for key, value in stats.items()}
+
+
+def _display_method_label(algo):
+    return DISPLAY_LABELS.get(algo, algo)
+
+
+def _metric_label(metric):
+    return METRIC_LABELS.get(metric, metric.replace("_", " ").title())
+
+
+def _resolution_to_cells_per_side(resolutions):
+    return STATIC_GRID_SIZE * np.asarray(resolutions, dtype=float)
+
+
+def _solver_floor_curve(exp_name, metric, x_mode, raw_x_values):
+    if metric != "hausdorff" or x_mode != "resolution":
+        return None
+
+    if exp_name == "lines":
+        epsilon = 1e-10
+        label = r"approx. line-fit floor ($10^{-10}h$)"
+    elif exp_name == "circles":
+        epsilon = 1e-10
+        label = r"approx. arc-fit floor ($10^{-10}h$)"
+    else:
+        return None
+
+    resolutions = np.asarray(raw_x_values, dtype=float)
+    floor = epsilon / resolutions
+    return {
+        "x_values": _resolution_to_cells_per_side(resolutions),
+        "y_values": np.maximum(floor, 1e-14),
+        "label": label,
+    }
+
+
+def _merge_legend_entries(legend_entries, ax):
+    handles, labels = ax.get_legend_handles_labels()
+    for handle, label in zip(handles, labels):
+        if label and not label.startswith("_") and label not in legend_entries:
+            legend_entries[label] = handle
+    return legend_entries
 
 
 def _make_save_name(exp_name, algo, resolution, wiggle, seed):
@@ -377,13 +453,24 @@ def _plot_metric_vs_wiggle(exp, algo, metric, res_map, out_dir):
             p25.append(max(q25, min_error))
             p75.append(max(q75, min_error))
 
-        plt.plot(wiggles, medians, marker="o", linewidth=2.0, label=f"r={res}")
-        plt.fill_between(wiggles, p25, p75, alpha=0.2)
+        cells_per_side = int(round(STATIC_GRID_SIZE * float(res)))
+        plt.plot(
+            wiggles,
+            medians,
+            marker="o",
+            linewidth=2.0,
+            label=f"N={cells_per_side}",
+        )
+        plt.fill_between(wiggles, p25, p75, alpha=0.08)
 
-    metric_label = metric.replace("_", " ").title()
-    plt.xlabel("Perturbation Magnitude", fontsize=12)
+    metric_label = _metric_label(metric)
+    plt.xlabel(PERTURBATION_AXIS_LABEL, fontsize=12)
     plt.ylabel(metric_label, fontsize=12)
-    plt.title(f"{exp} {algo} ({metric_label})", fontsize=14, fontweight="bold")
+    plt.title(
+        f"{exp} {_display_method_label(algo)} ({metric_label})",
+        fontsize=14,
+        fontweight="bold",
+    )
     plt.yscale("log")
     plt.grid(True, alpha=0.3)
     plt.legend(fontsize=10, frameon=True)
@@ -515,11 +602,11 @@ def _build_method_curves_by_resolution(exp_data, metric):
     return curves
 
 
-def _draw_method_curves(ax, curves, metric, x_label):
+def _draw_method_curves(ax, curves, metric, x_label, x_mode, exp_name=None):
     min_error = 1e-14
     for algo in _ordered_methods(curves.keys()):
         series = curves[algo]
-        x_values = series["x_values"]
+        x_values = np.asarray(series["x_values"], dtype=float)
         medians = series["median"]
         p25 = series["p25"]
         p75 = series["p75"]
@@ -527,17 +614,65 @@ def _draw_method_curves(ax, curves, metric, x_label):
         if not np.any(valid):
             continue
         x_values_v = x_values[valid]
+        if x_mode == "resolution":
+            x_values_v = _resolution_to_cells_per_side(x_values_v)
         medians_v = np.maximum(medians[valid], min_error)
         p25_v = np.maximum(p25[valid], min_error)
         p75_v = np.maximum(p75[valid], min_error)
-        ax.plot(x_values_v, medians_v, marker="o", linewidth=2.0, label=algo)
-        ax.fill_between(x_values_v, p25_v, p75_v, alpha=0.15)
+        style = METHOD_STYLES.get(algo, {})
+        label = _display_method_label(algo)
+        ax.plot(
+            x_values_v,
+            medians_v,
+            marker="o",
+            markersize=4.2,
+            label=label,
+            **style,
+        )
+        ax.fill_between(
+            x_values_v,
+            p25_v,
+            p75_v,
+            alpha=0.08,
+            color=style.get("color", None),
+            zorder=1,
+        )
 
-    metric_label = metric.replace("_", " ").title()
+    floor_curve = _solver_floor_curve(
+        exp_name=exp_name,
+        metric=metric,
+        x_mode=x_mode,
+        raw_x_values=np.unique(
+            np.concatenate(
+                [np.asarray(series["x_values"], dtype=float) for series in curves.values()]
+            )
+        ),
+    )
+    if floor_curve is not None:
+        ax.plot(
+            floor_curve["x_values"],
+            floor_curve["y_values"],
+            color="#111827",
+            linestyle=":",
+            linewidth=1.6,
+            label=floor_curve["label"],
+            zorder=3,
+        )
+
+    metric_label = _metric_label(metric)
     ax.set_xlabel(x_label, fontsize=11)
     ax.set_ylabel(metric_label, fontsize=11)
     ax.set_yscale("log")
     ax.grid(True, alpha=0.3)
+    if x_mode == "resolution":
+        tick_values = sorted(
+            {
+                int(round(val))
+                for series in curves.values()
+                for val in _resolution_to_cells_per_side(series["x_values"])
+            }
+        )
+        ax.set_xticks(tick_values)
 
 
 def _generate_experiment_method_summary_plots(data, exp_name, metric_candidates, out_dir):
@@ -559,7 +694,14 @@ def _generate_experiment_method_summary_plots(data, exp_name, metric_candidates,
         metric_curves[metric] = curves
 
         fig, ax = plt.subplots(figsize=(8, 6))
-        _draw_method_curves(ax, curves, metric, x_label="Perturbation Magnitude")
+        _draw_method_curves(
+            ax,
+            curves,
+            metric,
+            x_label=PERTURBATION_AXIS_LABEL,
+            x_mode="perturbation",
+            exp_name=exp_name,
+        )
         ax.set_title(
             f"{exp_name.title()} Perturbed Sweep: All Methods ({metric.replace('_', ' ').title()})",
             fontsize=13,
@@ -583,7 +725,9 @@ def _generate_experiment_method_summary_plots(data, exp_name, metric_candidates,
                 ax,
                 metric_curves[metric],
                 metric,
-                x_label="Perturbation Magnitude",
+                x_label=PERTURBATION_AXIS_LABEL,
+                x_mode="perturbation",
+                exp_name=exp_name,
             )
             ax.set_title(metric.replace("_", " ").title(), fontsize=12, fontweight="bold")
         handles, labels = axes[0].get_legend_handles_labels()
@@ -662,7 +806,7 @@ def _generate_two_metric_axes_grid_plot(
     fig, axes = plt.subplots(2, 2, figsize=(12, 9.5))
 
     def _metric_title(metric):
-        return metric.replace("_", " ").title()
+        return _metric_label(metric)
 
     subplot_defs = [
         (
@@ -670,56 +814,59 @@ def _generate_two_metric_axes_grid_plot(
             0,
             metric_left,
             wiggle_curves,
-            "Perturbation Magnitude",
-            f"{_metric_title(metric_left)} vs Perturbation Magnitude",
+            PERTURBATION_AXIS_LABEL,
+            f"{_metric_title(metric_left)} vs {PERTURBATION_AXIS_LABEL.title()}",
         ),
         (
             0,
             1,
             metric_right,
             wiggle_curves,
-            "Perturbation Magnitude",
-            f"{_metric_title(metric_right)} vs Perturbation Magnitude",
+            PERTURBATION_AXIS_LABEL,
+            f"{_metric_title(metric_right)} vs {PERTURBATION_AXIS_LABEL.title()}",
         ),
         (
             1,
             0,
             metric_left,
             resolution_curves,
-            "Resolution",
-            f"{_metric_title(metric_left)} vs Resolution",
+            RESOLUTION_AXIS_LABEL,
+            f"{_metric_title(metric_left)} vs Cells per Side",
         ),
         (
             1,
             1,
             metric_right,
             resolution_curves,
-            "Resolution",
-            f"{_metric_title(metric_right)} vs Resolution",
+            RESOLUTION_AXIS_LABEL,
+            f"{_metric_title(metric_right)} vs Cells per Side",
         ),
     ]
 
-    legend_handles = None
-    legend_labels = None
+    legend_entries = {}
     for row, col, metric, curves_by_metric, x_label, title in subplot_defs:
         ax = axes[row][col]
         curves = curves_by_metric.get(metric)
         if not curves:
             ax.set_axis_off()
             continue
-        _draw_method_curves(ax, curves, metric, x_label=x_label)
+        _draw_method_curves(
+            ax,
+            curves,
+            metric,
+            x_label=x_label,
+            x_mode="perturbation" if row == 0 else "resolution",
+            exp_name=exp_name,
+        )
         ax.set_title(title, fontsize=11.5, fontweight="bold")
-        if legend_handles is None:
-            handles, labels = ax.get_legend_handles_labels()
-            if handles:
-                legend_handles, legend_labels = handles, labels
+        _merge_legend_entries(legend_entries, ax)
 
-    if legend_handles:
+    if legend_entries:
         fig.legend(
-            legend_handles,
-            legend_labels,
+            list(legend_entries.values()),
+            list(legend_entries.keys()),
             loc="lower center",
-            ncol=min(6, len(legend_labels)),
+            ncol=min(6, len(legend_entries)),
             fontsize=9,
             frameon=True,
             bbox_to_anchor=(0.5, -0.01),
@@ -772,15 +919,20 @@ def _generate_circle_method_axes_grid_plot(data, out_dir):
     plots = []
 
     for metric in available_metrics:
-        metric_label = metric.replace("_", " ").title()
+        metric_label = _metric_label(metric)
         curves_w = wiggle_curves.get(metric)
         if curves_w:
             fig, ax = plt.subplots(figsize=(8, 6))
             _draw_method_curves(
-                ax, curves_w, metric, x_label="Perturbation Magnitude"
+                ax,
+                curves_w,
+                metric,
+                x_label=PERTURBATION_AXIS_LABEL,
+                x_mode="perturbation",
+                exp_name="circles",
             )
             ax.set_title(
-                f"Circles All Methods: {metric_label} vs Perturbation Magnitude",
+                f"Circles All Methods: {metric_label} vs {PERTURBATION_AXIS_LABEL.title()}",
                 fontsize=12.5,
                 fontweight="bold",
             )
@@ -794,9 +946,16 @@ def _generate_circle_method_axes_grid_plot(data, out_dir):
         curves_r = resolution_curves.get(metric)
         if curves_r:
             fig, ax = plt.subplots(figsize=(8, 6))
-            _draw_method_curves(ax, curves_r, metric, x_label="Resolution")
+            _draw_method_curves(
+                ax,
+                curves_r,
+                metric,
+                x_label=RESOLUTION_AXIS_LABEL,
+                x_mode="resolution",
+                exp_name="circles",
+            )
             ax.set_title(
-                f"Circles All Methods: {metric_label} vs Resolution",
+                f"Circles All Methods: {metric_label} vs Cells per Side",
                 fontsize=12.5,
                 fontweight="bold",
             )
@@ -812,51 +971,56 @@ def _generate_circle_method_axes_grid_plot(data, out_dir):
     if rows == 1:
         axes = np.array([axes])
 
-    legend_handles = None
-    legend_labels = None
+    legend_entries = {}
     for row, metric in enumerate(available_metrics):
-        metric_label = metric.replace("_", " ").title()
+        metric_label = _metric_label(metric)
 
         ax_w = axes[row][0]
         curves_w = wiggle_curves.get(metric)
         if curves_w:
             _draw_method_curves(
-                ax_w, curves_w, metric, x_label="Perturbation Magnitude"
+                ax_w,
+                curves_w,
+                metric,
+                x_label=PERTURBATION_AXIS_LABEL,
+                x_mode="perturbation",
+                exp_name="circles",
             )
             ax_w.set_title(
-                f"{metric_label} vs Perturbation Magnitude",
+                f"{metric_label} vs {PERTURBATION_AXIS_LABEL.title()}",
                 fontsize=11.5,
                 fontweight="bold",
             )
-            if legend_handles is None:
-                handles, labels = ax_w.get_legend_handles_labels()
-                if handles:
-                    legend_handles, legend_labels = handles, labels
+            _merge_legend_entries(legend_entries, ax_w)
         else:
             ax_w.set_axis_off()
 
         ax_r = axes[row][1]
         curves_r = resolution_curves.get(metric)
         if curves_r:
-            _draw_method_curves(ax_r, curves_r, metric, x_label="Resolution")
+            _draw_method_curves(
+                ax_r,
+                curves_r,
+                metric,
+                x_label=RESOLUTION_AXIS_LABEL,
+                x_mode="resolution",
+                exp_name="circles",
+            )
             ax_r.set_title(
-                f"{metric_label} vs Resolution",
+                f"{metric_label} vs Cells per Side",
                 fontsize=11.5,
                 fontweight="bold",
             )
-            if legend_handles is None:
-                handles, labels = ax_r.get_legend_handles_labels()
-                if handles:
-                    legend_handles, legend_labels = handles, labels
+            _merge_legend_entries(legend_entries, ax_r)
         else:
             ax_r.set_axis_off()
 
-    if legend_handles:
+    if legend_entries:
         fig.legend(
-            legend_handles,
-            legend_labels,
+            list(legend_entries.values()),
+            list(legend_entries.keys()),
             loc="lower center",
-            ncol=min(6, len(legend_labels)),
+            ncol=min(6, len(legend_entries)),
             fontsize=9,
             frameon=True,
             bbox_to_anchor=(0.5, -0.005),
@@ -913,15 +1077,20 @@ def _generate_ellipse_method_axes_grid_plot(data, out_dir):
     plots = []
 
     for metric in available_metrics:
-        metric_label = metric.replace("_", " ").title()
+        metric_label = _metric_label(metric)
         curves_w = wiggle_curves.get(metric)
         if curves_w:
             fig, ax = plt.subplots(figsize=(8, 6))
             _draw_method_curves(
-                ax, curves_w, metric, x_label="Perturbation Magnitude"
+                ax,
+                curves_w,
+                metric,
+                x_label=PERTURBATION_AXIS_LABEL,
+                x_mode="perturbation",
+                exp_name="ellipses",
             )
             ax.set_title(
-                f"Ellipses All Methods: {metric_label} vs Perturbation Magnitude",
+                f"Ellipses All Methods: {metric_label} vs {PERTURBATION_AXIS_LABEL.title()}",
                 fontsize=12.5,
                 fontweight="bold",
             )
@@ -935,9 +1104,16 @@ def _generate_ellipse_method_axes_grid_plot(data, out_dir):
         curves_r = resolution_curves.get(metric)
         if curves_r:
             fig, ax = plt.subplots(figsize=(8, 6))
-            _draw_method_curves(ax, curves_r, metric, x_label="Resolution")
+            _draw_method_curves(
+                ax,
+                curves_r,
+                metric,
+                x_label=RESOLUTION_AXIS_LABEL,
+                x_mode="resolution",
+                exp_name="ellipses",
+            )
             ax.set_title(
-                f"Ellipses All Methods: {metric_label} vs Resolution",
+                f"Ellipses All Methods: {metric_label} vs Cells per Side",
                 fontsize=12.5,
                 fontweight="bold",
             )
@@ -953,51 +1129,56 @@ def _generate_ellipse_method_axes_grid_plot(data, out_dir):
     if rows == 1:
         axes = np.array([axes])
 
-    legend_handles = None
-    legend_labels = None
+    legend_entries = {}
     for row, metric in enumerate(available_metrics):
-        metric_label = metric.replace("_", " ").title()
+        metric_label = _metric_label(metric)
 
         ax_w = axes[row][0]
         curves_w = wiggle_curves.get(metric)
         if curves_w:
             _draw_method_curves(
-                ax_w, curves_w, metric, x_label="Perturbation Magnitude"
+                ax_w,
+                curves_w,
+                metric,
+                x_label=PERTURBATION_AXIS_LABEL,
+                x_mode="perturbation",
+                exp_name="ellipses",
             )
             ax_w.set_title(
-                f"{metric_label} vs Perturbation Magnitude",
+                f"{metric_label} vs {PERTURBATION_AXIS_LABEL.title()}",
                 fontsize=11.5,
                 fontweight="bold",
             )
-            if legend_handles is None:
-                handles, labels = ax_w.get_legend_handles_labels()
-                if handles:
-                    legend_handles, legend_labels = handles, labels
+            _merge_legend_entries(legend_entries, ax_w)
         else:
             ax_w.set_axis_off()
 
         ax_r = axes[row][1]
         curves_r = resolution_curves.get(metric)
         if curves_r:
-            _draw_method_curves(ax_r, curves_r, metric, x_label="Resolution")
+            _draw_method_curves(
+                ax_r,
+                curves_r,
+                metric,
+                x_label=RESOLUTION_AXIS_LABEL,
+                x_mode="resolution",
+                exp_name="ellipses",
+            )
             ax_r.set_title(
-                f"{metric_label} vs Resolution",
+                f"{metric_label} vs Cells per Side",
                 fontsize=11.5,
                 fontweight="bold",
             )
-            if legend_handles is None:
-                handles, labels = ax_r.get_legend_handles_labels()
-                if handles:
-                    legend_handles, legend_labels = handles, labels
+            _merge_legend_entries(legend_entries, ax_r)
         else:
             ax_r.set_axis_off()
 
-    if legend_handles:
+    if legend_entries:
         fig.legend(
-            legend_handles,
-            legend_labels,
+            list(legend_entries.values()),
+            list(legend_entries.keys()),
             loc="lower center",
-            ncol=min(6, len(legend_labels)),
+            ncol=min(6, len(legend_entries)),
             fontsize=9,
             frameon=True,
             bbox_to_anchor=(0.5, -0.005),
