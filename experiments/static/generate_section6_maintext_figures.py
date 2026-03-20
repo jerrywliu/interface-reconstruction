@@ -30,6 +30,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from experiments.static.ellipses import RANDOM_SEED as ELLIPSE_RANDOM_SEED
+from experiments.static.lines import RANDOM_SEED as LINE_RANDOM_SEED
 from experiments.static.run_perturbed_sweeps import (
     DISPLAY_LABELS,
     METHOD_STYLES,
@@ -87,7 +88,7 @@ REPRESENTATIVE_CASES = {
         "margin_frac": 0.20,
     },
     "squares": {
-        "resolution": 0.64,
+        "resolution": 0.50,
         "wiggle": 0.10,
         "seed": 0,
         "case_index": 12,
@@ -101,7 +102,7 @@ REPRESENTATIVE_CASES = {
         "margin_frac": 0.10,
     },
     "circles": {
-        "resolution": 0.64,
+        "resolution": 0.32,
         "wiggle": 0.10,
         "seed": 0,
         "case_index": 12,
@@ -115,7 +116,7 @@ REPRESENTATIVE_CASES = {
         "margin_frac": 0.14,
     },
     "ellipses": {
-        "resolution": 0.64,
+        "resolution": 0.32,
         "wiggle": 0.10,
         "seed": 0,
         "case_index": 12,
@@ -286,6 +287,40 @@ def _ellipse_case_params(case_index: int) -> dict:
     raise ValueError(f"Invalid ellipse case index: {case_index}")
 
 
+def _line_case_params(case_index: int) -> dict:
+    rng = np.random.default_rng(LINE_RANDOM_SEED)
+    angles = np.linspace(0.0, 2.0 * math.pi, 25 + 1)[:-1]
+    for i, angle in enumerate(angles):
+        x1, y1 = rng.uniform(50, 51), rng.uniform(50, 51)
+        x2 = x1 + 0.2
+        y2 = y1 + math.tan(angle) * (x2 - x1)
+        if i == case_index:
+            return {
+                "p1": np.asarray([x1, y1], dtype=float),
+                "p2": np.asarray([x2, y2], dtype=float),
+            }
+    raise ValueError(f"Invalid line case index: {case_index}")
+
+
+def _line_true_segments(case_index: int, bounds: tuple[float, float, float, float]) -> np.ndarray:
+    params = _line_case_params(case_index)
+    p1 = params["p1"]
+    p2 = params["p2"]
+    direction = p2 - p1
+    norm = np.linalg.norm(direction)
+    if norm == 0.0:
+        direction = np.array([1.0, 0.0], dtype=float)
+    else:
+        direction = direction / norm
+    x0, x1, y0, y1 = bounds
+    center = 0.5 * (p1 + p2)
+    span = max(x1 - x0, y1 - y0)
+    half_length = 0.9 * math.sqrt(2.0) * span
+    a = center - half_length * direction
+    b = center + half_length * direction
+    return np.asarray([[a, b]], dtype=float)
+
+
 def _ellipse_true_segments(case_index: int, sample_count: int = 720) -> np.ndarray:
     params = _ellipse_case_params(case_index)
     center = params["center"]
@@ -446,12 +481,22 @@ def _generate_representative_figure(exp_name: str, spec: dict, out_path: Path):
     )
     mesh_path = PLOTS_ROOT / base_save_name / "vtk" / "mesh.vtk"
     mesh_segments = _mesh_segments(mesh_path)
-    true_segments = _load_true_segments(exp_name, base_save_name, spec["case_index"])
-    x0, x1, y0, y1 = _compute_view_bounds(
-        true_segments,
-        min_span=spec["min_span"],
-        margin_frac=spec["margin_frac"],
-    )
+    if exp_name == "lines":
+        params = _line_case_params(spec["case_index"])
+        center = 0.5 * (params["p1"] + params["p2"])
+        span = spec["min_span"] * (1.0 + 2.0 * spec["margin_frac"])
+        x0 = center[0] - span / 2.0
+        x1 = center[0] + span / 2.0
+        y0 = center[1] - span / 2.0
+        y1 = center[1] + span / 2.0
+        true_segments = _line_true_segments(spec["case_index"], (x0, x1, y0, y1))
+    else:
+        true_segments = _load_true_segments(exp_name, base_save_name, spec["case_index"])
+        x0, x1, y0, y1 = _compute_view_bounds(
+            true_segments,
+            min_span=spec["min_span"],
+            margin_frac=spec["margin_frac"],
+        )
 
     ncols = 1 + len(spec["methods"])
     fig, axes = plt.subplots(1, ncols, figsize=(3.25 * ncols, 3.5))
