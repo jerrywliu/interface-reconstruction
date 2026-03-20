@@ -74,7 +74,7 @@ QUANT_SPECS = {
 
 REPRESENTATIVE_CASES = {
     "lines": {
-        "resolution": 0.50,
+        "resolution": 0.32,
         "wiggle": 0.30,
         "seed": 0,
         "case_index": 12,
@@ -84,8 +84,8 @@ REPRESENTATIVE_CASES = {
             ("linear", "ours (linear)"),
         ],
         "true_title": "true",
-        "min_span": 1.3,
-        "margin_frac": 0.20,
+        "min_span": 100.0,
+        "margin_frac": 0.00,
     },
     "squares": {
         "resolution": 0.50,
@@ -482,13 +482,7 @@ def _generate_representative_figure(exp_name: str, spec: dict, out_path: Path):
     mesh_path = PLOTS_ROOT / base_save_name / "vtk" / "mesh.vtk"
     mesh_segments = _mesh_segments(mesh_path)
     if exp_name == "lines":
-        params = _line_case_params(spec["case_index"])
-        center = 0.5 * (params["p1"] + params["p2"])
-        span = spec["min_span"] * (1.0 + 2.0 * spec["margin_frac"])
-        x0 = center[0] - span / 2.0
-        x1 = center[0] + span / 2.0
-        y0 = center[1] - span / 2.0
-        y1 = center[1] + span / 2.0
+        x0, x1, y0, y1 = _segments_bounds(mesh_segments)
         true_segments = _line_true_segments(spec["case_index"], (x0, x1, y0, y1))
     else:
         true_segments = _load_true_segments(exp_name, base_save_name, spec["case_index"])
@@ -505,12 +499,14 @@ def _generate_representative_figure(exp_name: str, spec: dict, out_path: Path):
 
     panels = [("true", None)] + spec["methods"]
     for ax, (algo_or_true, title) in zip(axes, panels):
+        mesh_linewidth = 0.6 if exp_name == "lines" else 0.45
+        mesh_alpha = 0.8 if exp_name == "lines" else MESH_ALPHA
         _add_segments(
             ax,
             mesh_segments,
             color=MESH_COLOR,
-            linewidth=0.45,
-            alpha=MESH_ALPHA,
+            linewidth=mesh_linewidth,
+            alpha=mesh_alpha,
             zorder=1,
         )
         if algo_or_true == "true":
@@ -562,6 +558,18 @@ def _generate_representative_figure(exp_name: str, spec: dict, out_path: Path):
         ax.set_yticks([])
         ax.set_facecolor("white")
         ax.set_title(panel_title, fontsize=11.0, fontweight="bold")
+
+        if exp_name == "lines" and algo_or_true != "true" and len(recon_segments):
+            pts = recon_segments.reshape(-1, 2)
+            ax.scatter(
+                pts[:, 0],
+                pts[:, 1],
+                s=10,
+                c=style.get("color", "#1f77b4"),
+                alpha=0.9,
+                zorder=4,
+                linewidths=0.0,
+            )
 
     fig.tight_layout()
     fig.savefig(out_path, dpi=300, bbox_inches="tight")
