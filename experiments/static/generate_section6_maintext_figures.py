@@ -21,16 +21,19 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
-import pyvista as pv
+import vtk
 from matplotlib.collections import LineCollection
+from matplotlib.patches import Polygon as PolygonPatch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from experiments.static.circles import RANDOM_SEED as CIRCLE_RANDOM_SEED
 from experiments.static.ellipses import RANDOM_SEED as ELLIPSE_RANDOM_SEED
 from experiments.static.lines import RANDOM_SEED as LINE_RANDOM_SEED
+from experiments.static.squares import RANDOM_SEED as SQUARE_RANDOM_SEED
 from experiments.static.run_perturbed_sweeps import (
     DISPLAY_LABELS,
     METHOD_STYLES,
@@ -43,6 +46,13 @@ from experiments.static.run_perturbed_sweeps import (
     _load_sweep_rows,
     _make_save_name,
 )
+from experiments.static.zalesak import (
+    RANDOM_SEED as ZALESAK_RANDOM_SEED,
+    build_true_reference_zalesak,
+    rotate_point_around_center,
+)
+from main.structs.facets.circular_facet import ArcFacet
+from main.structs.facets.corner_facet import CornerFacet
 
 
 PLOTS_ROOT = REPO_ROOT / "plots"
@@ -149,6 +159,25 @@ TRUE_COLOR = "#111827"
 TRUE_STYLE = (0, (3.0, 2.2))
 MESH_COLOR = "#d1d5db"
 MESH_ALPHA = 0.65
+FLUID_FILL_COLOR = "#bfdbfe"
+FLUID_FILL_ALPHA = 0.30
+
+
+def _read_polydata(path: Path):
+    if path.suffix.lower() == ".vtp":
+        reader = vtk.vtkXMLPolyDataReader()
+        reader.SetFileName(str(path))
+        reader.Update()
+        return reader.GetOutput()
+    if path.suffix.lower() == ".vtk":
+        reader = vtk.vtkStructuredGridReader()
+        reader.SetFileName(str(path))
+        reader.Update()
+        extract = vtk.vtkExtractEdges()
+        extract.SetInputData(reader.GetOutput())
+        extract.Update()
+        return extract.GetOutput()
+    raise ValueError(f"Unsupported polydata format: {path}")
 
 
 def _read_metric_values(path: Path) -> list[float]:
@@ -229,21 +258,20 @@ def _backfill_circle_tangent_rows(rows: list[dict]) -> list[dict]:
     return rows
 
 
-def _iter_lines(poly: pv.PolyData) -> list[np.ndarray]:
-    lines = poly.lines
-    if lines is None or len(lines) == 0:
-        return []
-    segments = []
-    idx = 0
-    while idx < len(lines):
-        n = lines[idx]
-        pts = lines[idx + 1 : idx + 1 + n]
-        idx += n + 1
-        segments.append(poly.points[pts][:, :2].copy())
-    return segments
+def _iter_lines(poly) -> list[np.ndarray]:
+    lines = []
+    for cell_id in range(poly.GetNumberOfCells()):
+        cell = poly.GetCell(cell_id)
+        pts = []
+        for i in range(cell.GetNumberOfPoints()):
+            point = cell.GetPoints().GetPoint(i)
+            pts.append([point[0], point[1]])
+        if len(pts) >= 2:
+            lines.append(np.asarray(pts, dtype=float))
+    return lines
 
 
-def _segments_from_polydata(poly: pv.PolyData) -> np.ndarray:
+def _segments_from_polydata(poly) -> np.ndarray:
     chunks = []
     for line in _iter_lines(poly):
         if len(line) < 2:
@@ -255,8 +283,7 @@ def _segments_from_polydata(poly: pv.PolyData) -> np.ndarray:
 
 
 def _mesh_segments(mesh_path: Path) -> np.ndarray:
-    mesh = pv.read(mesh_path)
-    return _segments_from_polydata(mesh.extract_all_edges())
+    return _segments_from_polydata(_read_polydata(mesh_path))
 
 
 def _true_vtp_path(exp_name: str, save_name: str, case_index: int) -> Path:
@@ -321,6 +348,48 @@ def _line_true_segments(case_index: int, bounds: tuple[float, float, float, floa
     return np.asarray([[a, b]], dtype=float)
 
 
+def _line_fill_polygon(case_index: int, bounds: tuple[float, float, float, float]) -> np.ndarray:
+    params = _line_case_params(case_index)
+    p1 = params["p1"]
+    p2 = params["p2"]
+    rect = np.asarray(
+        [
+            [bounds[0], bounds[2]],
+            [bounds[1], bounds[2]],
+            [bounds[1], bounds[3]],
+            [bounds[0], bounds[3]],
+        ],
+        dtype=float,
+    )
+
+    def _cross(point):
+        return (p2[0] - p1[0]) * (point[1] - p1[1]) - (p2[1] - p1[1]) * (point[0] - p1[0])
+
+    def _intersect(start, end):
+        s_val = _cross(start)
+        e_val = _cross(end)
+        denom = s_val - e_val
+        if abs(denom) < 1e-14:
+            return end
+        t = s_val / denom
+        return start + t * (end - start)
+
+    clipped = []
+    for start, end in zip(rect, np.roll(rect, -1, axis=0)):
+        start_inside = _cross(start) >= 0
+        end_inside = _cross(end) >= 0
+        if start_inside and end_inside:
+            clipped.append(end)
+        elif start_inside and not end_inside:
+            clipped.append(_intersect(start, end))
+        elif (not start_inside) and end_inside:
+            clipped.append(_intersect(start, end))
+            clipped.append(end)
+    if not clipped:
+        return np.empty((0, 2), dtype=float)
+    return np.asarray(clipped, dtype=float)
+
+
 def _ellipse_true_segments(case_index: int, sample_count: int = 720) -> np.ndarray:
     params = _ellipse_case_params(case_index)
     center = params["center"]
@@ -340,18 +409,161 @@ def _ellipse_true_segments(case_index: int, sample_count: int = 720) -> np.ndarr
     return np.stack([pts[:-1], pts[1:]], axis=1)
 
 
+def _circle_case_params(case_index: int, radius: float = 10.0) -> dict:
+    rng = np.random.default_rng(CIRCLE_RANDOM_SEED)
+    for i in range(25):
+        center = [rng.uniform(50, 51), rng.uniform(50, 51)]
+        if i == case_index:
+            return {"center": np.asarray(center, dtype=float), "radius": float(radius)}
+    raise ValueError(f"Invalid circle case index: {case_index}")
+
+
+def _circle_boundary_points(case_index: int, sample_count: int = 720) -> np.ndarray:
+    params = _circle_case_params(case_index)
+    ts = np.linspace(0.0, 2.0 * math.pi, sample_count, endpoint=False)
+    pts = np.zeros((sample_count, 2), dtype=float)
+    for i, t in enumerate(ts):
+        pts[i, 0] = params["center"][0] + params["radius"] * math.cos(t)
+        pts[i, 1] = params["center"][1] + params["radius"] * math.sin(t)
+    return pts
+
+
+def _circle_true_segments(case_index: int, sample_count: int = 720) -> np.ndarray:
+    pts = _circle_boundary_points(case_index, sample_count=sample_count)
+    pts = np.vstack([pts, pts[0]])
+    return np.stack([pts[:-1], pts[1:]], axis=1)
+
+
+def _square_case_params(case_index: int) -> dict:
+    rng = np.random.default_rng(SQUARE_RANDOM_SEED)
+    side_lengths = np.linspace(10, 30, 25)
+    for i, side_length in enumerate(side_lengths):
+        center = [rng.uniform(50, 51), rng.uniform(50, 51)]
+        theta = rng.uniform(0, math.pi / 2)
+        if i == case_index:
+            half_side = side_length / 2
+            square = [
+                [-half_side, -half_side],
+                [half_side, -half_side],
+                [half_side, half_side],
+                [-half_side, half_side],
+            ]
+            rotated_square = []
+            for point in square:
+                x = point[0] * math.cos(theta) - point[1] * math.sin(theta)
+                y = point[0] * math.sin(theta) + point[1] * math.cos(theta)
+                rotated_square.append([x + center[0], y + center[1]])
+            return {
+                "center": np.asarray(center, dtype=float),
+                "theta": float(theta),
+                "side_length": float(side_length),
+                "polygon": np.asarray(rotated_square, dtype=float),
+            }
+    raise ValueError(f"Invalid square case index: {case_index}")
+
+
+def _square_true_segments(case_index: int) -> np.ndarray:
+    pts = _square_case_params(case_index)["polygon"]
+    pts = np.vstack([pts, pts[0]])
+    return np.stack([pts[:-1], pts[1:]], axis=1)
+
+
+def _facet_segments(facet, *, arc_samples: int = 256) -> np.ndarray:
+    if isinstance(facet, (ArcFacet, CornerFacet)):
+        points = np.asarray(facet.sample(arc_samples), dtype=float)
+    else:
+        points = np.asarray(facet.sample(2), dtype=float)
+    if len(points) < 2:
+        return np.empty((0, 2, 2), dtype=float)
+    return np.stack([points[:-1], points[1:]], axis=1)
+
+
+def _concat_facet_points(facets, *, arc_samples: int = 256) -> np.ndarray:
+    points = []
+    for facet in facets:
+        sample_count = arc_samples if isinstance(facet, (ArcFacet, CornerFacet)) else 2
+        sampled = np.asarray(facet.sample(sample_count), dtype=float)
+        if len(sampled) == 0:
+            continue
+        if not points:
+            points.extend(sampled.tolist())
+            continue
+        if np.allclose(points[-1], sampled[0], atol=1e-8):
+            points.extend(sampled[1:].tolist())
+        else:
+            points.extend(sampled.tolist())
+    return np.asarray(points, dtype=float)
+
+
+def _zalesak_case_params(
+    case_index: int,
+    radius: float = 15.0,
+    slot_width: float = 5.0,
+    slot_top_rel: float = 10.0,
+) -> dict:
+    rng = np.random.default_rng(ZALESAK_RANDOM_SEED)
+    for i in range(25):
+        center = [rng.uniform(50, 51), rng.uniform(50, 51)]
+        theta = rng.uniform(0, math.pi / 2)
+        if i == case_index:
+            cx, cy = center
+            half_w = slot_width * 0.5
+            y_bottom = cy - radius - 1.0e-6
+            y_top = cy + slot_top_rel
+            rect = [
+                [cx - half_w, y_bottom],
+                [cx + half_w, y_bottom],
+                [cx + half_w, y_top],
+                [cx - half_w, y_top],
+            ]
+            rect = [rotate_point_around_center(point, center, theta) for point in rect]
+            return {
+                "center": np.asarray(center, dtype=float),
+                "theta": float(theta),
+                "slot_rect": np.asarray(rect, dtype=float),
+                "radius": float(radius),
+                "slot_width": float(slot_width),
+                "slot_top_rel": float(slot_top_rel),
+            }
+    raise ValueError(f"Invalid zalesak case index: {case_index}")
+
+
+def _zalesak_true_facets(case_index: int):
+    params = _zalesak_case_params(case_index)
+    return build_true_reference_zalesak(
+        params["center"].tolist(),
+        params["radius"],
+        params["slot_rect"].tolist(),
+        params["theta"],
+    )["facets"]
+
+
+def _zalesak_true_segments(case_index: int) -> np.ndarray:
+    chunks = [_facet_segments(facet) for facet in _zalesak_true_facets(case_index)]
+    chunks = [chunk for chunk in chunks if len(chunk)]
+    if not chunks:
+        return np.empty((0, 2, 2), dtype=float)
+    return np.concatenate(chunks, axis=0)
+
+
 def _load_true_segments(exp_name: str, save_name: str, case_index: int) -> np.ndarray:
+    if exp_name == "squares":
+        return _square_true_segments(case_index)
+    if exp_name == "circles":
+        return _circle_true_segments(case_index)
     if exp_name == "ellipses":
         return _ellipse_true_segments(case_index)
+    if exp_name == "zalesak":
+        return _zalesak_true_segments(case_index)
     true_path = _true_vtp_path(exp_name, save_name, case_index)
-    return _segments_from_polydata(pv.read(true_path))
+    return _segments_from_polydata(_read_polydata(true_path))
 
 
 def _load_reconstructed_segments(save_name: str, case_index: int) -> np.ndarray:
     facet_path = (
         PLOTS_ROOT / save_name / "vtk" / "reconstructed" / "facets" / f"{case_index}.vtp"
     )
-    return _segments_from_polydata(pv.read(facet_path))
+    return _segments_from_polydata(_read_polydata(facet_path))
 
 
 def _segments_bounds(segments: np.ndarray) -> tuple[float, float, float, float]:
@@ -401,6 +613,48 @@ def _add_segments(ax, segments: np.ndarray, *, color: str, linewidth: float, alp
     )
     coll.set_rasterized(True)
     ax.add_collection(coll)
+
+
+def _add_fill_patch(ax, vertices: np.ndarray, *, facecolor: str = FLUID_FILL_COLOR, alpha: float = FLUID_FILL_ALPHA, zorder: int = 0):
+    if len(vertices) < 3:
+        return
+    patch = PolygonPatch(
+        vertices,
+        closed=True,
+        facecolor=facecolor,
+        edgecolor="none",
+        alpha=alpha,
+        zorder=zorder,
+    )
+    patch.set_rasterized(True)
+    ax.add_patch(patch)
+
+
+def _add_true_region_fill(
+    ax,
+    exp_name: str,
+    spec: dict,
+    bounds: tuple[float, float, float, float],
+):
+    case_index = spec["case_index"]
+    if exp_name == "lines":
+        vertices = _line_fill_polygon(case_index, bounds)
+        _add_fill_patch(ax, vertices)
+        return
+    if exp_name == "squares":
+        _add_fill_patch(ax, _square_case_params(case_index)["polygon"])
+        return
+    if exp_name == "circles":
+        _add_fill_patch(ax, _circle_boundary_points(case_index))
+        return
+    if exp_name == "ellipses":
+        ellipse_segments = _ellipse_true_segments(case_index)
+        pts = ellipse_segments[:, 0, :]
+        _add_fill_patch(ax, pts)
+        return
+    if exp_name == "zalesak":
+        _add_fill_patch(ax, _concat_facet_points(_zalesak_true_facets(case_index)))
+        return
 
 
 def _generate_quantitative_panel(exp_name: str, exp_data: dict, methods: list[str], metrics: tuple[str, str], out_path: Path):
@@ -499,8 +753,9 @@ def _generate_representative_figure(exp_name: str, spec: dict, out_path: Path):
 
     panels = [("true", None)] + spec["methods"]
     for ax, (algo_or_true, title) in zip(axes, panels):
-        mesh_linewidth = 0.6 if exp_name == "lines" else 0.45
-        mesh_alpha = 0.8 if exp_name == "lines" else MESH_ALPHA
+        _add_true_region_fill(ax, exp_name, spec, (x0, x1, y0, y1))
+        mesh_linewidth = 0.42 if exp_name == "lines" else 0.32
+        mesh_alpha = 0.72 if exp_name == "lines" else 0.58
         _add_segments(
             ax,
             mesh_segments,
@@ -514,7 +769,7 @@ def _generate_representative_figure(exp_name: str, spec: dict, out_path: Path):
                 ax,
                 true_segments,
                 color=TRUE_COLOR,
-                linewidth=2.4,
+                linewidth=1.55,
                 alpha=1.0,
                 linestyle="-",
                 zorder=3,
@@ -535,8 +790,8 @@ def _generate_representative_figure(exp_name: str, spec: dict, out_path: Path):
                 ax,
                 true_segments,
                 color=TRUE_COLOR,
-                linewidth=1.4,
-                alpha=0.95,
+                linewidth=0.95,
+                alpha=0.90,
                 linestyle=TRUE_STYLE,
                 zorder=2,
             )
@@ -544,7 +799,7 @@ def _generate_representative_figure(exp_name: str, spec: dict, out_path: Path):
                 ax,
                 recon_segments,
                 color=style.get("color", "#1f77b4"),
-                linewidth=max(2.1, style.get("linewidth", 2.1)),
+                linewidth=1.55,
                 alpha=1.0,
                 linestyle="-",
                 zorder=3,
@@ -564,9 +819,9 @@ def _generate_representative_figure(exp_name: str, spec: dict, out_path: Path):
             ax.scatter(
                 pts[:, 0],
                 pts[:, 1],
-                s=10,
+                s=5,
                 c=style.get("color", "#1f77b4"),
-                alpha=0.9,
+                alpha=0.85,
                 zorder=4,
                 linewidths=0.0,
             )
