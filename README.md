@@ -14,6 +14,7 @@ python -m experiments.static.run_linear_sweeps --subprocess --notify
 Summary plots are written to `results/static/linear_*.png` and uploaded to Slack when `--notify` is set.
 
 For a full description of the sweep experiments (linear + perturbed), see `docs/EXPERIMENTS.md`.
+For local plotting, reconstruction inspection, and paper-figure regeneration, see `docs/VISUALIZATION_WORKFLOW.md`.
 
 ## Contributors
 
@@ -52,6 +53,7 @@ Our algorithms consist of two main features:
 ## Static Experiments
 
 These experiments test interface reconstruction on various geometric shapes with different algorithms and mesh resolutions.
+For the current local inspection workflow, including `--plot_only`, Section 6 figure regeneration, and Zalesak outlier replay, see `docs/VISUALIZATION_WORKFLOW.md`.
 
 ### Lines
 ```bash

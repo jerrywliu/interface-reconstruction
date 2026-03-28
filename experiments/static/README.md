@@ -18,6 +18,17 @@ All experiments use a 100x100 Cartesian grid with varying resolutions. The shape
 
 ## Running the Experiments
 
+For the current local visualization workflow, including:
+
+- inspecting a single `plots/<save_name>/` directory
+- rebuilding plots with `--plot_only`
+- regenerating Section 6 summary panels from CSVs
+- replaying deterministic Zalesak failures
+
+see:
+
+- `docs/VISUALIZATION_WORKFLOW.md`
+
 ### Camera-Ready Pipelines
 
 ```bash
