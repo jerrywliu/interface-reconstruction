@@ -8,6 +8,7 @@ from scipy.optimize import minimize, root, newton
 # Keep in sync with BasePolygon / NeighboredPolygon circular prechecks.
 ARC_FIT_LINEARITY_THRESHOLD = 1e-6
 ARC_FIT_OPTIMIZATION_THRESHOLD = 1e-10
+ARC_FIT_RESIDUAL_THRESHOLD = 1e-5
 
 
 class LinearFacetShortcut(Exception):
@@ -21,6 +22,20 @@ class LinearFacetShortcut(Exception):
         self.pRight = pRight
         self.linear_fraction = linear_fraction
         self.target_fraction = target_fraction
+
+
+def _clamp_axis_coordinate(value, other, radius):
+    lower = other - 2 * radius
+    upper = other + 2 * radius
+    return min(max(value, lower), upper)
+
+
+def _circle_center_y(radius, r1, r3):
+    discriminant = radius**2 - ((r3 - r1) ** 2) / 4
+    # Newton updates can briefly overshoot the feasible interval. Clamp any
+    # remaining tiny negative due to floating-point drift, but reject genuinely
+    # invalid states at the call site before we get here.
+    return math.sqrt(max(discriminant, 0.0))
 
 
 #True if major arc
@@ -44,6 +59,44 @@ def getArcArea(p1, p2, center, radius):
         area -= math.pi*radius**2
 
     return area
+
+
+def _minor_arc_midpoint(p1, p2, center, radius):
+    chord_mid = lerp(p1, p2, 0.5)
+    vx = chord_mid[0] - center[0]
+    vy = chord_mid[1] - center[1]
+    vnorm = math.hypot(vx, vy)
+    if vnorm < 1e-14:
+        vx = center[1] - p1[1]
+        vy = p1[0] - center[0]
+        vnorm = math.hypot(vx, vy)
+    return [
+        center[0] + abs(radius) * vx / vnorm,
+        center[1] + abs(radius) * vy / vnorm,
+    ]
+
+
+def getArcAreaInPoly(p1, p2, center, radius, poly):
+    radius = abs(radius)
+    distance = min(getDistance(p1, p2), 2 * radius)
+    theta = math.asin(distance / (2 * radius))
+    minor_area = (theta * radius**2) - (distance * math.cos(theta) * radius / 2)
+    major_area = math.pi * radius**2 - minor_area
+
+    minor_mid = _minor_arc_midpoint(p1, p2, center, radius)
+    major_mid = [2 * center[0] - minor_mid[0], 2 * center[1] - minor_mid[1]]
+
+    if pointInPoly(minor_mid, poly):
+        return minor_area
+    if pointInPoly(major_mid, poly):
+        return major_area
+
+    # Boundary-touching midpoint cases are rare. Fall back to whether the
+    # polygon contains the circle center: center-in-poly implies the larger
+    # segment is the clipped region, otherwise use the smaller cap.
+    if pointInPoly(center, poly):
+        return major_area
+    return minor_area
 
 #Newton's method never exceeds maxRadius. TODO: can add code verifying that maxRadius is valid upper bound
 def matchArcArea(distance, area, epsilon, maxRadius=1e6):
@@ -224,7 +277,11 @@ def getCircleIntersectArea(center, radius, poly): #TODO fix
     #Hyperparameters
     adjustcorneramount = 1e-14
     max_corner_retries = 16
-    eps = 1e-12 * max(1.0, abs(radius))
+    poly_scale = 0.0
+    for i in range(len(poly)):
+        for j in range(i + 1, len(poly)):
+            poly_scale = max(poly_scale, getDistance(poly[i], poly[j]))
+    eps = 1e-12 * max(1.0, poly_scale)
     retries = 0
     notmod = True
     while notmod:
@@ -240,6 +297,14 @@ def getCircleIntersectArea(center, radius, poly): #TODO fix
                 intersectpoints.append(curpoint)
             lineintersects = getCircleLineIntersects(curpoint, nextpoint, center, abs(radius))
             for intersect in lineintersects:
+                if (
+                    curin == nextin
+                    and (
+                        getDistance(intersect, curpoint) < eps
+                        or getDistance(intersect, nextpoint) < eps
+                    )
+                ):
+                    continue
                 intersectpoints.append(intersect)
                 if len(arcpoints) == 0 and curin and not(nextin):
                     startAt = 0
@@ -269,7 +334,9 @@ def getCircleIntersectArea(center, radius, poly): #TODO fix
 
     #Sum arc areas
     for i in range(0, len(arcpoints), 2):
-        area += getArcArea(arcpoints[i], arcpoints[i+1], center, abs(radius))
+        area += getArcAreaInPoly(
+            arcpoints[i], arcpoints[i + 1], center, abs(radius), poly
+        )
     area += getArea(intersectpoints)
     
     if len(arcpoints) == 0 and area == 0:
@@ -293,6 +360,15 @@ def _unique_points(points, tol):
         if keep:
             unique.append(p)
     return unique
+
+
+def _arc_fit_max_fraction_error(polys, fractions, center, radius):
+    max_error = 0.0
+    for poly, target_fraction in zip(polys, fractions):
+        fit_area, _ = getCircleIntersectArea(center, radius, poly)
+        fit_fraction = fit_area / abs(getArea(poly))
+        max_error = max(max_error, abs(fit_fraction - target_fraction))
+    return max_error
 
 #Newton's method to match a1, a2, a3s
 #Matches area fractions a1, a2, a3
@@ -338,25 +414,59 @@ def getArcFacet(
                 afrac2,
             )
 
-    #Center to left of line l1 to l2
-    if getPolyLineArea(poly2, l1, l2) > afrac2*getArea(poly2):
-        if _orientation_retry:
-            print(
-                "Orientation flip did not resolve getArcFacet({}, {}, {}, {}, {}, {}, {})".format(
-                    poly1, poly2, poly3, afrac1, afrac2, afrac3, epsilon
-                )
+    # Center to left of line l1 to l2.
+    #
+    # The old test only flipped when the middle-cell linear fraction was larger
+    # than the target fraction. That misses cap-style stencils where the linear
+    # seed is numerically much closer to the complement target than to the
+    # requested target, even though it lies on the "small" side of the
+    # inequality. Those cases should be solved in the complemented orientation.
+    direct_middle_gap = abs(poly2_linear_fraction - afrac2)
+    complement_middle_gap = abs(poly2_linear_fraction - (1 - afrac2))
+    should_flip_orientation = (
+        complement_middle_gap + ARC_FIT_OPTIMIZATION_THRESHOLD < direct_middle_gap
+    )
+    if should_flip_orientation and not _orientation_retry:
+        retcenter = retradius = retintersects = None
+        try:
+            retcenter, retradius, retintersects = getArcFacet(
+                poly3,
+                poly2,
+                poly1,
+                1-afrac3,
+                1-afrac2,
+                1-afrac1,
+                epsilon,
+                _orientation_retry=True,
             )
-            return None, None, None
-        retcenter, retradius, retintersects = getArcFacet(
-            poly3,
-            poly2,
-            poly1,
-            1-afrac3,
-            1-afrac2,
-            1-afrac1,
-            epsilon,
-            _orientation_retry=True,
-        )
+        except RuntimeError:
+            retcenter = retradius = retintersects = None
+        if retcenter is None:
+            try:
+                retcenter, retradius, retintersects = getArcFacetRoot(
+                    poly3,
+                    poly2,
+                    poly1,
+                    1-afrac3,
+                    1-afrac2,
+                    1-afrac1,
+                    epsilon,
+                )
+            except Exception:
+                retcenter = retradius = retintersects = None
+        if (
+            retcenter is not None
+            and retradius is not None
+            and retintersects is not None
+        ):
+            residual = _arc_fit_max_fraction_error(
+                (poly3, poly2, poly1),
+                (1 - afrac3, 1 - afrac2, 1 - afrac1),
+                retcenter,
+                retradius,
+            )
+            if residual > ARC_FIT_RESIDUAL_THRESHOLD:
+                retcenter = retradius = retintersects = None
         if retcenter is not None:
             retintersects.reverse()
             retradius *= -1
@@ -375,7 +485,16 @@ def getArcFacet(
     poly2intersects = getPolyLineIntersects(poly2, l1, l2)
     poly3intersects = getPolyLineIntersects(poly3, l1, l2)
 
-    if len(poly2intersects) > 0 and (getDistance(poly2intersects[0], poly1intersects[-1]) > fixLinearFacetOrientation and getDistance(poly2intersects[-1], poly3intersects[0]) > fixLinearFacetOrientation):
+    if (
+        not _orientation_retry
+        and len(poly2intersects) > 0
+        and (
+            getDistance(poly2intersects[0], poly1intersects[-1])
+            > fixLinearFacetOrientation
+            and getDistance(poly2intersects[-1], poly3intersects[0])
+            > fixLinearFacetOrientation
+        )
+    ):
         #Not a good linear facet
         print("Not a good linear facet")
         if getDistance(poly2intersects[-1], poly1intersects[0]) < fixLinearFacetOrientation:
@@ -450,7 +569,7 @@ def getArcFacet(
     r1 = r1down*t1 + r1up*(1-t1)
     r3 = r3down*t3 + r3up*(1-t3)
     radius = abs(r3-r1)
-    center = [(r1+r3)/2, math.sqrt(radius**2 - ((r3-r1)**2) / 4)]
+    center = [(r1+r3)/2, _circle_center_y(radius, r1, r3)]
     
     numcycles = 0
     
@@ -458,7 +577,7 @@ def getArcFacet(
 
         #adjust radius to match a2
         radius = abs(r3-r1)
-        center = [(r1+r3)/2, math.sqrt(radius**2 - ((r3-r1)**2) / 4)]
+        center = [(r1+r3)/2, _circle_center_y(radius, r1, r3)]
         cura2, _ = getCircleIntersectArea(center, radius, rpoly2)
         rgap = radius
         doConverge = False
@@ -496,12 +615,12 @@ def getArcFacet(
             if radius**2 - ((r3-r1)**2) / 4 < 0:
                 print("Error in getArcFacet({}, {}, {}, {}, {}, {}, {})".format(poly1, poly2, poly3, afrac1, afrac2, afrac3, epsilon))
                 return None, None, None
-            center = [(r1+r3)/2, math.sqrt(radius**2 - ((r3-r1)**2) / 4)]
+            center = [(r1+r3)/2, _circle_center_y(radius, r1, r3)]
             cura2, _ = getCircleIntersectArea(center, radius, rpoly2)
 
         #adjust r1 to match a1
         dt = dtbase
-        center = [(r1+r3)/2, math.sqrt(radius**2 - ((r3-r1)**2) / 4)]
+        center = [(r1+r3)/2, _circle_center_y(radius, r1, r3)]
         cura1, _ = getCircleIntersectArea(center, radius, rpoly1)
 
         innercycles = 0
@@ -517,13 +636,13 @@ def getArcFacet(
             if da1dr1 == 0:
                 print("Error in getArcFacet({}, {}, {}, {}, {}, {}, {})".format(poly1, poly2, poly3, afrac1, afrac2, afrac3, epsilon))
                 return None, None, None
-            r1 = max(r3 - 2*radius, r1 + (a1-cura1)/da1dr1)
-            center = [(r1+r3)/2, math.sqrt(radius**2 - ((r3-r1)**2) / 4)]
+            r1 = _clamp_axis_coordinate(r1 + (a1-cura1)/da1dr1, r3, radius)
+            center = [(r1+r3)/2, _circle_center_y(radius, r1, r3)]
             cura1, _ = getCircleIntersectArea(center, radius, rpoly1)
         
         #adjust radius to match a2
         radius = abs(r3-r1)
-        center = [(r1+r3)/2, math.sqrt(radius**2 - ((r3-r1)**2) / 4)]
+        center = [(r1+r3)/2, _circle_center_y(radius, r1, r3)]
         cura2, _ = getCircleIntersectArea(center, radius, rpoly2)
         rgap = radius
         doConverge = False
@@ -561,12 +680,12 @@ def getArcFacet(
             if radius**2 - ((r3-r1)**2) / 4 < 0:
                 print("Error in getArcFacet({}, {}, {}, {}, {}, {}, {})".format(poly1, poly2, poly3, afrac1, afrac2, afrac3, epsilon))
                 return None, None, None
-            center = [(r1+r3)/2, math.sqrt(radius**2 - ((r3-r1)**2) / 4)]
+            center = [(r1+r3)/2, _circle_center_y(radius, r1, r3)]
             cura2, _ = getCircleIntersectArea(center, radius, rpoly2)
 
         #adjust r3 to match a3
         dt = dtbase
-        center = [(r1+r3)/2, math.sqrt(radius**2 - ((r3-r1)**2) / 4)]
+        center = [(r1+r3)/2, _circle_center_y(radius, r1, r3)]
         cura3, _ = getCircleIntersectArea(center, radius, rpoly3)
         
         innercycles = 0
@@ -575,15 +694,15 @@ def getArcFacet(
             #Max range of a3 hit, break and continue
             if radius**2 - ((r3-dt-r1)**2) / 4 < 0:
                 break
-            cura3minusdt, _ = getCircleIntersectArea([(r1+r3-dt)/2, math.sqrt(radius**2 - ((r3-dt-r1)**2) / 4)], radius, rpoly3)
+            cura3minusdt, _ = getCircleIntersectArea([(r1+r3-dt)/2, _circle_center_y(radius, r1, r3-dt)], radius, rpoly3)
             
             da3dr3 = (cura3-cura3minusdt)/dt
             #Numerical derivative is 0, return error
             if da3dr3 == 0:
                 print("Error in getArcFacet({}, {}, {}, {}, {}, {}, {})".format(poly1, poly2, poly3, afrac1, afrac2, afrac3, epsilon))
                 return None, None, None
-            r3 = min(r1 + 2*radius, r3 + (a3-cura3)/da3dr3)
-            center = [(r1+r3)/2, math.sqrt(radius**2 - ((r3-r1)**2) / 4)]
+            r3 = _clamp_axis_coordinate(r3 + (a3-cura3)/da3dr3, r1, radius)
+            center = [(r1+r3)/2, _circle_center_y(radius, r1, r3)]
             cura3, _ = getCircleIntersectArea(center, radius, rpoly3)
         
         numcycles += 1

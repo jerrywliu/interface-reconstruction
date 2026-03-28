@@ -26,6 +26,7 @@ def runReconstruction(
     # Algorithms that don't merge cells
     no_merge_algos = [
         "Youngs",
+        "ELVIRA",
         "LVIRA",
         "safe_linear",
         "safe_circle",
@@ -68,6 +69,8 @@ def _run_no_merge(m: MergeMesh, facet_algo, iter, output_dirs, algo_kwargs={}):
 
     if facet_algo == "Youngs":
         m.runYoungs()
+    elif facet_algo == "ELVIRA":
+        m.runELVIRA()
     elif facet_algo == "LVIRA":
         m.runLVIRA()
     elif facet_algo == "safe_linear":

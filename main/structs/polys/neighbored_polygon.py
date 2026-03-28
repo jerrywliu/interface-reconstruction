@@ -31,9 +31,13 @@ class NeighboredPolygon(BasePolygon):
     linearity_threshold = 1e-6  # if area fraction error in linear facet < this value, use linear facet at this cell
     optimization_threshold = 1e-10  # in optimizations
     linear_corner_area_threshold = 1e-4  # if area fraction error in corner facet < this value, use (straight edged) corner facet at this cell
+    linear_corner_max_support_extrapolation = 4.0  # reject line-line corners whose apex is too far beyond the supporting facet endpoints
+    linear_corner_max_cell_radius_ratio = 4.0  # reject line-line corners whose apex is too remote from the target cell
     corner_sharpness_threshold = 1e-2  # if abs(sine) of angle between corner edges < this value, it's too sharp to use
     curved_corner_curvature_threshold = 1e-2  # if adjacent curvatures > curvaturethreshold, try to fit a curved corner facet
     curved_corner_area_threshold = 1e-2  # if area fraction error in curved corner < curvedcornerthreshold, use curved corner at this cell
+    linear_support_overwrite_names = {"default_linear"}
+    corner_branch_support_area_threshold = 1e-2
 
     def __init__(self, points):
         super().__init__(points)
@@ -92,9 +96,18 @@ class NeighboredPolygon(BasePolygon):
             [self.left_neighbor, self.right_neighbor] = orientation
             return orientation
 
-    def fitCircularFacet(self):
+    def fitCircularFacet(self, root_guess=None):
         # If both neighbors, try linear and circular TODO
         if self.hasLeftNeighbor() and self.hasRightNeighbor():
+            root_fallback_args = (
+                self.left_neighbor.points,
+                self.points,
+                self.right_neighbor.points,
+                self.left_neighbor.getFraction(),
+                self.getFraction(),
+                self.right_neighbor.getFraction(),
+                NeighboredPolygon.optimization_threshold,
+            )
             try:
                 facetline1, facetline2 = getLinearFacet(
                     self.left_neighbor.points,
@@ -105,7 +118,7 @@ class NeighboredPolygon(BasePolygon):
                 )
             except RuntimeError as error:
                 print(
-                    f"fitCircularFacet fallback to LVIRA after getLinearFacet failure: {error}"
+                    f"fitCircularFacet fallback to ELVIRA after getLinearFacet failure: {error}"
                 )
                 self._set_default_plic_fallback()
                 return
@@ -142,13 +155,17 @@ class NeighboredPolygon(BasePolygon):
                     )
                     # TODO If failed: default to linear
                     if arccenter is None or arcradius is None or arcintersects is None:
-                        pass
-                        # l1 = facetline1
-                        # l2 = facetline2
-                        # normal = [(-l2[1]+l1[1])/getDistance(l1, l2), (l2[0]-l1[0])/getDistance(l1, l2)]
-                        # facetline1, facetline2 = getLinearFacetFromNormal(self.points, self.getFraction(), normal, NeighboredPolygon.optimization_threshold)
-                        # self.setFacet(LinearFacet(facetline1, facetline2))
-                    else:
+                        arccenter, arcradius, arcintersects = self._try_arc_fit_root_fallbacks(
+                            root_fallback_args, root_guess=root_guess
+                        )
+                        if arccenter is None or arcradius is None or arcintersects is None:
+                            pass
+                            # l1 = facetline1
+                            # l2 = facetline2
+                            # normal = [(-l2[1]+l1[1])/getDistance(l1, l2), (l2[0]-l1[0])/getDistance(l1, l2)]
+                            # facetline1, facetline2 = getLinearFacetFromNormal(self.points, self.getFraction(), normal, NeighboredPolygon.optimization_threshold)
+                            # self.setFacet(LinearFacet(facetline1, facetline2))
+                    if arccenter is not None and arcradius is not None and arcintersects is not None:
                         self.setFacet(
                             ArcFacet(
                                 arccenter,
@@ -161,7 +178,20 @@ class NeighboredPolygon(BasePolygon):
                 except LinearFacetShortcut as shortcut:
                     self.setFacet(LinearFacet(shortcut.pLeft, shortcut.pRight))
                 except (RuntimeError, TimeoutError) as error:
-                    print(f"fitCircularFacet fallback after getArcFacet failure: {error}")
+                    arccenter, arcradius, arcintersects = self._try_arc_fit_root_fallbacks(
+                        root_fallback_args, root_guess=root_guess
+                    )
+                    if arccenter is not None and arcradius is not None and arcintersects is not None:
+                        self.setFacet(
+                            ArcFacet(
+                                arccenter,
+                                arcradius,
+                                arcintersects[0],
+                                arcintersects[-1],
+                            )
+                        )
+                    else:
+                        print(f"fitCircularFacet fallback after getArcFacet failure: {error}")
                 except Exception as error:
                     print(
                         f"fitCircularFacet fallback after unexpected getArcFacet failure: {error}"
@@ -187,7 +217,7 @@ class NeighboredPolygon(BasePolygon):
                 )
             except RuntimeError as error:
                 print(
-                    f"fitLinearFacet fallback to LVIRA after getLinearFacet failure: {error}"
+                    f"fitLinearFacet fallback to ELVIRA after getLinearFacet failure: {error}"
                 )
                 self._set_default_plic_fallback()
                 return
@@ -272,47 +302,185 @@ class NeighboredPolygon(BasePolygon):
 
     # Extends lines l1 to l2, p1 to p2, calculates intersection if it exists, checks whether this corner matches area fraction, updates self.facet if it does
     # (l1, l2, p1, p2) = (l.l, l.r, r.r, r.l)
-    def checkCornerFacet(self, l1, l2, p1, p2):
-        corner, _, _ = lineIntersect(l1, l2, p1, p2)
-        if corner is not None:
-            # Feasible intersection, continue #TODO: do a test to see if corner point lies within the two segments
-            corner = [l2, corner, p2]
-            cornerareafraction = (
-                getPolyCornerArea(self.points, corner[0], corner[1], corner[2])
-                / self.getMaxArea()
+    def _is_local_linear_corner(self, l1, l2, p1, p2, corner_point):
+        left_support_length = getDistance(l1, l2)
+        right_support_length = getDistance(p1, p2)
+        if left_support_length < 1e-14 or right_support_length < 1e-14:
+            return False
+
+        left_branch_length = getDistance(l2, corner_point)
+        right_branch_length = getDistance(p2, corner_point)
+        if (
+            left_branch_length
+            > NeighboredPolygon.linear_corner_max_support_extrapolation
+            * left_support_length
+        ) or (
+            right_branch_length
+            > NeighboredPolygon.linear_corner_max_support_extrapolation
+            * right_support_length
+        ):
+            return False
+
+        centroid = getCentroid(self.points)
+        cell_radius = max(getDistance(centroid, point) for point in self.points)
+        if (
+            cell_radius > 1e-14
+            and getDistance(centroid, corner_point)
+            > NeighboredPolygon.linear_corner_max_cell_radius_ratio * cell_radius
+        ):
+            return False
+
+        return True
+
+    def _linear_facet_from_line(self, l1, l2, name="linear"):
+        intersects = getPolyLineIntersects(self.points, l1, l2)
+        if len(intersects) < 2:
+            return None
+
+        area_fraction = getPolyLineArea(self.points, l1, l2) / self.getMaxArea()
+        if abs(area_fraction - self.getFraction()) >= NeighboredPolygon.linear_corner_area_threshold:
+            return None
+
+        return LinearFacet(intersects[0], intersects[-1], name=name)
+
+    def _linear_facet_from_normal(self, normal, name="linear"):
+        try:
+            l1, l2 = getLinearFacetFromNormal(
+                self.points,
+                self.getFraction(),
+                normal,
+                NeighboredPolygon.optimization_threshold,
             )
-            if (
-                abs(cornerareafraction - self.getFraction())
-                < NeighboredPolygon.linear_corner_area_threshold
-            ):
-                # Check if this corner facet intersects middle poly
-                intersects1 = getPolyLineIntersects(self.points, corner[0], corner[1])
-                intersects2 = getPolyLineIntersects(self.points, corner[1], corner[2])
-                # Check that corner is not too sharp
-                if (len(intersects1) > 0 or len(intersects2)) and abs(
-                    lineAngleSine(l1, l2, p1, p2)
-                ) > NeighboredPolygon.corner_sharpness_threshold:
-                    self.setFacet(
-                        CornerFacet(
-                            None, None, None, None, corner[0], corner[1], corner[2]
-                        )
-                    )
-                    # print("checkCornerFacet formed corner:")
-                    # print(self)
-                    # print("Real area fraction: {}".format(cornerareafraction))
-                    # print("Target area fraction: {}".format(self.getFraction()))
-            else:
-                # print("Unmatching corner area:")
-                # print(cornerareafraction)
-                # print(self.getFraction())
-                pass
+        except Exception:
+            return None
+
+        intersects = getPolyLineIntersects(self.points, l1, l2)
+        if len(intersects) < 2:
+            return None
+        return LinearFacet(intersects[0], intersects[-1], name=name)
+
+    def _can_overwrite_with_linear_support(self):
+        if not self.hasFacet():
+            return True
+        facet = self.getFacet()
+        if isinstance(facet, ArcFacet):
+            return True
+        return facet.name in NeighboredPolygon.linear_support_overwrite_names
+
+    @staticmethod
+    def _line_area_residual_on_neighbor(branch, neighbor):
+        area_fraction = (
+            getPolyLineArea(neighbor.points, branch.pLeft, branch.pRight)
+            / neighbor.getMaxArea()
+        )
+        return abs(area_fraction - neighbor.getFraction())
+
+    def bestLinearCornerBranchForNeighbor(self, neighbor):
+        if not self.hasFacet() or self.getFacet().name != "corner":
+            return None, None
+
+        corner_facet = self.getFacet()
+        best_branch = None
+        best_error = None
+        for branch in [corner_facet.facetLeft, corner_facet.facetRight]:
+            if not isinstance(branch, LinearFacet):
+                continue
+            error = self._line_area_residual_on_neighbor(branch, neighbor)
+            if best_error is None or error < best_error:
+                best_branch = branch
+                best_error = error
+
+        if (
+            best_branch is None
+            or best_error is None
+            or best_error >= NeighboredPolygon.corner_branch_support_area_threshold
+        ):
+            return None, None
+        return best_branch, best_error
+
+    def _try_set_linear_facet_from_line(self, l1, l2, name="linear"):
+        facet = self._linear_facet_from_line(l1, l2, name=name)
+        if facet is None:
+            return False
+        self.setFacet(facet)
+        return True
+
+    def propagateCornerBranchFacets(self):
+        if not self.hasFacet() or self.getFacet().name != "corner":
+            return
+
+        corner_facet = self.getFacet()
+        left_neighbor = self.getLeftNeighbor()
+        right_neighbor = self.getRightNeighbor()
+
+        for neighbor in [left_neighbor, right_neighbor]:
+            if neighbor is None or not neighbor._can_overwrite_with_linear_support():
+                continue
+            branch, _ = self.bestLinearCornerBranchForNeighbor(neighbor)
+            if branch is None:
+                continue
+            normal = [
+                -(branch.pRight[1] - branch.pLeft[1]),
+                branch.pRight[0] - branch.pLeft[0],
+            ]
+            propagated_facet = neighbor._linear_facet_from_normal(
+                normal, name="corner_branch_linear"
+            )
+            if propagated_facet is not None:
+                neighbor.setFacet(propagated_facet)
+
+    def _build_linear_corner_facet(self, l1, l2, p1, p2):
+        corner_point, _, _ = lineIntersect(l1, l2, p1, p2)
+        if corner_point is None:
+            return None, None
+        if not self._is_local_linear_corner(l1, l2, p1, p2, corner_point):
+            return None, None
+
+        corner = [l2, corner_point, p2]
+        corner_area_fraction = (
+            getPolyCornerArea(self.points, corner[0], corner[1], corner[2])
+            / self.getMaxArea()
+        )
+        corner_area_error = abs(corner_area_fraction - self.getFraction())
+        if corner_area_error >= NeighboredPolygon.linear_corner_area_threshold:
+            return None, corner_area_error
+
+        intersects1 = getPolyLineIntersects(self.points, corner[0], corner[1])
+        intersects2 = getPolyLineIntersects(self.points, corner[1], corner[2])
+        if not (
+            len(intersects1) > 0
+            and len(intersects2) > 0
+            and abs(lineAngleSine(l1, l2, p1, p2))
+            > NeighboredPolygon.corner_sharpness_threshold
+        ):
+            return None, corner_area_error
+
+        return (
+            CornerFacet(None, None, None, None, corner[0], corner[1], corner[2]),
+            corner_area_error,
+        )
+
+    def checkCornerFacet(self, l1, l2, p1, p2):
+        corner_facet, _ = self._build_linear_corner_facet(l1, l2, p1, p2)
+        if corner_facet is None:
+            return
+        self.setFacet(corner_facet)
+        self.propagateCornerBranchFacets()
+        # print("checkCornerFacet formed corner:")
+        # print(self)
+        # print("Target area fraction: {}".format(self.getFraction()))
 
     # Facet 1: l1, l2, center, radius
     # Facet 2: p1, p2, center, radius
     # Returns closest intersection point, if there is one
     # TODO uses self.points[0] to decide which line-arc intersection is the corner point
     def checkCurvedCornerFacet(self, facet1: Facet, facet2: Facet, ret=False):
-        if facet1.name == "linear" and facet2.name == "arc":
+        facet1_is_line = isinstance(facet1, LinearFacet)
+        facet2_is_line = isinstance(facet2, LinearFacet)
+        facet1_is_arc = isinstance(facet1, ArcFacet)
+        facet2_is_arc = isinstance(facet2, ArcFacet)
+
+        if facet1_is_line and facet2_is_arc:
             intersects = getCircleLineIntersects(
                 facet1.pLeft,
                 facet1.pRight,
@@ -333,7 +501,7 @@ class NeighboredPolygon(BasePolygon):
                 print("checkCurvedCornerFacet: no intersects between line and arc")
                 return None, None
 
-        elif facet1.name == "arc" and facet2.name == "linear":
+        elif facet1_is_arc and facet2_is_line:
             intersects = getCircleLineIntersects(
                 facet2.pLeft,
                 facet2.pRight,
@@ -354,7 +522,7 @@ class NeighboredPolygon(BasePolygon):
                 print("checkCurvedCornerFacet: no intersects between line and arc")
                 return None, None
 
-        elif facet1.name == "arc" and facet2.name == "arc":
+        elif facet1_is_arc and facet2_is_arc:
             try:
                 intersects = getCircleCircleIntersects(
                     facet1.center, facet2.center, facet1.radius, facet2.radius
@@ -379,17 +547,21 @@ class NeighboredPolygon(BasePolygon):
             # self.checkCornerFacet(facet1.pLeft, facet1.pRight, facet2.pRight, facet2.pLeft)
             return None, None
 
-        cornerareafraction = (
-            getPolyCurvedCornerArea(
-                self.points,
-                facet1.pRight,
-                corner_point,
-                facet2.pLeft,
-                facet1.radius if facet1.name == "arc" else None,
-                facet2.radius if facet2.name == "arc" else None,
+        try:
+            cornerareafraction = (
+                getPolyCurvedCornerArea(
+                    self.points,
+                    facet1.pRight,
+                    corner_point,
+                    facet2.pLeft,
+                    facet1.radius if facet1_is_arc else None,
+                    facet2.radius if facet2_is_arc else None,
+                )
+                / self.getMaxArea()
             )
-            / self.getMaxArea()
-        )
+        except RuntimeError as error:
+            print(f"checkCurvedCornerFacet: failed curved area evaluation: {error}")
+            return None, None
         facet1_tangent = facet1.getTangent(corner_point)
         facet2_tangent = facet2.getTangent(corner_point)
         # Check that corner is not too sharp
@@ -399,10 +571,10 @@ class NeighboredPolygon(BasePolygon):
             > NeighboredPolygon.corner_sharpness_threshold
         ):
             facet = CornerFacet(
-                facet1.center if facet1.name == "arc" else None,
-                facet2.center if facet2.name == "arc" else None,
-                facet1.radius if facet1.name == "arc" else None,
-                facet2.radius if facet2.name == "arc" else None,
+                facet1.center if facet1_is_arc else None,
+                facet2.center if facet2_is_arc else None,
+                facet1.radius if facet1_is_arc else None,
+                facet2.radius if facet2_is_arc else None,
                 facet1.pRight,
                 corner_point,
                 facet2.pLeft,

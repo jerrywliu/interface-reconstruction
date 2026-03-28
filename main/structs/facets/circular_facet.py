@@ -2,7 +2,7 @@ import math
 
 from main.geoms.circular_facet import (
     _unique_points,
-    getArcArea,
+    getArcAreaInPoly,
     getCenter,
     getCircleLineIntersects,
     getCircumcircle,
@@ -219,7 +219,13 @@ class ArcFacet(Facet):
 
         # Sum arc areas
         for i in range(0, len(arcpoints), 2):
-            area += getArcArea(arcpoints[i], arcpoints[i + 1], self.center, abs(self.radius))
+            area += getArcAreaInPoly(
+                arcpoints[i],
+                arcpoints[i + 1],
+                self.center,
+                abs(self.radius),
+                poly,
+            )
         area += getArea(intersectpoints)
 
         if len(arcpoints) == 0:

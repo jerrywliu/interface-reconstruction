@@ -33,6 +33,21 @@ RANDOM_SEED = 43
 ZALESAK_POINT_TOL = 1e-8
 
 
+def _parse_case_indices(raw_value):
+    if raw_value is None:
+        return None
+    if isinstance(raw_value, (list, tuple, set)):
+        values = [int(index) for index in raw_value]
+    else:
+        values = []
+        for item in str(raw_value).split(","):
+            item = item.strip()
+            if not item:
+                continue
+            values.append(int(item))
+    return sorted(set(values)) if values else None
+
+
 def rotate_point_around_center(point, center, theta):
     x, y = point[0] - center[0], point[1] - center[1]
     xr = x * math.cos(theta) - y * math.sin(theta)
@@ -111,6 +126,20 @@ def create_true_facets_zalesak(center, radius, slot_rect, theta=0.0):
     ]
 
 
+def build_true_reference_zalesak(center, radius, slot_rect, theta=0.0):
+    true_facets = create_true_facets_zalesak(center, radius, slot_rect, theta)
+    landmarks = {
+        "line_arc_left": list(true_facets[1].pLeft),
+        "linear_linear_left": list(true_facets[1].pRight),
+        "linear_linear_right": list(true_facets[2].pRight),
+        "line_arc_right": list(true_facets[3].pRight),
+    }
+    return {
+        "facets": true_facets,
+        "landmarks": landmarks,
+    }
+
+
 def _reconstructed_facet_area(poly, facet, target_area=None):
     if isinstance(facet, CornerFacet):
         area = getPolyCurvedCornerArea(
@@ -160,6 +189,26 @@ def zalesak_total_area(radius: float, slot_width: float, y_top_rel: float) -> fl
     )
 
 
+def compute_zalesak_cell_area(poly_points, center, radius, slot_rect):
+    """
+    Area of the corrected Zalesak shape inside one cell polygon.
+
+    The shape is the circle minus the portion of the rotated slot that lies
+    inside the circle. Subtracting the full slot-cell overlap over-removes
+    area near perturbed shoulder cells where the slot extends outside the disk.
+    """
+    circle_area, _ = getCircleIntersectArea(center, radius, poly_points)
+    cell_area = circle_area
+
+    rect_intersects = getPolyIntersectArea(slot_rect, poly_points)
+    for inter in rect_intersects:
+        overlap_area, _ = getCircleIntersectArea(center, radius, inter)
+        overlap_area = min(max(overlap_area, 0.0), abs(getArea(inter)))
+        cell_area -= overlap_area
+
+    return max(0.0, cell_area)
+
+
 def initialize_zalesak(m, center, radius, slot_width, y_top_rel=10.0, theta=0.0):
     """
     Corrected Zalesak disk:
@@ -192,18 +241,8 @@ def initialize_zalesak(m, center, radius, slot_width, y_top_rel=10.0, theta=0.0)
     for ix in range(len(areas)):
         for iy in range(len(areas[0])):
             poly = m.polys[ix][iy]
-
-            # Circle contribution
-            c_area, _ = getCircleIntersectArea(center, radius, poly.points)
-            cell_area = c_area
-
-            # Subtract slot rectangle overlap
-            rect_intersects = getPolyIntersectArea(rect, poly.points)
-            for inter in rect_intersects:
-                cell_area -= abs(getArea(inter))
-
-            # Clamp and normalize
-            areas[ix][iy] = max(0.0, cell_area) / poly.getMaxArea()
+            cell_area = compute_zalesak_cell_area(poly.points, center, radius, rect)
+            areas[ix][iy] = cell_area / poly.getMaxArea()
 
     return areas
 
@@ -223,6 +262,8 @@ def main(
     perturb_fix_boundary=None,
     perturb_max_tries=None,
     perturb_type=None,
+    case_indices=None,
+    return_case_records=False,
     **kwargs,
 ):
     # Read config
@@ -261,11 +302,22 @@ def main(
     writeMesh(m, os.path.join(output_dirs["vtk"], f"mesh.vtk"))
 
     rng = np.random.default_rng(RANDOM_SEED)
+    case_indices = _parse_case_indices(case_indices)
+    case_index_set = set(case_indices) if case_indices is not None else None
+    if case_index_set is not None:
+        invalid_indices = [
+            index for index in case_index_set if index < 0 or index >= num_cases
+        ]
+        if invalid_indices:
+            raise ValueError(
+                f"Requested case indices out of range for num_cases={num_cases}: {invalid_indices}"
+            )
 
     # Store metrics across cases
     area_errors = []
     facet_gaps = []
     hausdorff_distances = []
+    case_records = []
 
     # True reference area (top strictly inside, bottom at/below rim)
     true_area = zalesak_total_area(radius, slot_width, slot_top_rel)
@@ -279,6 +331,8 @@ def main(
         # Random center and rotation
         center = [rng.uniform(50, 51), rng.uniform(50, 51)]
         theta = rng.uniform(0, math.pi / 2)
+        if case_index_set is not None and i not in case_index_set:
+            continue
 
         # Initialize Zalesak fractions
         fractions = initialize_zalesak(
@@ -328,7 +382,8 @@ def main(
             # Rotate rectangle by theta around center
             rect = [rotate_point_around_center(p, center, theta) for p in rect]
 
-            true_facets = create_true_facets_zalesak(center, radius, rect, theta)
+            true_reference = build_true_reference_zalesak(center, radius, rect, theta)
+            true_facets = true_reference["facets"]
             writeFacets(
                 true_facets,
                 os.path.join(output_dirs["vtk_true"], f"true_zalesak{i}.vtp"),
@@ -377,7 +432,27 @@ def main(
             area_errors.append(area_error)
             facet_gaps.append(avg_gap)
             hausdorff_distances.append(hausdorff_distance)
+            if return_case_records:
+                case_records.append(
+                    {
+                        "case_index": i,
+                        "center": list(center),
+                        "theta": theta,
+                        "slot_rect": [list(point) for point in rect],
+                        "mesh": m,
+                        "true_facets": true_facets,
+                        "true_landmarks": true_reference["landmarks"],
+                        "reconstructed_facets": reconstructed_facets,
+                        "reconstructed_polys": reconstructed_polys,
+                        "area_error": area_error,
+                        "facet_gap": avg_gap,
+                        "hausdorff": hausdorff_distance,
+                        "output_dirs": dict(output_dirs),
+                    }
+                )
 
+    if return_case_records:
+        return area_errors, facet_gaps, hausdorff_distances, case_records
     return area_errors, facet_gaps, hausdorff_distances
 
 
@@ -490,6 +565,7 @@ def run_parameter_sweep(
     resolutions = [0.50, 0.64, 1.00, 1.28, 1.50]
     facet_algos = [
         "Youngs",
+        "ELVIRA",
         "LVIRA",
         "safe_linear",
         "linear",
@@ -499,6 +575,7 @@ def run_parameter_sweep(
     ]
     save_names = [
         "zalesak_youngs",
+        "zalesak_elvira",
         "zalesak_lvira",
         "zalesak_safelinear",
         "zalesak_linear",
@@ -597,6 +674,12 @@ if __name__ == "__main__":
         help="path to results file for plotting",
         default="results/static/zalesak_reconstruction_results.txt",
     )
+    parser.add_argument(
+        "--case_indices",
+        type=str,
+        help="comma-separated deterministic case indices to run",
+        default=None,
+    )
 
     args = parser.parse_args()
 
@@ -632,4 +715,5 @@ if __name__ == "__main__":
             perturb_fix_boundary=args.perturb_fix_boundary,
             perturb_max_tries=args.perturb_max_tries,
             perturb_type=args.perturb_type,
+            case_indices=args.case_indices,
         )

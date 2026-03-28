@@ -85,6 +85,38 @@ class MergeMesh(BaseMesh):
         # Dict of NeighboredPolygon objects, index matches self.merge_ids_to_coords
         self.merged_polys = dict()
 
+    def _fit_deadend_facet(self, merge_id, prefer_safe_circle=False):
+        merged_poly: NeighboredPolygon = self.merged_polys[merge_id]
+
+        if prefer_safe_circle:
+            merge_coords = self._get_merge_coords(merge_id)
+            if len(merge_coords) == 1:
+                x, y = merge_coords[0]
+                stencil = self.get3x3Stencil(x, y)
+                if stencil is not None:
+                    merged_poly.set3x3Stencil(stencil)
+                    try:
+                        facet = merged_poly.runSafeCircle(
+                            ret=True,
+                            default_to_youngs=False,
+                            default_to_elvira=False,
+                        )
+                    except Exception as error:
+                        print(
+                            f"Dead-end safe_circle fallback failed for merge_id={merge_id}: {error}"
+                        )
+                        facet = None
+                    if facet is not None:
+                        if facet.name == "arc":
+                            facet.name = "deadend_arc"
+                        elif facet.name == "linear":
+                            facet.name = "linear_deadend"
+                        merged_poly.setFacet(facet)
+                        return
+
+        merged_poly.fitLinearFacet()
+        merged_poly.getFacet().name = "linear_deadend"
+
     def _get_merge_id(self, x, y):
         return self.coords_to_merge_id[x][y]
 
@@ -99,6 +131,688 @@ class MergeMesh(BaseMesh):
 
     def _get_num_merge_ids(self):
         return self.next_merge_id
+
+    @staticmethod
+    def _poly_centroid(points):
+        return [
+            sum(point[0] for point in points) / len(points),
+            sum(point[1] for point in points) / len(points),
+        ]
+
+    @staticmethod
+    def _poly_radius(points, centroid):
+        return max(getDistance(point, centroid) for point in points)
+
+    def _find_arc_fit_guess(self, merge_id):
+        target_poly = self.merged_polys[merge_id]
+        target_centroid = self._poly_centroid(target_poly.points)
+        target_radius = self._poly_radius(target_poly.points, target_centroid)
+        min_radius = max(4.0 * target_radius, 1.0)
+
+        best_guess = None
+        for candidate_id, candidate_poly in self.merged_polys.items():
+            if candidate_id == merge_id:
+                continue
+            candidate_facet = candidate_poly.getFacet()
+            if (
+                candidate_facet is None
+                or getattr(candidate_facet, "name", None) != "arc"
+                or not hasattr(candidate_facet, "center")
+                or not hasattr(candidate_facet, "radius")
+            ):
+                continue
+            if abs(candidate_facet.radius) < min_radius:
+                continue
+            candidate_centroid = self._poly_centroid(candidate_poly.points)
+            centroid_distance = getDistance(target_centroid, candidate_centroid)
+            if best_guess is None or centroid_distance < best_guess[0]:
+                best_guess = (
+                    centroid_distance,
+                    candidate_facet.center[0],
+                    candidate_facet.center[1],
+                    candidate_facet.radius,
+                )
+
+        if best_guess is None:
+            return None
+        return best_guess[1:]
+
+    @staticmethod
+    def _is_line_like_support_facet(facet):
+        return isinstance(facet, LinearFacet)
+
+    @staticmethod
+    def _is_arc_like_support_facet(facet):
+        return isinstance(facet, ArcFacet) and facet.name != "deadend_arc"
+
+    @classmethod
+    def _is_curved_corner_support_facet(cls, facet):
+        return cls._is_line_like_support_facet(facet) or cls._is_arc_like_support_facet(
+            facet
+        )
+
+    @staticmethod
+    def _rounded_point_signature(point, digits=6):
+        if point is None:
+            return None
+        return tuple(round(float(coord), digits) for coord in point)
+
+    @classmethod
+    def _repeated_corner_triplet_signature(cls, facet):
+        if not isinstance(facet, CornerFacet):
+            return None
+
+        left_is_line = isinstance(facet.facetLeft, LinearFacet)
+        right_is_line = isinstance(facet.facetRight, LinearFacet)
+        if left_is_line == right_is_line:
+            return None
+
+        arc_branch = facet.facetRight if left_is_line else facet.facetLeft
+        if not isinstance(arc_branch, ArcFacet):
+            return None
+
+        return (
+            left_is_line,
+            cls._rounded_point_signature(facet.pLeft),
+            cls._rounded_point_signature(facet.corner),
+            cls._rounded_point_signature(facet.pRight),
+            cls._rounded_point_signature(arc_branch.center),
+            round(float(arc_branch.radius), 6),
+        )
+
+    def _collect_same_corner_component(self, start_poly, signature):
+        component = [start_poly]
+        seen = {start_poly}
+
+        current = start_poly
+        while True:
+            left_poly = current.getLeftNeighbor()
+            if (
+                left_poly is None
+                or left_poly == current
+                or left_poly in seen
+                or not left_poly.hasFacet()
+                or self._repeated_corner_triplet_signature(left_poly.getFacet())
+                != signature
+            ):
+                break
+            component.insert(0, left_poly)
+            seen.add(left_poly)
+            current = left_poly
+
+        current = start_poly
+        while True:
+            right_poly = current.getRightNeighbor()
+            if (
+                right_poly is None
+                or right_poly == current
+                or right_poly in seen
+                or not right_poly.hasFacet()
+                or self._repeated_corner_triplet_signature(right_poly.getFacet())
+                != signature
+            ):
+                break
+            component.append(right_poly)
+            seen.add(right_poly)
+            current = right_poly
+
+        return component
+
+    def _propagate_exact_linear_supports(self, merge_ids, max_passes=3):
+        for _ in range(max_passes):
+            changed = False
+            for merge_id in merge_ids:
+                support_poly: NeighboredPolygon = self.merged_polys[merge_id]
+                if not support_poly.hasFacet() or not self._is_line_like_support_facet(
+                    support_poly.getFacet()
+                ):
+                    continue
+
+                support_facet = support_poly.getFacet()
+                if support_facet.name == "corner_branch_linear":
+                    continue
+                for neighbor in [
+                    support_poly.getLeftNeighbor(),
+                    support_poly.getRightNeighbor(),
+                ]:
+                    if (
+                        neighbor is None
+                        or neighbor == support_poly
+                        or not neighbor._can_overwrite_with_linear_support()
+                    ):
+                        continue
+                    candidate = neighbor._linear_facet_from_line(
+                        support_facet.pLeft,
+                        support_facet.pRight,
+                        name="linear_support",
+                    )
+                    if candidate is None:
+                        continue
+                    neighbor.setFacet(candidate)
+                    changed = True
+            if not changed:
+                break
+
+    def _rescue_corner_linear_bridge_cells(self, merge_ids):
+        changed = False
+        for merge_id in merge_ids:
+            target_poly: NeighboredPolygon = self.merged_polys[merge_id]
+            if (
+                target_poly.hasFacet()
+                and target_poly.getFacet().name not in NeighboredPolygon.linear_support_overwrite_names
+            ):
+                continue
+
+            candidate_pairs = [
+                (target_poly.getLeftNeighbor(), target_poly.getRightNeighbor()),
+                (target_poly.getRightNeighbor(), target_poly.getLeftNeighbor()),
+            ]
+            for support_poly, corner_poly in candidate_pairs:
+                if (
+                    support_poly is None
+                    or corner_poly is None
+                    or not support_poly.hasFacet()
+                    or not corner_poly.hasFacet()
+                    or support_poly.getFacet().name != "linear_support"
+                    or corner_poly.getFacet().name != "corner"
+                ):
+                    continue
+
+                branch, branch_error = corner_poly.bestLinearCornerBranchForNeighbor(
+                    target_poly
+                )
+                if branch is None:
+                    continue
+
+                support_error = NeighboredPolygon._line_area_residual_on_neighbor(
+                    support_poly.getFacet(), target_poly
+                )
+                if branch_error >= support_error:
+                    continue
+
+                normal = [
+                    -(branch.pRight[1] - branch.pLeft[1]),
+                    branch.pRight[0] - branch.pLeft[0],
+                ]
+                candidate = target_poly._linear_facet_from_normal(
+                    normal,
+                    name="corner_branch_linear",
+                )
+                if candidate is None:
+                    continue
+
+                target_poly.setFacet(candidate)
+                changed = True
+                break
+
+        return changed
+
+    def _rescue_corner_arc_corner_triplets(self, merge_ids):
+        changed = False
+        for merge_id in merge_ids:
+            middle_poly: NeighboredPolygon = self.merged_polys[merge_id]
+            if not (
+                middle_poly.hasFacet()
+                and self._is_arc_like_support_facet(middle_poly.getFacet())
+            ):
+                continue
+
+            left_poly = middle_poly.getLeftNeighbor()
+            right_poly = middle_poly.getRightNeighbor()
+            if (
+                left_poly is None
+                or right_poly is None
+                or left_poly == middle_poly
+                or right_poly == middle_poly
+                or left_poly == right_poly
+                or not left_poly.hasFacet()
+                or not right_poly.hasFacet()
+                or left_poly.getFacet().name != "corner"
+                or right_poly.getFacet().name != "corner"
+            ):
+                continue
+
+            left_corner = left_poly.getFacet()
+            right_corner = right_poly.getFacet()
+            left_branch = (
+                left_corner.facetLeft
+                if isinstance(left_corner.facetLeft, LinearFacet)
+                and isinstance(left_corner.facetRight, ArcFacet)
+                else None
+            )
+            right_branch = (
+                right_corner.facetRight
+                if isinstance(right_corner.facetRight, LinearFacet)
+                and isinstance(right_corner.facetLeft, ArcFacet)
+                else None
+            )
+            if left_branch is None or right_branch is None:
+                continue
+
+            corner_facet, _ = middle_poly._build_linear_corner_facet(
+                left_branch.pLeft,
+                left_branch.pRight,
+                right_branch.pRight,
+                right_branch.pLeft,
+            )
+            if corner_facet is None:
+                continue
+
+            middle_poly.setFacet(corner_facet)
+            changed = True
+
+        return changed
+
+    def _rescue_repeated_tiny_corner_triplets(self, merge_ids):
+        changed = False
+        processed_polys = set()
+        branch_residual_threshold = 1e-8
+        max_arc_radius_ratio = 2.0
+
+        for merge_id in merge_ids:
+            start_poly: NeighboredPolygon = self.merged_polys[merge_id]
+            if start_poly in processed_polys or not start_poly.hasFacet():
+                continue
+
+            signature = self._repeated_corner_triplet_signature(start_poly.getFacet())
+            if signature is None:
+                continue
+
+            component = self._collect_same_corner_component(start_poly, signature)
+            processed_polys.update(component)
+
+            if len(component) != 3:
+                continue
+
+            owner_count = 0
+            component_max_radius = 0.0
+            branch_normals = []
+            for poly in component:
+                facet = poly.getFacet()
+                if pointInPoly(facet.corner, poly.points):
+                    owner_count += 1
+                component_max_radius = max(
+                    component_max_radius,
+                    self._poly_radius(poly.points, self._poly_centroid(poly.points)),
+                )
+                branch, branch_error = poly.bestLinearCornerBranchForNeighbor(poly)
+                if branch is None or branch_error is None:
+                    branch_normals = []
+                    break
+                if branch_error >= branch_residual_threshold:
+                    branch_normals = []
+                    break
+                branch_normals.append(
+                    [
+                        -(branch.pRight[1] - branch.pLeft[1]),
+                        branch.pRight[0] - branch.pLeft[0],
+                    ]
+                )
+
+            if owner_count != 1 or len(branch_normals) != len(component):
+                continue
+
+            facet = start_poly.getFacet()
+            arc_branch = (
+                facet.facetRight
+                if isinstance(facet.facetRight, ArcFacet)
+                else facet.facetLeft
+            )
+            if abs(arc_branch.radius) > max_arc_radius_ratio * component_max_radius:
+                continue
+
+            replacement_facets = []
+            for poly, normal in zip(component, branch_normals):
+                candidate = poly._linear_facet_from_normal(
+                    normal,
+                    name="corner_branch_linear",
+                )
+                if candidate is None:
+                    replacement_facets = []
+                    break
+                replacement_facets.append((poly, candidate))
+
+            if len(replacement_facets) != len(component):
+                continue
+
+            for poly, candidate in replacement_facets:
+                poly.setFacet(candidate)
+            changed = True
+
+        return changed
+
+    def _rescue_repeated_corner_components_as_linear_corners(self, merge_ids):
+        changed = False
+        processed_polys = set()
+        owner_corner_threshold = 1e-8
+        branch_residual_threshold = 1e-8
+
+        for merge_id in merge_ids:
+            start_poly: NeighboredPolygon = self.merged_polys[merge_id]
+            if start_poly in processed_polys or not start_poly.hasFacet():
+                continue
+
+            signature = self._repeated_corner_triplet_signature(start_poly.getFacet())
+            if signature is None:
+                continue
+
+            component = self._collect_same_corner_component(start_poly, signature)
+            processed_polys.update(component)
+            if len(component) != 3:
+                continue
+
+            owner_poly = None
+            for poly in component:
+                if pointInPoly(poly.getFacet().corner, poly.points):
+                    if owner_poly is not None:
+                        owner_poly = None
+                        break
+                    owner_poly = poly
+            if owner_poly is None:
+                continue
+
+            left_support = component[0].getLeftNeighbor()
+            right_support = component[-1].getRightNeighbor()
+            if (
+                left_support is None
+                or right_support is None
+                or not left_support.hasFacet()
+                or not right_support.hasFacet()
+                or not self._is_line_like_support_facet(left_support.getFacet())
+                or not self._is_line_like_support_facet(right_support.getFacet())
+            ):
+                continue
+
+            owner_candidate, owner_error = owner_poly._build_linear_corner_facet(
+                left_support.getFacet().pLeft,
+                left_support.getFacet().pRight,
+                right_support.getFacet().pRight,
+                right_support.getFacet().pLeft,
+            )
+            if (
+                owner_candidate is None
+                or owner_error is None
+                or owner_error >= owner_corner_threshold
+            ):
+                continue
+
+            saved_owner_facet = owner_poly.getFacet()
+            owner_poly.setFacet(owner_candidate)
+            branch_candidates = []
+            success = True
+            for poly in component:
+                if poly == owner_poly:
+                    continue
+                branch, branch_error = owner_poly.bestLinearCornerBranchForNeighbor(poly)
+                if (
+                    branch is None
+                    or branch_error is None
+                    or branch_error >= branch_residual_threshold
+                ):
+                    success = False
+                    break
+                normal = [
+                    -(branch.pRight[1] - branch.pLeft[1]),
+                    branch.pRight[0] - branch.pLeft[0],
+                ]
+                candidate = poly._linear_facet_from_normal(
+                    normal,
+                    name="corner_branch_linear",
+                )
+                if candidate is None:
+                    success = False
+                    break
+                branch_candidates.append((poly, candidate))
+
+            if not success:
+                owner_poly.setFacet(saved_owner_facet)
+                continue
+
+            for poly, candidate in branch_candidates:
+                poly.setFacet(candidate)
+            changed = True
+
+        return changed
+
+    def _collect_contiguous_line_like_neighbors(self, start_poly, direction, max_steps=3):
+        chain = []
+        seen = {start_poly}
+        current = (
+            start_poly.getLeftNeighbor() if direction == "left" else start_poly.getRightNeighbor()
+        )
+        previous = start_poly
+        while (
+            current is not None
+            and current != previous
+            and current not in seen
+            and len(chain) < max_steps
+            and current.hasFacet()
+            and self._is_line_like_support_facet(current.getFacet())
+        ):
+            chain.append(current)
+            seen.add(current)
+            previous = current
+            current = (
+                current.getLeftNeighbor()
+                if direction == "left"
+                else current.getRightNeighbor()
+            )
+        return chain
+
+    def _rescue_linear_corner_owner_intruder_arcs(self, merge_ids):
+        changed = False
+        owner_corner_threshold = 1e-8
+        branch_residual_threshold = 1e-8
+
+        for merge_id in merge_ids:
+            target_poly: NeighboredPolygon = self.merged_polys[merge_id]
+            if not (
+                target_poly.hasFacet()
+                and isinstance(target_poly.getFacet(), ArcFacet)
+            ):
+                continue
+
+            left_chain = self._collect_contiguous_line_like_neighbors(
+                target_poly, "left"
+            )
+            right_chain = self._collect_contiguous_line_like_neighbors(
+                target_poly, "right"
+            )
+            if not left_chain or not right_chain:
+                continue
+
+            best_candidate = None
+            saved_target_facet = target_poly.getFacet()
+            for left_support in left_chain:
+                for right_support in right_chain:
+                    candidate, owner_error = target_poly._build_linear_corner_facet(
+                        left_support.getFacet().pLeft,
+                        left_support.getFacet().pRight,
+                        right_support.getFacet().pRight,
+                        right_support.getFacet().pLeft,
+                    )
+                    if (
+                        candidate is None
+                        or owner_error is None
+                        or owner_error >= owner_corner_threshold
+                    ):
+                        continue
+
+                    target_poly.setFacet(candidate)
+                    branch_errors = []
+                    success = True
+                    for neighbor in [left_chain[0], right_chain[0]]:
+                        branch, branch_error = target_poly.bestLinearCornerBranchForNeighbor(
+                            neighbor
+                        )
+                        if (
+                            branch is None
+                            or branch_error is None
+                            or branch_error >= branch_residual_threshold
+                        ):
+                            success = False
+                            break
+                        branch_errors.append(branch_error)
+                    target_poly.setFacet(saved_target_facet)
+
+                    if not success:
+                        continue
+
+                    score = (owner_error, sum(branch_errors))
+                    if best_candidate is None or score < best_candidate[0]:
+                        best_candidate = (score, candidate)
+
+            if best_candidate is None:
+                continue
+
+            target_poly.setFacet(best_candidate[1])
+            changed = True
+
+        return changed
+
+    def _collect_small_neighbor_loop(self, target_poly, max_size=6):
+        cluster = [target_poly]
+        seen = {target_poly}
+        loop_found = False
+
+        for get_neighbor in ("getLeftNeighbor", "getRightNeighbor"):
+            current_poly = target_poly
+            local_seen = {target_poly}
+            local_path = []
+            while len(local_path) < max_size:
+                next_poly = getattr(current_poly, get_neighbor)()
+                if next_poly is None or next_poly == current_poly:
+                    break
+                if next_poly in local_seen:
+                    if next_poly is target_poly:
+                        loop_found = True
+                    break
+                local_seen.add(next_poly)
+                local_path.append(next_poly)
+                current_poly = next_poly
+
+            for poly in local_path:
+                if poly not in seen:
+                    seen.add(poly)
+                    cluster.append(poly)
+
+        if not loop_found or len(cluster) > max_size:
+            return None
+        return cluster
+
+    def _fit_local_curved_corner_cluster(self, cluster_polys):
+        if not cluster_polys:
+            return None
+
+        centroids = [self._poly_centroid(poly.points) for poly in cluster_polys]
+        xmin = min(point[0] for point in centroids)
+        xmax = max(point[0] for point in centroids)
+        ymin = min(point[1] for point in centroids)
+        ymax = max(point[1] for point in centroids)
+        avg_radius = sum(
+            self._poly_radius(poly.points, centroid)
+            for poly, centroid in zip(cluster_polys, centroids)
+        ) / len(cluster_polys)
+        expansion = max(5.0 * avg_radius, 1e-12)
+
+        candidate_lines = []
+        candidate_arcs = []
+        cluster_set = set(cluster_polys)
+        for candidate_id, candidate_poly in self.merged_polys.items():
+            if candidate_poly in cluster_set or not candidate_poly.hasFacet():
+                continue
+
+            candidate_centroid = self._poly_centroid(candidate_poly.points)
+            if (
+                candidate_centroid[0] < xmin - expansion
+                or candidate_centroid[0] > xmax + expansion
+                or candidate_centroid[1] < ymin - expansion
+                or candidate_centroid[1] > ymax + expansion
+            ):
+                continue
+
+            candidate_facet = candidate_poly.getFacet()
+            if self._is_line_like_support_facet(candidate_facet):
+                candidate_lines.append(candidate_facet)
+            elif self._is_arc_like_support_facet(candidate_facet):
+                candidate_arcs.append(candidate_facet)
+
+        best_fit = None
+        for line_facet in candidate_lines:
+            for arc_facet in candidate_arcs:
+                for facet1, facet2 in ((line_facet, arc_facet), (arc_facet, line_facet)):
+                    candidate_assignments = []
+                    candidate_errors = []
+                    corner_in_poly = False
+                    for poly in cluster_polys:
+                        corner_facet, corner_error = poly.checkCurvedCornerFacet(
+                            facet1, facet2, ret=True
+                        )
+                        if corner_facet is None or corner_error is None:
+                            candidate_assignments = None
+                            break
+                        candidate_assignments.append((poly, corner_facet))
+                        candidate_errors.append(corner_error)
+                        if not corner_in_poly and pointInPoly(
+                            corner_facet.corner, poly.points
+                        ):
+                            corner_in_poly = True
+
+                    if (
+                        candidate_assignments is None
+                        or not candidate_errors
+                        or not corner_in_poly
+                    ):
+                        continue
+
+                    error_geomean = 1.0
+                    for candidate_error in candidate_errors:
+                        error_geomean *= candidate_error ** (
+                            1 / len(candidate_errors)
+                        )
+                    if best_fit is None or error_geomean < best_fit[0]:
+                        best_fit = (
+                            error_geomean,
+                            candidate_assignments,
+                        )
+
+        if (
+            best_fit is None
+            or best_fit[0] >= NeighboredPolygon.curved_corner_area_threshold
+        ):
+            return None
+
+        return dict(best_fit[1])
+
+    def _try_local_curved_corner_loop_rescue(self, target_poly):
+        loop_cluster = self._collect_small_neighbor_loop(target_poly)
+        if loop_cluster is None:
+            return None
+        return self._fit_local_curved_corner_cluster(loop_cluster)
+
+    def _try_local_curved_corner_transition_rescue(self, target_poly):
+        cluster = [target_poly]
+        for neighbor in [target_poly.getLeftNeighbor(), target_poly.getRightNeighbor()]:
+            if (
+                neighbor is None
+                or not neighbor.hasFacet()
+                or not self._is_curved_corner_support_facet(neighbor.getFacet())
+            ):
+                continue
+
+            neighbor_facet = neighbor.getFacet()
+            if (
+                self._is_line_like_support_facet(neighbor_facet)
+                or abs(neighbor_facet.curvature)
+                > NeighboredPolygon.curved_corner_curvature_threshold
+            ):
+                cluster.append(neighbor)
+
+        if len(cluster) < 2:
+            return None
+
+        return self._fit_local_curved_corner_cluster(cluster)
+
 
     # Merge the polys corresponding to merge_ids
     # merge_ids = list of merge_ids
@@ -755,6 +1469,51 @@ class MergeMesh(BaseMesh):
                     merge_id_to_obj[merge_id] = merge_id_with_neighbors
                     process_queue.append(merge_id)
 
+        def try_base_orientation_hint(merge_id_with_neighbors):
+            if (
+                merge_id_with_neighbors.has_left()
+                or merge_id_with_neighbors.has_right()
+                or len(merge_id_with_neighbors.get_neighbor_ids()) < 3
+                or len(self._get_merge_coords(merge_id_with_neighbors.get_merge_id())) != 1
+            ):
+                return False
+
+            x, y = self._get_merge_coords(merge_id_with_neighbors.get_merge_id())[0]
+            base_poly = self.polys[x][y]
+            base_poly.set3x3Stencil(self.get3x3Stencil(x, y))
+            orientation = base_poly.findSafeOrientation(fit_1neighbor=False)
+            if orientation is None:
+                return False
+
+            neighbor_ids_by_poly = {}
+            for dx, dy in [[1, 0], [0, 1], [-1, 0], [0, -1]]:
+                nx, ny = x + dx, y + dy
+                if (
+                    0 <= nx < len(self.polys)
+                    and 0 <= ny < len(self.polys[0])
+                    and self.polys[nx][ny].isMixed()
+                ):
+                    neighbor_ids_by_poly[id(self.polys[nx][ny])] = self._get_merge_id(nx, ny)
+
+            try:
+                left_id = neighbor_ids_by_poly[id(orientation[0])]
+                right_id = neighbor_ids_by_poly[id(orientation[1])]
+            except KeyError:
+                return False
+
+            if left_id == right_id:
+                return False
+            if left_id not in merge_id_with_neighbors.get_neighbor_ids():
+                return False
+            if right_id not in merge_id_with_neighbors.get_neighbor_ids():
+                return False
+            if merge_id_to_obj[left_id].has_right() or merge_id_to_obj[right_id].has_left():
+                return False
+
+            merge_id_with_neighbors.set_left(left_id)
+            merge_id_with_neighbors.set_right(right_id)
+            return True
+
         # Add new MergeIdWithNeighbors object to merge_id_to_obj which corresponds to merging merge_id with neighbor_id
         def mergeObjs(merge_id, neighbor_id, use_neighbor_id_orientation=False):
             # If either id is not in merge_id_to_obj, throw error
@@ -1086,6 +1845,8 @@ class MergeMesh(BaseMesh):
                         raise ValueError(
                             f"Fully oriented but {len(merge_id_with_neighbors.get_neighbor_ids())} neighbors: why did this happen?"
                         )
+                    elif try_base_orientation_hint(merge_id_with_neighbors):
+                        iters_without_progress = 0
                     else:
                         print("Passing on case with 3+ neighbors")
                         process_queue.append(merge_id)
@@ -1104,6 +1865,10 @@ class MergeMesh(BaseMesh):
                         f"Rest of queue cannot be resolved: length {len(process_queue)}"
                     )
                     break
+
+        for merge_id in process_queue.copy():
+            if try_base_orientation_hint(merge_id_to_obj[merge_id]):
+                continue
 
         doGreedyOrientations()
 
@@ -1291,6 +2056,51 @@ class MergeMesh(BaseMesh):
                     merge_id_to_obj[merge_id] = merge_id_with_neighbors
                     process_queue.append(merge_id)
 
+        def try_base_orientation_hint(merge_id_with_neighbors):
+            if (
+                merge_id_with_neighbors.has_left()
+                or merge_id_with_neighbors.has_right()
+                or len(merge_id_with_neighbors.get_neighbor_ids()) < 3
+                or len(self._get_merge_coords(merge_id_with_neighbors.get_merge_id())) != 1
+            ):
+                return False
+
+            x, y = self._get_merge_coords(merge_id_with_neighbors.get_merge_id())[0]
+            base_poly = self.polys[x][y]
+            base_poly.set3x3Stencil(self.get3x3Stencil(x, y))
+            orientation = base_poly.findSafeOrientation(fit_1neighbor=False)
+            if orientation is None:
+                return False
+
+            neighbor_ids_by_poly = {}
+            for dx, dy in [[1, 0], [0, 1], [-1, 0], [0, -1]]:
+                nx, ny = x + dx, y + dy
+                if (
+                    0 <= nx < len(self.polys)
+                    and 0 <= ny < len(self.polys[0])
+                    and self.polys[nx][ny].isMixed()
+                ):
+                    neighbor_ids_by_poly[id(self.polys[nx][ny])] = self._get_merge_id(nx, ny)
+
+            try:
+                left_id = neighbor_ids_by_poly[id(orientation[0])]
+                right_id = neighbor_ids_by_poly[id(orientation[1])]
+            except KeyError:
+                return False
+
+            if left_id == right_id:
+                return False
+            if left_id not in merge_id_with_neighbors.get_neighbor_ids():
+                return False
+            if right_id not in merge_id_with_neighbors.get_neighbor_ids():
+                return False
+            if merge_id_to_obj[left_id].has_right() or merge_id_to_obj[right_id].has_left():
+                return False
+
+            merge_id_with_neighbors.set_left(left_id)
+            merge_id_with_neighbors.set_right(right_id)
+            return True
+
         # Add new MergeIdWithNeighbors object to merge_id_to_obj which corresponds to merging merge_id with neighbor_id
         def mergeObjs(merge_id, neighbor_id, use_neighbor_id_orientation=False):
             # If either id is not in merge_id_to_obj, throw error
@@ -1622,6 +2432,8 @@ class MergeMesh(BaseMesh):
                         raise ValueError(
                             f"Fully oriented but {len(merge_id_with_neighbors.get_neighbor_ids())} neighbors: why did this happen?"
                         )
+                    elif try_base_orientation_hint(merge_id_with_neighbors):
+                        iters_without_progress = 0
                     else:
                         print("Passing on case with 3+ neighbors")
                         process_queue.append(merge_id)
@@ -1640,6 +2452,10 @@ class MergeMesh(BaseMesh):
                         f"Rest of queue cannot be resolved: length {len(process_queue)}"
                     )
                     break
+
+        for merge_id in process_queue.copy():
+            if try_base_orientation_hint(merge_id_to_obj[merge_id]):
+                continue
 
         doGreedyOrientations()
 
@@ -2018,15 +2834,15 @@ class MergeMesh(BaseMesh):
                 merged_poly: NeighboredPolygon = self.merged_polys[merge_id]
                 if merged_poly.fullyOriented():
                     if merged_poly.facet_type == "linear_deadend":
-                        merged_poly.fitLinearFacet()
-                        merged_poly.getFacet().name = "linear_deadend"
+                        self._fit_deadend_facet(merge_id, prefer_safe_circle=True)
                     else:
+                        root_guess = self._find_arc_fit_guess(merge_id)
                         with arc_facet_log_context(
                             call_source="circular",
                             merge_id=merge_id,
                             merge_coords=self._get_merge_coords(merge_id),
                         ):
-                            merged_poly.fitCircularFacet()
+                            merged_poly.fitCircularFacet(root_guess=root_guess)
                         # If circular facet fitter failed, default to linear
                         if not (merged_poly.hasFacet()):
                             merged_poly.fitLinearFacet()
@@ -2143,8 +2959,9 @@ class MergeMesh(BaseMesh):
                 merged_poly: NeighboredPolygon = self.merged_polys[merge_ids[i]]
                 if merged_poly.fullyOriented():
                     if merged_poly.facet_type == "linear_deadend":
-                        merged_poly.fitLinearFacet()
-                        merged_poly.getFacet().name = "linear_deadend"
+                        self._fit_deadend_facet(
+                            merge_ids[i], prefer_safe_circle=True
+                        )
                     else:
                         merged_poly.fitLinearFacet(doCollinearityCheck=True)
 
@@ -2164,7 +2981,9 @@ class MergeMesh(BaseMesh):
                         if left == merged_poly or left == right or left is None:
                             doneLeft = True
                             success = False
-                        elif left.hasFacet() and left.getFacet().name == "linear":
+                        elif left.hasFacet() and self._is_line_like_support_facet(
+                            left.getFacet()
+                        ):
                             # Linear facet on left
                             doneLeft = True
                             success = True
@@ -2181,7 +3000,9 @@ class MergeMesh(BaseMesh):
                         if right == merged_poly or right == left or right is None:
                             doneRight = True
                             success = False
-                        elif right.hasFacet() and right.getFacet().name == "linear":
+                        elif right.hasFacet() and self._is_line_like_support_facet(
+                            right.getFacet()
+                        ):
                             # Linear facet on right
                             doneRight = True
                             success = True
@@ -2222,10 +3043,13 @@ class MergeMesh(BaseMesh):
                 if not (merged_poly.hasFacet()):
                     if merged_poly.fullyOriented():
                         if merged_poly.facet_type == "linear_deadend":
-                            merged_poly.fitLinearFacet()
-                            merged_poly.getFacet().name = "linear_deadend"
+                            self._fit_deadend_facet(
+                                merge_id, prefer_safe_circle=True
+                            )
                         else:
-                            merged_poly.fitCircularFacet()
+                            merged_poly.fitCircularFacet(
+                                root_guess=self._find_arc_fit_guess(merge_id)
+                            )
                 i += 1
 
             print("Using circular corners")
@@ -2241,11 +3065,15 @@ class MergeMesh(BaseMesh):
                     if checkBig:
                         return (
                             test_poly.hasFacet()
-                            and test_poly.getFacet().name in ["linear", "arc"]
+                            and self._is_curved_corner_support_facet(
+                                test_poly.getFacet()
+                            )
                             and (
                                 (
                                     test_left.hasFacet()
-                                    and test_left.getFacet().name in ["linear", "arc"]
+                                    and self._is_curved_corner_support_facet(
+                                        test_left.getFacet()
+                                    )
                                     and abs(
                                         test_left.getFacet().curvature
                                         - test_poly.getFacet().curvature
@@ -2257,7 +3085,9 @@ class MergeMesh(BaseMesh):
                             and (
                                 (
                                     test_right.hasFacet()
-                                    and test_right.getFacet().name in ["linear", "arc"]
+                                    and self._is_curved_corner_support_facet(
+                                        test_right.getFacet()
+                                    )
                                     and abs(
                                         test_right.getFacet().curvature
                                         - test_poly.getFacet().curvature
@@ -2270,11 +3100,15 @@ class MergeMesh(BaseMesh):
                     else:
                         return (
                             test_poly.hasFacet()
-                            and test_poly.getFacet().name in ["linear", "arc"]
+                            and self._is_curved_corner_support_facet(
+                                test_poly.getFacet()
+                            )
                             and (
                                 (
                                     test_left.hasFacet()
-                                    and test_left.getFacet().name in ["linear", "arc"]
+                                    and self._is_curved_corner_support_facet(
+                                        test_left.getFacet()
+                                    )
                                     and abs(
                                         test_left.getFacet().curvature
                                         - test_poly.getFacet().curvature
@@ -2286,7 +3120,9 @@ class MergeMesh(BaseMesh):
                             and (
                                 (
                                     test_right.hasFacet()
-                                    and test_right.getFacet().name in ["linear", "arc"]
+                                    and self._is_curved_corner_support_facet(
+                                        test_right.getFacet()
+                                    )
                                     and abs(
                                         test_right.getFacet().curvature
                                         - test_poly.getFacet().curvature
@@ -2297,9 +3133,28 @@ class MergeMesh(BaseMesh):
                             )
                         )
 
-                if not (merged_poly.hasFacet()) or _helper_checkCurvatureChange(
-                    merged_poly, checkBig=True
+                def _helper_needs_transition_rescue(test_poly):
+                    if not test_poly.hasFacet() or not self._is_line_like_support_facet(
+                        test_poly.getFacet()
+                    ):
+                        return False
+                    neighbors = [
+                        test_poly.getLeftNeighbor(),
+                        test_poly.getRightNeighbor(),
+                    ]
+                    return any(
+                        neighbor is not None
+                        and neighbor.hasFacet()
+                        and self._is_arc_like_support_facet(neighbor.getFacet())
+                        for neighbor in neighbors
+                    )
+
+                if (
+                    not (merged_poly.hasFacet())
+                    or _helper_checkCurvatureChange(merged_poly, checkBig=True)
+                    or _helper_needs_transition_rescue(merged_poly)
                 ):
+                    curved_corner_applied = False
                     # if _helper_checkCurvatureChange(merged_poly, checkBig=True):
                     #     print("Potential curved corner:")
                     #     print(merged_poly)
@@ -2345,14 +3200,18 @@ class MergeMesh(BaseMesh):
                     if success:
                         # Try all polys between left and right
                         corner_testing_poly: NeighboredPolygon = left.getRightNeighbor()
+                        corner_assignments = []
                         corner_area_fraction_errors = []
                         corner_in_poly = False
-                        while corner_testing_poly != right:
+                        while corner_testing_poly is not None and corner_testing_poly != right:
                             # can cache these. right now each unfit cell is checked once which checks all of its unfit neighbors. TODO fix
                             corner_facet, corner_area_fraction_error = (
                                 corner_testing_poly.checkCurvedCornerFacet(
                                     left.getFacet(), right.getFacet(), ret=True
                                 )
+                            )
+                            corner_assignments.append(
+                                (corner_testing_poly, corner_facet)
                             )
                             corner_area_fraction_errors.append(
                                 corner_area_fraction_error
@@ -2365,9 +3224,17 @@ class MergeMesh(BaseMesh):
                                 )
                             ):
                                 corner_in_poly = True
-                            corner_testing_poly = corner_testing_poly.getRightNeighbor()
+                            next_poly = corner_testing_poly.getRightNeighbor()
+                            if next_poly == corner_testing_poly:
+                                corner_testing_poly = None
+                                break
+                            corner_testing_poly = next_poly
                         # Each poly passes checkCurvedCornerFacet test and corner lies in at least one poly
-                        if None not in corner_area_fraction_errors and corner_in_poly:
+                        if (
+                            corner_testing_poly == right
+                            and None not in corner_area_fraction_errors
+                            and corner_in_poly
+                        ):
                             # Compute geometric mean of errors #TODO is this the best choice?
                             corner_area_fraction_error_geomean = 1
                             for (
@@ -2380,14 +3247,12 @@ class MergeMesh(BaseMesh):
                                 corner_area_fraction_error_geomean
                                 < NeighboredPolygon.curved_corner_area_threshold
                             ):
-                                corner_testing_poly: NeighboredPolygon = (
-                                    left.getRightNeighbor()
-                                )
-                                while corner_testing_poly != right:
-                                    corner_testing_poly.setFacet(corner_facet)
-                                    corner_testing_poly = (
-                                        corner_testing_poly.getRightNeighbor()
-                                    )
+                                for (
+                                    assigned_poly,
+                                    assigned_corner_facet,
+                                ) in corner_assignments:
+                                    assigned_poly.setFacet(assigned_corner_facet)
+                                curved_corner_applied = True
                             else:
                                 print(corner_area_fraction_errors)
                                 print(corner_area_fraction_error_geomean)
@@ -2396,6 +3261,32 @@ class MergeMesh(BaseMesh):
                             print(
                                 "Failed to fit curved corners: issue with at least one checkCurvedCornerFacet"
                             )
+
+                    if not curved_corner_applied:
+                        rescue_assignments = self._try_local_curved_corner_loop_rescue(
+                            merged_poly
+                        )
+                        if rescue_assignments is not None:
+                            for rescue_poly, rescue_facet in rescue_assignments.items():
+                                rescue_poly.setFacet(rescue_facet)
+                            curved_corner_applied = True
+
+                    if not curved_corner_applied:
+                        rescue_assignments = (
+                            self._try_local_curved_corner_transition_rescue(
+                                merged_poly
+                            )
+                        )
+                        if rescue_assignments is not None:
+                            for rescue_poly, rescue_facet in rescue_assignments.items():
+                                rescue_poly.setFacet(rescue_facet)
+
+            # Rebuild straight geometry into nearby weak cells using exact support lines
+            # or accepted corner-branch normals before falling all the way back to linear.
+            self._rescue_corner_arc_corner_triplets(merge_ids)
+            self._rescue_repeated_tiny_corner_triplets(merge_ids)
+            self._propagate_exact_linear_supports(merge_ids)
+            self._rescue_corner_linear_bridge_cells(merge_ids)
 
             # For anything left, fit a linear facet
             i = 0
@@ -2412,6 +3303,12 @@ class MergeMesh(BaseMesh):
                         merge_ids.pop(i)
                         i -= 1
                 i += 1
+
+            # After the fallback pass, some outer support cells have settled into
+            # reliable line facets. Revisit repeated curved-corner triplets now
+            # that those linear supports are available.
+            self._rescue_repeated_corner_components_as_linear_corners(merge_ids)
+            self._rescue_linear_corner_owner_intruder_arcs(merge_ids)
 
         elif setting == "extra_corners":
             pass

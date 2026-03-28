@@ -3,6 +3,7 @@ import threading
 
 from main.geoms.geoms import (
     getArea,
+    getCentroid,
     getDistance,
     getPolyLineArea,
     lineIntersect,
@@ -20,6 +21,8 @@ from main.geoms.linear_facet import (
 from main.geoms.circular_facet import (
     LinearFacetShortcut,
     getArcFacet,
+    getCircleIntersectArea,
+    getArcFacetRoot,
     matchArcArea,
     getCenter,
 )
@@ -31,7 +34,10 @@ class BasePolygon:
     C0_linear_tolerance = 1e-5  # should be a couple orders of magnitude higher than linearity_threshold in NeighboredPolygon
 
     linearity_threshold = 1e-6  # if area fraction error in linear facet < this value, use linear facet at this cell
+    extreme_fraction_orientation_threshold = 5e-3
+    three_neighbor_orientation_tolerance = 5e-3
     optimization_threshold = 1e-10  # in optimizations
+    arc_fit_residual_threshold = 1e-5
     arc_fit_timeout_seconds = 2.0
 
     # Invariant: self.fraction should always be between 0 and 1
@@ -155,6 +161,140 @@ class BasePolygon:
             signal.setitimer(signal.ITIMER_REAL, 0.0)
             signal.signal(signal.SIGALRM, previous_handler)
 
+    @staticmethod
+    def _try_arc_fit_root_fallback(*args):
+        try:
+            return getArcFacetRoot(*args)
+        except Exception:
+            return None, None, None
+
+    @staticmethod
+    def _arc_fit_max_fraction_error(polys, fractions, center, radius):
+        max_error = 0.0
+        for poly, target_fraction in zip(polys, fractions):
+            fit_area, _ = getCircleIntersectArea(center, radius, poly)
+            fit_fraction = fit_area / abs(getArea(poly))
+            max_error = max(max_error, abs(fit_fraction - target_fraction))
+        return max_error
+
+    @staticmethod
+    def _arc_facet_fraction_error(poly, target_fraction, center, radius, p_left, p_right):
+        try:
+            facet = ArcFacet(center, radius, p_left, p_right)
+        except Exception:
+            return float("inf")
+
+        try:
+            fit_area = facet.getPolyIntersectArea(poly)
+        except Exception:
+            return float("inf")
+        fit_fraction = fit_area / abs(getArea(poly))
+        return abs(fit_fraction - target_fraction)
+
+    @staticmethod
+    def _root_fallback_selection_key(mid_poly, center, radius, arcintersects, root_guess=None):
+        facet = ArcFacet(center, radius, arcintersects[0], arcintersects[-1])
+        midpoint = facet.midpoint
+        centroid = getCentroid(mid_poly)
+        midpoint_distance = getDistance(midpoint, centroid)
+        inside_mid = pointInPoly(midpoint, mid_poly)
+        if root_guess is None:
+            return (0 if inside_mid else 1, midpoint_distance)
+
+        guess_center = [root_guess[0], root_guess[1]]
+        guess_distance = getDistance(center, guess_center) + abs(
+            abs(radius) - abs(root_guess[2])
+        )
+        return (0 if inside_mid else 1, guess_distance, midpoint_distance)
+
+    @staticmethod
+    def _normalize_root_fallback_arc(polys, fractions, center, radius, arcintersects, root_guess=None):
+        if arcintersects is None or len(arcintersects) < 2:
+            return None, None, None
+
+        p_first = list(arcintersects[0])
+        p_last = list(arcintersects[-1])
+        candidates = [
+            (radius, p_first, p_last),
+            (radius, p_last, p_first),
+            (-radius, p_first, p_last),
+            (-radius, p_last, p_first),
+        ]
+
+        best = None
+        best_key = None
+        mid_poly = polys[1]
+        for cand_radius, cand_left, cand_right in candidates:
+            try:
+                key = BasePolygon._root_fallback_selection_key(
+                    mid_poly,
+                    center,
+                    cand_radius,
+                    [cand_left, cand_right],
+                    root_guess=root_guess,
+                )
+            except Exception:
+                continue
+            if best_key is None or key < best_key:
+                best_key = key
+                best = (center, cand_radius, [cand_left, cand_right])
+
+        if best is None:
+            return None, None, None
+        return best
+
+    @staticmethod
+    def _try_arc_fit_root_fallbacks(base_args, root_guess=None):
+        valid_candidates = []
+
+        def _collect(raw_candidate, guess_for_key=None):
+            arccenter, arcradius, arcintersects = raw_candidate
+            if (
+                arccenter is None
+                or arcradius is None
+                or arcintersects is None
+            ):
+                return
+            residual = BasePolygon._arc_fit_max_fraction_error(
+                base_args[:3], base_args[3:6], arccenter, arcradius
+            )
+            if residual > BasePolygon.arc_fit_residual_threshold:
+                return
+            normalized = BasePolygon._normalize_root_fallback_arc(
+                base_args[:3],
+                base_args[3:6],
+                arccenter,
+                arcradius,
+                arcintersects,
+                root_guess=guess_for_key,
+            )
+            if normalized[0] is None:
+                return
+            valid_candidates.append(normalized)
+
+        _collect(BasePolygon._try_arc_fit_root_fallback(*base_args), guess_for_key=root_guess)
+        if root_guess is not None:
+            _collect(
+                BasePolygon._try_arc_fit_root_fallback(
+                    *(tuple(base_args) + tuple(root_guess))
+                ),
+                guess_for_key=root_guess,
+            )
+
+        if not valid_candidates:
+            return None, None, None
+
+        return min(
+            valid_candidates,
+            key=lambda candidate: BasePolygon._root_fallback_selection_key(
+                base_args[1],
+                candidate[0],
+                candidate[1],
+                candidate[2],
+                root_guess=root_guess,
+            ),
+        )
+
     # If orientation is "easy" (only 2 mixed neighbors with consistent orientation), return those neighbors
     def findSafeOrientation(self, fit_1neighbor=False):
         assert self.has3x3Stencil()
@@ -233,6 +373,43 @@ class BasePolygon:
             else:
                 return [mixed_neighbors[0], self]
 
+        # If three mixed neighbors and this cell is almost full/empty, use the pair
+        # whose linear seed best matches the middle-cell fraction.
+        elif (
+            len(mixed_neighbors) == 3
+            and min(self.getFraction(), 1 - self.getFraction())
+            < BasePolygon.extreme_fraction_orientation_threshold
+        ):
+            best_orientation = None
+            best_error = None
+            for left_neighbor in mixed_neighbors:
+                for right_neighbor in mixed_neighbors:
+                    if left_neighbor is right_neighbor:
+                        continue
+                    try:
+                        l1, l2 = getLinearFacet(
+                            left_neighbor.points,
+                            right_neighbor.points,
+                            left_neighbor.getFraction(),
+                            right_neighbor.getFraction(),
+                            BasePolygon.optimization_threshold,
+                        )
+                    except RuntimeError:
+                        continue
+                    line_fraction = (
+                        getPolyLineArea(self.points, l1, l2) / self.getMaxArea()
+                    )
+                    error = abs(self.getFraction() - line_fraction)
+                    if best_error is None or error < best_error:
+                        best_error = error
+                        best_orientation = [left_neighbor, right_neighbor]
+            if (
+                best_orientation is not None
+                and best_error is not None
+                and best_error < BasePolygon.three_neighbor_orientation_tolerance
+            ):
+                return best_orientation
+
         # Otherwise, we don't have a safe orientation. Return None
         else:
             return None
@@ -257,11 +434,11 @@ class BasePolygon:
             self.points, self.getFraction(), normal, BasePolygon.optimization_threshold
         )
         intersects = getPolyLineIntersects(self.points, l1, l2)
-        elvira_facet = LinearFacet(intersects[0], intersects[-1], name="ELVIRA")
+        youngsFacet = LinearFacet(intersects[0], intersects[-1], name="ELVIRA")
         if ret:
-            return elvira_facet
+            return youngsFacet
         else:
-            self.setFacet(elvira_facet)
+            self.setFacet(youngsFacet)
 
     def runLVIRA(self, ret=False):
         assert self.has3x3Stencil()
@@ -454,6 +631,20 @@ class BasePolygon:
                         BasePolygon.optimization_threshold,
                     )
                     if arccenter is None or arcradius is None or arcintersects is None:
+                        arccenter, arcradius, arcintersects = (
+                            self._try_arc_fit_root_fallbacks(
+                                (
+                                    left_neighbor.points,
+                                    self.points,
+                                    right_neighbor.points,
+                                    left_neighbor.getFraction(),
+                                    self.getFraction(),
+                                    right_neighbor.getFraction(),
+                                    BasePolygon.optimization_threshold,
+                                )
+                            )
+                        )
+                    if arccenter is None or arcradius is None or arcintersects is None:
                         if default_to_youngs:
                             facet = self.runYoungs(ret=True)
                         elif default_to_elvira:
@@ -462,21 +653,37 @@ class BasePolygon:
                             facet = None
                     else:
                         # Arc
-                            facet = ArcFacet(
+                        facet = ArcFacet(
                             arccenter, arcradius, arcintersects[0], arcintersects[-1]
                         )
                 except LinearFacetShortcut as shortcut:
                     facet = LinearFacet(shortcut.pLeft, shortcut.pRight)
                 except (RuntimeError, TimeoutError) as error:
-                    print(
-                        f"runSafeCircle fallback to PLIC after getArcFacet failure: {error}"
+                    arccenter, arcradius, arcintersects = (
+                        self._try_arc_fit_root_fallbacks(
+                            (
+                                left_neighbor.points,
+                                self.points,
+                                right_neighbor.points,
+                                left_neighbor.getFraction(),
+                                self.getFraction(),
+                                right_neighbor.getFraction(),
+                                BasePolygon.optimization_threshold,
+                            )
+                        )
                     )
-                    if default_to_youngs:
-                        facet = self.runYoungs(ret=True)
-                    elif default_to_elvira:
-                        facet = self.runELVIRA(ret=True)
+                    if arccenter is not None and arcradius is not None and arcintersects is not None:
+                        facet = ArcFacet(arccenter, arcradius, arcintersects[0], arcintersects[-1])
                     else:
-                        facet = None
+                        print(
+                            f"runSafeCircle fallback to PLIC after getArcFacet failure: {error}"
+                        )
+                        if default_to_youngs:
+                            facet = self.runYoungs(ret=True)
+                        elif default_to_elvira:
+                            facet = self.runELVIRA(ret=True)
+                        else:
+                            facet = None
                 except Exception as error:
                     print(
                         f"runSafeCircle fallback to PLIC after unexpected getArcFacet failure: {error}"

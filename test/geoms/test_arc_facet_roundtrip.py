@@ -42,6 +42,38 @@ def test_arc_facet_roundtrip():
     assert abs(r3 - a3) < tol
 
 
+def test_arc_facet_zalesak_case12_stencil_fails_gracefully():
+    poly1 = [
+        [64.65244101148592, 50.817570794173314],
+        [65.28125207454978, 50.66703350352129],
+        [65.50556501530274, 51.333462738535744],
+        [64.8349116186194, 51.227175494578375],
+    ]
+    poly2 = [
+        [65.28125207454978, 50.66703350352129],
+        [66.02288169432336, 50.77732648423029],
+        [66.0066360275915, 51.45248092856235],
+        [65.50556501530274, 51.333462738535744],
+    ]
+    poly3 = [
+        [65.32919447682659, 49.89462683602225],
+        [65.89379653721898, 49.875795399173974],
+        [66.02288169432336, 50.77732648423029],
+        [65.28125207454978, 50.66703350352129],
+    ]
+    a1 = 0.8780358453509324
+    a2 = 0.011719131631887647
+    a3 = 0.047090906929863285
+
+    ret_center, ret_radius, ret_intersects = getArcFacet(
+        poly1, poly2, poly3, a1, a2, a3, 1e-10
+    )
+    assert ret_center is None
+    assert ret_radius is None
+    assert ret_intersects is None
+
+
 if __name__ == "__main__":
     test_arc_facet_roundtrip()
+    test_arc_facet_zalesak_case12_stencil_fails_gracefully()
     print("Arc facet roundtrip tests completed.")

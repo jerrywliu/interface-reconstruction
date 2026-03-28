@@ -8,7 +8,7 @@ python -m test.test_facets
 
 import math
 
-from main.geoms.geoms import getDistance
+from main.geoms.geoms import getArea, getDistance
 from main.structs.facets.circular_facet import ArcFacet
 from main.structs.facets.corner_facet import CornerFacet
 from main.structs.facets.linear_facet import LinearFacet
@@ -103,6 +103,26 @@ def test_arc_facet_poly_intersect_area_handles_endpoint_roundoff_case():
     assert math.isfinite(area)
     assert area >= 0.0
     assert area <= abs(getDistance(poly[0], poly[1]) * getDistance(poly[1], poly[2])) * 2
+
+
+def test_arc_facet_poly_intersect_area_uses_minor_cap_for_case2_repro():
+    poly = [
+        [62.0, 40.0],
+        [62.666666666666664, 40.0],
+        [62.666666666666664, 40.666666666666664],
+        [62.0, 40.666666666666664],
+    ]
+    facet = ArcFacet(
+        [50.751792271818616, 50.26369219747838],
+        15.0,
+        [62.0, 40.34009290570523],
+        [62.27989276413513, 40.666666666666664],
+    )
+
+    area = facet.getPolyIntersectArea(poly)
+    expected_fraction = 0.103825964349862
+
+    assert abs(area / abs(getArea(poly)) - expected_fraction) < 1e-6
 
 
 def test_corner_facet_sample_and_advected_zero_velocity():
