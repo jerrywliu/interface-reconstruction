@@ -36,6 +36,7 @@ Our algorithms consist of two main features:
 
 #### Baselines
 - **Youngs**
+- **ELVIRA**
 - **LVIRA**
 
 #### Our Algorithms

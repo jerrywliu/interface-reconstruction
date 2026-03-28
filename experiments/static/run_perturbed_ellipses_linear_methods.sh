@@ -2,6 +2,7 @@
 ########################################################
 # Run perturbed static-ellipse experiments for linear methods:
 #   - Youngs
+#   - ELVIRA
 #   - LVIRA
 #   - safe_linear
 #   - linear
@@ -39,11 +40,12 @@ read -r -a RESOLUTIONS <<< "$RESOLUTIONS_STR"
 read -r -a WIGGLES <<< "$WIGGLES_STR"
 read -r -a SEEDS <<< "$SEEDS_STR"
 
-METHODS=("Youngs" "LVIRA" "safe_linear" "linear")
+METHODS=("Youngs" "ELVIRA" "LVIRA" "safe_linear" "linear")
 
 method_to_tag() {
   case "$1" in
     Youngs) echo "youngs" ;;
+    ELVIRA) echo "elvira" ;;
     LVIRA) echo "lvira" ;;
     safe_linear) echo "safe_linear" ;;
     linear) echo "linear" ;;
@@ -119,4 +121,3 @@ echo "Logs:        $LOG_DIR"
 if [ "$failed_runs" -gt 0 ]; then
   exit 1
 fi
-

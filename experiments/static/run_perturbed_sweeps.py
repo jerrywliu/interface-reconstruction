@@ -20,7 +20,7 @@ from util.io.slack import load_slack_env, send_results_to_slack
 
 
 STATIC_GRID_SIZE = 100.0
-LINEAR_ALGOS = ["Youngs", "LVIRA", "safe_linear", "linear"]
+LINEAR_ALGOS = ["Youngs", "ELVIRA", "LVIRA", "safe_linear", "linear"]
 LINE_ALGOS = LINEAR_ALGOS
 CIRCLE_ALGOS = LINEAR_ALGOS + ["safe_circle", "circular"]
 ELLIPSE_ALGOS = LINEAR_ALGOS + ["safe_circle", "circular"]
@@ -29,6 +29,7 @@ ZALESAK_ALGOS = LINEAR_ALGOS + ["safe_circle", "circular", "circular+corner"]
 
 METHOD_ORDER = [
     "Youngs",
+    "ELVIRA",
     "LVIRA",
     "safe_linear",
     "linear",
@@ -46,18 +47,20 @@ DEFAULT_SEEDS = [0]
 
 DISPLAY_LABELS = {
     "Youngs": "Youngs",
-    "LVIRA": "ELVIRA",
-    "safe_linear": "safe linear",
-    "linear": "linear",
-    "linear+corner": "linear+corner",
-    "safe_circle": "safe circle",
-    "circular": "circular",
-    "circular+corner": "circular+corner",
+    "ELVIRA": "ELVIRA",
+    "LVIRA": "LVIRA",
+    "safe_linear": "Ours (safe linear)",
+    "linear": "Ours (linear)",
+    "linear+corner": "Ours (linear+corner)",
+    "safe_circle": "Ours (safe circular)",
+    "circular": "Ours (circular)",
+    "circular+corner": "Ours (circular+corner)",
 }
 
 METHOD_STYLES = {
     "Youngs": {"color": "#6c757d", "linestyle": "-", "linewidth": 1.8},
-    "LVIRA": {"color": "#495057", "linestyle": "--", "linewidth": 1.8},
+    "ELVIRA": {"color": "#495057", "linestyle": "--", "linewidth": 1.8},
+    "LVIRA": {"color": "#212529", "linestyle": "-.", "linewidth": 1.8},
     "safe_linear": {"color": "#74a9cf", "linestyle": "--", "linewidth": 1.9},
     "linear": {"color": "#1d4ed8", "linestyle": "-", "linewidth": 2.3},
     "linear+corner": {"color": "#0f766e", "linestyle": "-", "linewidth": 2.4},
@@ -128,6 +131,12 @@ def _parse_str_list(value):
     if value is None:
         return []
     return [p.strip().lower() for p in value.split(",") if p.strip()]
+
+
+def _filter_algos(algos, selected_algos):
+    if not selected_algos:
+        return algos
+    return [algo for algo in algos if algo.lower() in selected_algos]
 
 
 def _safe_mean(values):
@@ -384,6 +393,11 @@ def _load_sweep_rows(csv_path):
         reader = csv.DictReader(csvfile)
         for row in reader:
             rows.append(row)
+    algos = {row.get("algo") for row in rows}
+    if "ELVIRA" not in algos and "LVIRA" in algos:
+        for row in rows:
+            if row.get("algo") == "LVIRA":
+                row["algo"] = "ELVIRA"
     return rows
 
 
@@ -820,18 +834,18 @@ def _generate_two_metric_axes_grid_plot(
         (
             0,
             1,
-            metric_right,
-            wiggle_curves,
-            PERTURBATION_AXIS_LABEL,
-            f"{_metric_title(metric_right)} vs {PERTURBATION_AXIS_LABEL.title()}",
-        ),
-        (
-            1,
-            0,
             metric_left,
             resolution_curves,
             RESOLUTION_AXIS_LABEL,
             f"{_metric_title(metric_left)} vs Cells per Side",
+        ),
+        (
+            1,
+            0,
+            metric_right,
+            wiggle_curves,
+            PERTURBATION_AXIS_LABEL,
+            f"{_metric_title(metric_right)} vs {PERTURBATION_AXIS_LABEL.title()}",
         ),
         (
             1,
@@ -855,11 +869,27 @@ def _generate_two_metric_axes_grid_plot(
             curves,
             metric,
             x_label=x_label,
-            x_mode="perturbation" if row == 0 else "resolution",
+            x_mode="perturbation" if col == 0 else "resolution",
             exp_name=exp_name,
         )
         ax.set_title(title, fontsize=11.5, fontweight="bold")
         _merge_legend_entries(legend_entries, ax)
+
+    for row in range(2):
+        row_axes = [axes[row][col] for col in range(2) if axes[row][col].axison]
+        if row_axes:
+            ymin = min(ax.get_ylim()[0] for ax in row_axes)
+            ymax = max(ax.get_ylim()[1] for ax in row_axes)
+            for ax in row_axes:
+                ax.set_ylim(ymin, ymax)
+
+    for col in range(2):
+        col_axes = [axes[row][col] for row in range(2) if axes[row][col].axison]
+        if col_axes:
+            xmin = min(ax.get_xlim()[0] for ax in col_axes)
+            xmax = max(ax.get_xlim()[1] for ax in col_axes)
+            for ax in col_axes:
+                ax.set_xlim(xmin, xmax)
 
     if legend_entries:
         fig.legend(
@@ -1014,6 +1044,22 @@ def _generate_circle_method_axes_grid_plot(data, out_dir):
             _merge_legend_entries(legend_entries, ax_r)
         else:
             ax_r.set_axis_off()
+
+    for row in range(rows):
+        row_axes = [axes[row][col] for col in range(2) if axes[row][col].axison]
+        if row_axes:
+            ymin = min(ax.get_ylim()[0] for ax in row_axes)
+            ymax = max(ax.get_ylim()[1] for ax in row_axes)
+            for ax in row_axes:
+                ax.set_ylim(ymin, ymax)
+
+    for col in range(2):
+        col_axes = [axes[row][col] for row in range(rows) if axes[row][col].axison]
+        if col_axes:
+            xmin = min(ax.get_xlim()[0] for ax in col_axes)
+            xmax = max(ax.get_xlim()[1] for ax in col_axes)
+            for ax in col_axes:
+                ax.set_xlim(xmin, xmax)
 
     if legend_entries:
         fig.legend(
@@ -1172,6 +1218,22 @@ def _generate_ellipse_method_axes_grid_plot(data, out_dir):
             _merge_legend_entries(legend_entries, ax_r)
         else:
             ax_r.set_axis_off()
+
+    for row in range(rows):
+        row_axes = [axes[row][col] for col in range(2) if axes[row][col].axison]
+        if row_axes:
+            ymin = min(ax.get_ylim()[0] for ax in row_axes)
+            ymax = max(ax.get_ylim()[1] for ax in row_axes)
+            for ax in row_axes:
+                ax.set_ylim(ymin, ymax)
+
+    for col in range(2):
+        col_axes = [axes[row][col] for row in range(rows) if axes[row][col].axison]
+        if col_axes:
+            xmin = min(ax.get_xlim()[0] for ax in col_axes)
+            xmax = max(ax.get_xlim()[1] for ax in col_axes)
+            for ax in col_axes:
+                ax.set_xlim(xmin, xmax)
 
     if legend_entries:
         fig.legend(
@@ -1365,6 +1427,12 @@ def main():
         help="comma-separated experiment names to run (e.g., lines,ellipses)",
     )
     parser.add_argument(
+        "--algos",
+        type=str,
+        default=None,
+        help="comma-separated algorithms to run (e.g., ELVIRA,LVIRA)",
+    )
+    parser.add_argument(
         "--aggregate_samples",
         type=int,
         default=0,
@@ -1395,6 +1463,11 @@ def main():
         type=str,
         default=None,
         help="skip sweep execution and generate summary plots from an existing CSV",
+    )
+    parser.add_argument(
+        "--collect_existing",
+        action="store_true",
+        help="skip execution and collect metrics from existing plots/perturb_sweep_* outputs",
     )
 
     args = parser.parse_args()
@@ -1427,6 +1500,7 @@ def main():
     wiggles = _parse_list(args.wiggles, float) or DEFAULT_WIGGLES
     seeds = _parse_list(args.seeds, int) or DEFAULT_SEEDS
     only_experiments = set(_parse_str_list(args.only))
+    selected_algos = set(_parse_str_list(args.algos))
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_dir = args.log_dir or os.path.join("logs", "perturbed_sweeps", stamp)
@@ -1454,7 +1528,10 @@ def main():
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
 
-        print(f"Perturbed sweeps started at {datetime.now().isoformat()}")
+        if args.collect_existing:
+            print(f"Collecting existing perturbed sweep metrics at {datetime.now().isoformat()}")
+        else:
+            print(f"Perturbed sweeps started at {datetime.now().isoformat()}")
         print(f"Logging to {log_dir}")
         print(f"Writing CSV to {out_csv}")
 
@@ -1463,6 +1540,9 @@ def main():
 
         for exp in EXPERIMENTS:
             if only_experiments and exp["name"] not in only_experiments:
+                continue
+            exp_algos = _filter_algos(exp["algorithms"], selected_algos)
+            if not exp_algos:
                 continue
             num_value = getattr(args, exp["name"], None)
             if resolutions_override:
@@ -1475,7 +1555,7 @@ def main():
             for resolution in exp_resolutions:
                 for wiggle in wiggles:
                     for seed in seeds:
-                        for algo in exp["algorithms"]:
+                        for algo in exp_algos:
                             save_name = _make_save_name(
                                 exp["name"], algo, resolution, wiggle, seed
                             )
@@ -1503,25 +1583,33 @@ def main():
                             if num_value is not None:
                                 cmd += [exp["num_arg"], str(num_value)]
 
-                            log_path = Path(log_dir) / f"{save_name}.log"
-                            code = _run_subprocess(cmd, log_path)
-                            if code != 0:
-                                failures.append(
-                                    {
-                                        "experiment": exp["name"],
-                                        "algo": algo,
-                                        "resolution": resolution,
-                                        "wiggle": wiggle,
-                                        "seed": seed,
-                                        "code": code,
-                                    }
-                                )
-                                print(
-                                    f"[ERROR] {exp['name']} {algo} r={resolution} w={wiggle} s={seed} failed (code {code})"
-                                )
-                                continue
+                            if args.collect_existing:
+                                metrics = _collect_metrics(exp["name"], save_name)
+                                if not metrics:
+                                    print(
+                                        f"[SKIP] Missing existing metrics for {exp['name']} {algo} r={resolution} w={wiggle} s={seed}"
+                                    )
+                                    continue
+                            else:
+                                log_path = Path(log_dir) / f"{save_name}.log"
+                                code = _run_subprocess(cmd, log_path)
+                                if code != 0:
+                                    failures.append(
+                                        {
+                                            "experiment": exp["name"],
+                                            "algo": algo,
+                                            "resolution": resolution,
+                                            "wiggle": wiggle,
+                                            "seed": seed,
+                                            "code": code,
+                                        }
+                                    )
+                                    print(
+                                        f"[ERROR] {exp['name']} {algo} r={resolution} w={wiggle} s={seed} failed (code {code})"
+                                    )
+                                    continue
 
-                            metrics = _collect_metrics(exp["name"], save_name)
+                                metrics = _collect_metrics(exp["name"], save_name)
                             for key, value in metrics.items():
                                 writer.writerow(
                                     {

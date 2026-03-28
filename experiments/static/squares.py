@@ -291,6 +291,7 @@ def run_parameter_sweep(config_setting, num_squares=25):
     resolutions = [0.50, 0.64, 1.00, 1.28, 1.50]
     facet_algos = [
         "Youngs",
+        "ELVIRA",
         "LVIRA",
         "safe_linear",
         "linear",
@@ -301,6 +302,7 @@ def run_parameter_sweep(config_setting, num_squares=25):
     ]
     save_names = [
         "square_youngs",
+        "square_elvira",
         "square_lvira",
         "square_safelinear",
         "square_linear",

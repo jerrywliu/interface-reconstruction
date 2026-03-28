@@ -61,17 +61,17 @@ DEFAULT_CSV = (
     / "results"
     / "static"
     / "camera_ready"
-    / "static_cameraready_plotrefresh_20260319"
+    / "static_cameraready_plotrefresh_elvira_lvira_backfill_20260327"
     / "csv"
     / "section6_plotrefresh_merged.csv"
 )
 
 MAINTEXT_METHODS = {
-    "lines": ["Youngs", "LVIRA", "linear"],
-    "squares": ["LVIRA", "linear", "linear+corner"],
-    "circles": ["LVIRA", "linear", "circular"],
-    "ellipses": ["LVIRA", "linear", "circular"],
-    "zalesak": ["LVIRA", "circular", "circular+corner"],
+    "lines": ["Youngs", "ELVIRA", "LVIRA", "linear"],
+    "squares": ["ELVIRA", "LVIRA", "linear", "linear+corner"],
+    "circles": ["ELVIRA", "LVIRA", "linear", "circular"],
+    "ellipses": ["ELVIRA", "LVIRA", "linear", "circular"],
+    "zalesak": ["ELVIRA", "LVIRA", "circular", "circular+corner"],
 }
 
 QUANT_SPECS = {
@@ -90,12 +90,13 @@ REPRESENTATIVE_CASES = {
         "case_index": 12,
         "methods": [
             ("Youngs", "Youngs"),
-            ("LVIRA", "ELVIRA"),
-            ("linear", "ours (linear)"),
+            ("ELVIRA", "ELVIRA"),
+            ("LVIRA", "LVIRA"),
+            ("linear", "Ours (linear)"),
         ],
-        "true_title": "true",
         "min_span": 100.0,
         "margin_frac": 0.00,
+        "inset": None,
     },
     "squares": {
         "resolution": 0.50,
@@ -103,13 +104,14 @@ REPRESENTATIVE_CASES = {
         "seed": 0,
         "case_index": 12,
         "methods": [
-            ("LVIRA", "ELVIRA"),
-            ("linear", "linear"),
-            ("linear+corner", "ours (linear+corner)"),
+            ("ELVIRA", "ELVIRA"),
+            ("LVIRA", "LVIRA"),
+            ("linear", "Ours (linear)"),
+            ("linear+corner", "Ours (linear+corner)"),
         ],
-        "true_title": "true",
         "min_span": 42.0,
         "margin_frac": 0.10,
+        "inset": {"kind": "square_corner", "zoom": 2.8},
     },
     "circles": {
         "resolution": 0.32,
@@ -117,13 +119,14 @@ REPRESENTATIVE_CASES = {
         "seed": 0,
         "case_index": 12,
         "methods": [
-            ("LVIRA", "ELVIRA"),
-            ("linear", "linear"),
-            ("circular", "ours (circular)"),
+            ("ELVIRA", "ELVIRA"),
+            ("LVIRA", "LVIRA"),
+            ("linear", "Ours (linear)"),
+            ("circular", "Ours (circular)"),
         ],
-        "true_title": "true",
         "min_span": 26.0,
         "margin_frac": 0.14,
+        "inset": None,
     },
     "ellipses": {
         "resolution": 0.32,
@@ -131,13 +134,14 @@ REPRESENTATIVE_CASES = {
         "seed": 0,
         "case_index": 12,
         "methods": [
-            ("LVIRA", "ELVIRA"),
-            ("linear", "linear"),
-            ("circular", "ours (circular)"),
+            ("ELVIRA", "ELVIRA"),
+            ("LVIRA", "LVIRA"),
+            ("linear", "Ours (linear)"),
+            ("circular", "Ours (circular)"),
         ],
-        "true_title": "true",
         "min_span": 66.0,
         "margin_frac": 0.12,
+        "inset": None,
     },
     "zalesak": {
         "resolution": 1.00,
@@ -145,14 +149,71 @@ REPRESENTATIVE_CASES = {
         "seed": 0,
         "case_index": 12,
         "methods": [
-            ("LVIRA", "ELVIRA"),
-            ("circular", "circular"),
-            ("circular+corner", "ours (circular+corner)"),
+            ("ELVIRA", "ELVIRA"),
+            ("LVIRA", "LVIRA"),
+            ("circular", "Ours (circular)"),
+            ("circular+corner", "Ours (circular+corner)"),
         ],
-        "true_title": "true",
+        "min_span": 42.0,
+        "margin_frac": 0.12,
+        "inset": {"kind": "zalesak_corner", "zoom": 3.0},
+    },
+}
+
+APPENDIX_BEST_METHODS = {
+    "lines": {
+        "method": ("linear", "Ours (linear)"),
+        "resolutions": [0.32, 0.64, 1.0, 1.5],
+        "wiggle": 0.30,
+        "seed": 0,
+        "case_index": 12,
+        "min_span": 100.0,
+        "margin_frac": 0.00,
+    },
+    "squares": {
+        "method": ("linear+corner", "Ours (linear+corner)"),
+        "resolutions": [0.50, 0.64, 1.0, 1.5],
+        "wiggle": 0.10,
+        "seed": 0,
+        "case_index": 12,
+        "min_span": 42.0,
+        "margin_frac": 0.10,
+    },
+    "circles": {
+        "method": ("circular", "Ours (circular)"),
+        "resolutions": [0.32, 0.64, 1.0, 1.5],
+        "wiggle": 0.10,
+        "seed": 0,
+        "case_index": 12,
+        "min_span": 26.0,
+        "margin_frac": 0.14,
+    },
+    "ellipses": {
+        "method": ("circular", "Ours (circular)"),
+        "resolutions": [0.32, 0.64, 1.0, 1.5],
+        "wiggle": 0.10,
+        "seed": 0,
+        "case_index": 12,
+        "min_span": 66.0,
+        "margin_frac": 0.12,
+    },
+    "zalesak": {
+        "method": ("circular+corner", "Ours (circular+corner)"),
+        "resolutions": [0.50, 0.64, 1.0, 1.5],
+        "wiggle": 0.10,
+        "seed": 0,
+        "case_index": 12,
         "min_span": 42.0,
         "margin_frac": 0.12,
     },
+}
+
+APPENDIX_CARTESIAN_CASES = {
+    "lines": {**REPRESENTATIVE_CASES["lines"], "wiggle": 0.0},
+    "squares": {**REPRESENTATIVE_CASES["squares"], "wiggle": 0.0},
+    "circles": {**REPRESENTATIVE_CASES["circles"], "wiggle": 0.0},
+    "ellipses": {**REPRESENTATIVE_CASES["ellipses"], "wiggle": 0.0},
+    "zalesak": {**REPRESENTATIVE_CASES["zalesak"], "wiggle": 0.0},
 }
 
 TRUE_COLOR = "#111827"
@@ -161,6 +222,7 @@ MESH_COLOR = "#d1d5db"
 MESH_ALPHA = 0.65
 FLUID_FILL_COLOR = "#bfdbfe"
 FLUID_FILL_ALPHA = 0.30
+ENDPOINT_MARKER_SIZE = 10
 
 
 def _read_polydata(path: Path):
@@ -218,13 +280,23 @@ def _backfill_circle_tangent_rows(rows: list[dict]) -> list[dict]:
         )
         for row in rows
     }
+    circle_algos_present = {
+        row["algo"] for row in rows if row.get("experiment") == "circles"
+    }
+    backfill_algos = ["Youngs", "ELVIRA", "safe_linear", "linear", "safe_circle", "circular"]
+    if "LVIRA" in circle_algos_present:
+        backfill_algos.insert(2, "LVIRA")
     backfilled = 0
-    for algo in ["Youngs", "LVIRA", "safe_linear", "linear", "safe_circle", "circular"]:
+    for algo in backfill_algos:
         for resolution in [0.32, 0.64, 1.28]:
             for wiggle in [0.0, 0.05, 0.1, 0.2, 0.3]:
                 seed = 0
                 save_name = _make_save_name("circles", algo, resolution, wiggle, seed)
                 metrics_path = PLOTS_ROOT / save_name / "metrics" / "tangent_error.txt"
+                normalized_algo = algo
+                if algo == "ELVIRA" and not metrics_path.exists():
+                    legacy_save_name = _make_save_name("circles", "LVIRA", resolution, wiggle, seed)
+                    metrics_path = PLOTS_ROOT / legacy_save_name / "metrics" / "tangent_error.txt"
                 if not metrics_path.exists():
                     continue
                 values = _read_metric_values(metrics_path)
@@ -233,7 +305,7 @@ def _backfill_circle_tangent_rows(rows: list[dict]) -> list[dict]:
                 for entry in _metric_stats("tangent_error", values):
                     key = (
                         "circles",
-                        algo,
+                        normalized_algo,
                         float(resolution),
                         float(wiggle),
                         seed,
@@ -244,7 +316,7 @@ def _backfill_circle_tangent_rows(rows: list[dict]) -> list[dict]:
                     rows.append(
                         {
                             "experiment": "circles",
-                            "algo": algo,
+                            "algo": normalized_algo,
                             "resolution": resolution,
                             "wiggle": wiggle,
                             "seed": seed,
@@ -280,6 +352,18 @@ def _segments_from_polydata(poly) -> np.ndarray:
     if not chunks:
         return np.empty((0, 2, 2), dtype=float)
     return np.concatenate(chunks, axis=0)
+
+
+def _facet_endpoints_from_polydata(poly) -> np.ndarray:
+    endpoints = []
+    for line in _iter_lines(poly):
+        if len(line) < 2:
+            continue
+        endpoints.append(line[0])
+        endpoints.append(line[-1])
+    if not endpoints:
+        return np.empty((0, 2), dtype=float)
+    return np.asarray(endpoints, dtype=float)
 
 
 def _mesh_segments(mesh_path: Path) -> np.ndarray:
@@ -566,6 +650,16 @@ def _load_reconstructed_segments(save_name: str, case_index: int) -> np.ndarray:
     return _segments_from_polydata(_read_polydata(facet_path))
 
 
+def _load_reconstructed_segments_and_endpoints(
+    save_name: str, case_index: int
+) -> tuple[np.ndarray, np.ndarray]:
+    facet_path = (
+        PLOTS_ROOT / save_name / "vtk" / "reconstructed" / "facets" / f"{case_index}.vtp"
+    )
+    poly = _read_polydata(facet_path)
+    return _segments_from_polydata(poly), _facet_endpoints_from_polydata(poly)
+
+
 def _segments_bounds(segments: np.ndarray) -> tuple[float, float, float, float]:
     if len(segments) == 0:
         return (0.0, 1.0, 0.0, 1.0)
@@ -673,8 +767,8 @@ def _generate_quantitative_panel(exp_name: str, exp_data: dict, methods: list[st
     fig, axes = plt.subplots(2, 2, figsize=(11.2, 8.8))
     subplot_defs = [
         (0, 0, metric_left, wiggle_curves, PERTURBATION_AXIS_LABEL, "perturbation"),
-        (0, 1, metric_right, wiggle_curves, PERTURBATION_AXIS_LABEL, "perturbation"),
-        (1, 0, metric_left, resolution_curves, RESOLUTION_AXIS_LABEL, "resolution"),
+        (0, 1, metric_left, resolution_curves, RESOLUTION_AXIS_LABEL, "resolution"),
+        (1, 0, metric_right, wiggle_curves, PERTURBATION_AXIS_LABEL, "perturbation"),
         (1, 1, metric_right, resolution_curves, RESOLUTION_AXIS_LABEL, "resolution"),
     ]
     legend_entries = {}
@@ -692,22 +786,36 @@ def _generate_quantitative_panel(exp_name: str, exp_data: dict, methods: list[st
             x_mode=x_mode,
             exp_name=exp_name,
         )
-        if row == 0:
-            ax.set_title(
-                f"{metric.replace('_', ' ').title()} vs {PERTURBATION_AXIS_LABEL.lower()}",
-                fontsize=11.5,
-                fontweight="bold",
-            )
-        else:
-            ax.set_title(
-                f"{metric.replace('_', ' ').title()} vs cells per side",
-                fontsize=11.5,
-                fontweight="bold",
-            )
+        axis_phrase = (
+            PERTURBATION_AXIS_LABEL.lower()
+            if x_mode == "perturbation"
+            else "cells per side"
+        )
+        ax.set_title(
+            f"{metric.replace('_', ' ').title()} vs {axis_phrase}",
+            fontsize=11.5,
+            fontweight="bold",
+        )
         handles, labels = ax.get_legend_handles_labels()
         for handle, label in zip(handles, labels):
             if label and not label.startswith("_") and label not in legend_entries:
                 legend_entries[label] = handle
+
+    for row in range(2):
+        row_axes = [axes[row][col] for col in range(2) if axes[row][col].axison]
+        if row_axes:
+            ymin = min(ax.get_ylim()[0] for ax in row_axes)
+            ymax = max(ax.get_ylim()[1] for ax in row_axes)
+            for ax in row_axes:
+                ax.set_ylim(ymin, ymax)
+
+    for col in range(2):
+        col_axes = [axes[row][col] for row in range(2) if axes[row][col].axison]
+        if col_axes:
+            xmin = min(ax.get_xlim()[0] for ax in col_axes)
+            xmax = max(ax.get_xlim()[1] for ax in col_axes)
+            for ax in col_axes:
+                ax.set_xlim(xmin, xmax)
 
     if legend_entries:
         fig.legend(
@@ -722,6 +830,150 @@ def _generate_quantitative_panel(exp_name: str, exp_data: dict, methods: list[st
     fig.tight_layout(rect=[0, 0.05, 1, 1])
     fig.savefig(out_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
+
+
+def _inset_bounds(exp_name: str, spec: dict) -> tuple[float, float, float, float] | None:
+    inset_spec = spec.get("inset")
+    if not inset_spec:
+        return None
+    case_index = spec["case_index"]
+    if inset_spec["kind"] == "square_corner":
+        polygon = _square_case_params(case_index)["polygon"]
+        corner = polygon[np.argmax(np.sum(polygon, axis=1))]
+        half_span = 4.0
+        return (
+            float(corner[0] - half_span),
+            float(corner[0] + half_span),
+            float(corner[1] - half_span),
+            float(corner[1] + half_span),
+        )
+    if inset_spec["kind"] == "zalesak_corner":
+        slot_rect = _zalesak_case_params(case_index)["slot_rect"]
+        corner = slot_rect[np.argmax(slot_rect[:, 0] + slot_rect[:, 1])]
+        half_span = 4.5
+        return (
+            float(corner[0] - half_span),
+            float(corner[0] + half_span),
+            float(corner[1] - half_span),
+            float(corner[1] + half_span),
+        )
+    return None
+
+
+def _plot_panel(
+    ax,
+    *,
+    exp_name: str,
+    spec: dict,
+    algo: str,
+    mesh_segments: np.ndarray,
+    true_segments: np.ndarray,
+    recon_segments: np.ndarray,
+    endpoint_points: np.ndarray,
+    title: str,
+    bounds: tuple[float, float, float, float],
+):
+    x0, x1, y0, y1 = bounds
+    _add_true_region_fill(ax, exp_name, spec, bounds)
+    mesh_linewidth = 0.42 if exp_name == "lines" else 0.32
+    mesh_alpha = 0.72 if exp_name == "lines" else 0.58
+    _add_segments(
+        ax,
+        mesh_segments,
+        color=MESH_COLOR,
+        linewidth=mesh_linewidth,
+        alpha=mesh_alpha,
+        zorder=1,
+    )
+    _add_segments(
+        ax,
+        true_segments,
+        color=TRUE_COLOR,
+        linewidth=0.95,
+        alpha=0.90,
+        linestyle=TRUE_STYLE,
+        zorder=2,
+    )
+
+    color = METHOD_STYLES.get(algo, {}).get("color", "#1f77b4")
+    _add_segments(
+        ax,
+        recon_segments,
+        color=color,
+        linewidth=1.55,
+        alpha=1.0,
+        linestyle="-",
+        zorder=3,
+    )
+    if len(endpoint_points):
+        ax.scatter(
+            endpoint_points[:, 0],
+            endpoint_points[:, 1],
+            s=ENDPOINT_MARKER_SIZE,
+            facecolors="white",
+            edgecolors=color,
+            alpha=0.95,
+            zorder=4,
+            linewidths=0.65,
+        )
+
+    ax.set_xlim(x0, x1)
+    ax.set_ylim(y0, y1)
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_facecolor("white")
+    ax.set_title(title, fontsize=11.0, fontweight="bold")
+
+    inset_bounds = _inset_bounds(exp_name, spec)
+    if inset_bounds is not None:
+        ix0, ix1, iy0, iy1 = inset_bounds
+        inset = ax.inset_axes([0.56, 0.05, 0.39, 0.39])
+        _add_true_region_fill(inset, exp_name, spec, inset_bounds)
+        _add_segments(
+            inset,
+            mesh_segments,
+            color=MESH_COLOR,
+            linewidth=max(0.22, mesh_linewidth - 0.08),
+            alpha=min(0.7, mesh_alpha),
+            zorder=1,
+        )
+        _add_segments(
+            inset,
+            true_segments,
+            color=TRUE_COLOR,
+            linewidth=0.85,
+            alpha=0.90,
+            linestyle=TRUE_STYLE,
+            zorder=2,
+        )
+        _add_segments(
+            inset,
+            recon_segments,
+            color=color,
+            linewidth=1.20,
+            alpha=1.0,
+            linestyle="-",
+            zorder=3,
+        )
+        if len(endpoint_points):
+            inset.scatter(
+                endpoint_points[:, 0],
+                endpoint_points[:, 1],
+                s=ENDPOINT_MARKER_SIZE * 0.8,
+                facecolors="white",
+                edgecolors=color,
+                alpha=0.95,
+                zorder=4,
+                linewidths=0.55,
+            )
+        inset.set_xlim(ix0, ix1)
+        inset.set_ylim(iy0, iy1)
+        inset.set_xticks([])
+        inset.set_yticks([])
+        inset.set_aspect("equal", adjustable="box")
+        inset.set_facecolor("white")
+        ax.indicate_inset_zoom(inset, edgecolor="#374151", alpha=0.8)
 
 
 def _generate_representative_figure(exp_name: str, spec: dict, out_path: Path):
@@ -746,87 +998,82 @@ def _generate_representative_figure(exp_name: str, spec: dict, out_path: Path):
             margin_frac=spec["margin_frac"],
         )
 
-    ncols = 1 + len(spec["methods"])
-    fig, axes = plt.subplots(1, ncols, figsize=(3.25 * ncols, 3.5))
+    fig, axes = plt.subplots(2, 2, figsize=(8.2, 7.6))
+    flat_axes = axes.ravel()
+    for ax, (algo, title) in zip(flat_axes, spec["methods"]):
+        save_name = _make_save_name(
+            exp_name,
+            algo,
+            spec["resolution"],
+            spec["wiggle"],
+            spec["seed"],
+        )
+        recon_segments, endpoint_points = _load_reconstructed_segments_and_endpoints(
+            save_name, spec["case_index"]
+        )
+        _plot_panel(
+            ax,
+            exp_name=exp_name,
+            spec=spec,
+            algo=algo,
+            mesh_segments=mesh_segments,
+            true_segments=true_segments,
+            recon_segments=recon_segments,
+            endpoint_points=endpoint_points,
+            title=title,
+            bounds=(x0, x1, y0, y1),
+        )
+
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _generate_resolution_strip(exp_name: str, spec: dict, out_path: Path):
+    method, title = spec["method"]
+    ncols = len(spec["resolutions"])
+    fig, axes = plt.subplots(1, ncols, figsize=(3.0 * ncols, 3.3))
     if ncols == 1:
         axes = [axes]
 
-    panels = [("true", None)] + spec["methods"]
-    for ax, (algo_or_true, title) in zip(axes, panels):
-        _add_true_region_fill(ax, exp_name, spec, (x0, x1, y0, y1))
-        mesh_linewidth = 0.42 if exp_name == "lines" else 0.32
-        mesh_alpha = 0.72 if exp_name == "lines" else 0.58
-        _add_segments(
-            ax,
-            mesh_segments,
-            color=MESH_COLOR,
-            linewidth=mesh_linewidth,
-            alpha=mesh_alpha,
-            zorder=1,
+    for ax, resolution in zip(axes, spec["resolutions"]):
+        save_name = _make_save_name(
+            exp_name,
+            method,
+            resolution,
+            spec["wiggle"],
+            spec["seed"],
         )
-        if algo_or_true == "true":
-            _add_segments(
-                ax,
-                true_segments,
-                color=TRUE_COLOR,
-                linewidth=1.55,
-                alpha=1.0,
-                linestyle="-",
-                zorder=3,
-            )
-            panel_title = spec["true_title"]
+        mesh_path = PLOTS_ROOT / save_name / "vtk" / "mesh.vtk"
+        mesh_segments = _mesh_segments(mesh_path)
+        if exp_name == "lines":
+            x0m, x1m, y0m, y1m = _segments_bounds(mesh_segments)
+            true_segments = _line_true_segments(spec["case_index"], (x0m, x1m, y0m, y1m))
         else:
-            algo = algo_or_true
-            save_name = _make_save_name(
-                exp_name,
-                algo,
-                spec["resolution"],
-                spec["wiggle"],
-                spec["seed"],
-            )
-            recon_segments = _load_reconstructed_segments(save_name, spec["case_index"])
-            style = METHOD_STYLES.get(algo, {})
-            _add_segments(
-                ax,
-                true_segments,
-                color=TRUE_COLOR,
-                linewidth=0.95,
-                alpha=0.90,
-                linestyle=TRUE_STYLE,
-                zorder=2,
-            )
-            _add_segments(
-                ax,
-                recon_segments,
-                color=style.get("color", "#1f77b4"),
-                linewidth=1.55,
-                alpha=1.0,
-                linestyle="-",
-                zorder=3,
-            )
-            panel_title = title
+            true_segments = _load_true_segments(exp_name, save_name, spec["case_index"])
+        bounds = _compute_view_bounds(
+            true_segments,
+            min_span=spec["min_span"],
+            margin_frac=spec["margin_frac"],
+        )
+        recon_segments, endpoint_points = _load_reconstructed_segments_and_endpoints(
+            save_name, spec["case_index"]
+        )
+        _plot_panel(
+            ax,
+            exp_name=exp_name,
+            spec={"case_index": spec["case_index"], "inset": None},
+            algo=method,
+            mesh_segments=mesh_segments,
+            true_segments=true_segments,
+            recon_segments=recon_segments,
+            endpoint_points=endpoint_points,
+            title=f"N={int(round(resolution * 100))}",
+            bounds=bounds,
+        )
 
-        ax.set_xlim(x0, x1)
-        ax.set_ylim(y0, y1)
-        ax.set_aspect("equal", adjustable="box")
-        ax.set_xticks([])
-        ax.set_yticks([])
-        ax.set_facecolor("white")
-        ax.set_title(panel_title, fontsize=11.0, fontweight="bold")
-
-        if exp_name == "lines" and algo_or_true != "true" and len(recon_segments):
-            pts = recon_segments.reshape(-1, 2)
-            ax.scatter(
-                pts[:, 0],
-                pts[:, 1],
-                s=5,
-                c=style.get("color", "#1f77b4"),
-                alpha=0.85,
-                zorder=4,
-                linewidths=0.0,
-            )
-
-    fig.tight_layout()
+    fig.suptitle(title, fontsize=12.5, fontweight="bold", y=0.98)
+    fig.tight_layout(rect=[0, 0, 1, 0.95])
     fig.savefig(out_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
@@ -862,8 +1109,16 @@ def main():
     summary_dir.mkdir(parents=True, exist_ok=True)
     compare_dir = args.out_dir / "representative_cases"
     compare_dir.mkdir(parents=True, exist_ok=True)
+    appendix_dir = args.out_dir / "appendix_cases"
+    appendix_dir.mkdir(parents=True, exist_ok=True)
 
-    outputs = {"quantitative": {}, "representative": {}, "cases": REPRESENTATIVE_CASES}
+    outputs = {
+        "quantitative": {},
+        "representative": {},
+        "appendix_resolutions": {},
+        "appendix_cartesian": {},
+        "cases": REPRESENTATIVE_CASES,
+    }
     for exp_name, methods in MAINTEXT_METHODS.items():
         out_name = f"{exp_name}_maintext_metrics.png"
         out_path = summary_dir / out_name
@@ -881,6 +1136,18 @@ def main():
         out_path = compare_dir / out_name
         _generate_representative_figure(exp_name, spec, out_path)
         outputs["representative"][exp_name] = str(out_path)
+
+    for exp_name, spec in APPENDIX_BEST_METHODS.items():
+        out_name = f"{exp_name}_best_by_resolution.png"
+        out_path = appendix_dir / out_name
+        _generate_resolution_strip(exp_name, spec, out_path)
+        outputs["appendix_resolutions"][exp_name] = str(out_path)
+
+    for exp_name, spec in APPENDIX_CARTESIAN_CASES.items():
+        out_name = f"{exp_name}_cartesian_representative.png"
+        out_path = appendix_dir / out_name
+        _generate_representative_figure(exp_name, spec, out_path)
+        outputs["appendix_cartesian"][exp_name] = str(out_path)
 
     manifest_path = args.out_dir / "maintext_manifest.json"
     manifest_path.write_text(json.dumps(outputs, indent=2))

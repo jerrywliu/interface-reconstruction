@@ -7,10 +7,10 @@ This directory contains experiments for evaluating interface reconstruction algo
 All experiments use a 100x100 Cartesian grid with varying resolutions. The shapes are centered in the grid cell with corners (50, 50) and (51, 51) to avoid boundary effects. Each experiment uses a fixed random seed (42) for reproducibility.
 
 ### Reconstruction Algorithms Tested
-- **Lines**: `Youngs`, `LVIRA`, `safe_linear`, `linear`
-- **Circles / Ellipses**: `Youngs`, `LVIRA`, `safe_linear`, `linear`, `safe_circle`, `circular`
-- **Squares**: `Youngs`, `LVIRA`, `safe_linear`, `linear`, `linear+corner`, `safe_circle`, `circular`
-- **Zalesak**: `Youngs`, `LVIRA`, `safe_linear`, `linear`, `safe_circle`, `circular`, `circular+corner`
+- **Lines**: `Youngs`, `ELVIRA`, `LVIRA`, `safe_linear`, `linear`
+- **Circles / Ellipses**: `Youngs`, `ELVIRA`, `LVIRA`, `safe_linear`, `linear`, `safe_circle`, `circular`
+- **Squares**: `Youngs`, `ELVIRA`, `LVIRA`, `safe_linear`, `linear`, `linear+corner`, `safe_circle`, `circular`
+- **Zalesak**: `Youngs`, `ELVIRA`, `LVIRA`, `safe_linear`, `linear`, `safe_circle`, `circular`, `circular+corner`
 
 ### Resolution Range
 - **Lines / Circles / Ellipses**: [0.32, 0.50, 0.64, 1.00, 1.28, 1.50]

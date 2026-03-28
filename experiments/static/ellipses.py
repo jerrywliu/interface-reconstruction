@@ -6,7 +6,7 @@ interface reconstruction algorithms on elliptical interfaces.
 
 EXPERIMENT OVERVIEW:
 - Tests reconstruction of ellipses with varying aspect ratios (1.5 to 3.0)
-- Compares different facet reconstruction algorithms: Youngs, LVIRA, safe_linear, linear, safe_circle, and circular
+- Compares different facet reconstruction algorithms: Youngs, ELVIRA, LVIRA, safe_linear, linear, safe_circle, and circular
 - Evaluates performance using curvature error and facet gap measurements
 - Supports both single experiments and comprehensive parameter sweeps
 
@@ -20,7 +20,8 @@ When run with --sweep flag, performs a comprehensive parameter sweep across:
 
 2. Facet Reconstruction Algorithms (6 algorithms):
    - Youngs: Classic Youngs' method for interface reconstruction
-   - LVIRA: Least Squares Volume-of-Fluid Interface Reconstruction Algorithm  
+   - ELVIRA: Efficient LVIRA with finite-candidate slopes
+   - LVIRA: full least-squares Volume-of-Fluid Interface Reconstruction Algorithm  
    - safe_linear: Linear reconstruction method without cell merging (faster but potentially less accurate)
    - linear: Our linear reconstruction method with cell merging
    - safe_circle: Circular reconstruction method without cell merging (faster but potentially less accurate)
@@ -479,9 +480,13 @@ def create_combined_plot(resolutions, curvature_results, gap_results,
             plt.sca(ax1)
             plt.plot(x_values, values, marker='o', label="Youngs", 
                     linewidth=2.5, markersize=8, linestyle='-')
+        elif algo == "ELVIRA":
+            plt.sca(ax1)
+            plt.plot(x_values, values, marker='s', label="ELVIRA", 
+                    linewidth=2.5, markersize=8, linestyle='--')
         elif algo == "LVIRA":
             plt.sca(ax1)
-            plt.plot(x_values, values, marker='s', label="LVIRA", 
+            plt.plot(x_values, values, marker='D', label="LVIRA", 
                     linewidth=2.5, markersize=8, linestyle='--')
         elif algo == "safe_linear":
             plt.sca(ax1)
@@ -517,9 +522,13 @@ def create_combined_plot(resolutions, curvature_results, gap_results,
             plt.sca(ax2)
             plt.plot(x_values, values, marker='o', label="Youngs", 
                     linewidth=2.5, markersize=8, linestyle='-')
+        elif algo == "ELVIRA":
+            plt.sca(ax2)
+            plt.plot(x_values, values, marker='s', label="ELVIRA", 
+                    linewidth=2.5, markersize=8, linestyle='--')
         elif algo == "LVIRA":
             plt.sca(ax2)
-            plt.plot(x_values, values, marker='s', label="LVIRA", 
+            plt.plot(x_values, values, marker='D', label="LVIRA", 
                     linewidth=2.5, markersize=8, linestyle='--')
         elif algo == "safe_linear":
             plt.sca(ax2)
@@ -735,9 +744,10 @@ def run_parameter_sweep(config_setting, num_ellipses=25, drop_resolution_200=Fal
 
     # Define parameter ranges
     resolutions = [0.32, 0.50, 0.64, 1.00, 1.28, 1.50]
-    facet_algos = ["Youngs", "LVIRA", "safe_linear", "linear", "safe_circle", "circular"]
+    facet_algos = ["Youngs", "ELVIRA", "LVIRA", "safe_linear", "linear", "safe_circle", "circular"]
     save_names = [
         "ellipse_youngs",
+        "ellipse_elvira",
         "ellipse_lvira",
         "ellipse_safelinear",
         "ellipse_linear",

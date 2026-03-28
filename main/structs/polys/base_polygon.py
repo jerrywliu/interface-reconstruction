@@ -10,9 +10,10 @@ from main.geoms.geoms import (
 )
 from main.structs.facets.circular_facet import ArcFacet
 from main.structs.facets.linear_facet import LinearFacet
-from main.algos.plic_normals import getYoungsNormal, getLVIRANormal
+from main.algos.plic_normals import getELVIRANormal, getYoungsNormal
 from main.geoms.linear_facet import (
     getLinearFacet,
+    getLVIRALinearFacet,
     getPolyLineIntersects,
     getLinearFacetFromNormal,
 )
@@ -249,25 +250,42 @@ class BasePolygon:
         else:
             self.setFacet(youngsFacet)
 
-    def runLVIRA(self, ret=False):
+    def runELVIRA(self, ret=False):
         assert self.has3x3Stencil()
-        normal = getLVIRANormal(self.stencil)
+        normal = getELVIRANormal(self.stencil)
         l1, l2 = getLinearFacetFromNormal(
             self.points, self.getFraction(), normal, BasePolygon.optimization_threshold
         )
         intersects = getPolyLineIntersects(self.points, l1, l2)
-        youngsFacet = LinearFacet(intersects[0], intersects[-1], name="LVIRA")
+        elvira_facet = LinearFacet(intersects[0], intersects[-1], name="ELVIRA")
         if ret:
-            return youngsFacet
+            return elvira_facet
         else:
-            self.setFacet(youngsFacet)
+            self.setFacet(elvira_facet)
+
+    def runLVIRA(self, ret=False):
+        assert self.has3x3Stencil()
+        l1, l2 = getLVIRALinearFacet(
+            self.stencil,
+            BasePolygon.optimization_threshold,
+            initial_normals=[
+                getELVIRANormal(self.stencil),
+                getYoungsNormal(self.stencil),
+            ],
+        )
+        intersects = getPolyLineIntersects(self.points, l1, l2)
+        lvira_facet = LinearFacet(intersects[0], intersects[-1], name="LVIRA")
+        if ret:
+            return lvira_facet
+        else:
+            self.setFacet(lvira_facet)
 
     def runSafeLinear(
         self,
         ret=False,
         check_threshold=False,
         default_to_youngs=False,
-        default_to_lvira=True,
+        default_to_elvira=True,
         fit_1neighbor=False,
     ):
         assert self.has3x3Stencil()
@@ -276,8 +294,8 @@ class BasePolygon:
             # Default to PLIC
             if default_to_youngs:
                 facet = self.runYoungs(ret=True)
-            elif default_to_lvira:
-                facet = self.runLVIRA(ret=True)
+            elif default_to_elvira:
+                facet = self.runELVIRA(ret=True)
             else:
                 facet = None
         else:
@@ -295,8 +313,8 @@ class BasePolygon:
                 print(f"runSafeLinear fallback to PLIC after getLinearFacet failure: {error}")
                 if default_to_youngs:
                     facet = self.runYoungs(ret=True)
-                elif default_to_lvira:
-                    facet = self.runLVIRA(ret=True)
+                elif default_to_elvira:
+                    facet = self.runELVIRA(ret=True)
                 else:
                     facet = None
                 if ret:
@@ -338,8 +356,8 @@ class BasePolygon:
                 else:
                     if default_to_youngs:
                         facet = self.runYoungs(ret=True)
-                    elif default_to_lvira:
-                        facet = self.runLVIRA(ret=True)
+                    elif default_to_elvira:
+                        facet = self.runELVIRA(ret=True)
                     else:
                         facet = None
             else:
@@ -370,7 +388,7 @@ class BasePolygon:
         self,
         ret=False,
         default_to_youngs=False,
-        default_to_lvira=True,
+        default_to_elvira=True,
     ):
         assert self.has3x3Stencil()
         orientation = self.findSafeOrientation(fit_1neighbor=False)
@@ -378,8 +396,8 @@ class BasePolygon:
             # Default to PLIC
             if default_to_youngs:
                 facet = self.runYoungs(ret=True)
-            elif default_to_lvira:
-                facet = self.runLVIRA(ret=True)
+            elif default_to_elvira:
+                facet = self.runELVIRA(ret=True)
             else:
                 facet = None
         else:
@@ -397,8 +415,8 @@ class BasePolygon:
                 print(f"runSafeCircle fallback to PLIC after getLinearFacet failure: {error}")
                 if default_to_youngs:
                     facet = self.runYoungs(ret=True)
-                elif default_to_lvira:
-                    facet = self.runLVIRA(ret=True)
+                elif default_to_elvira:
+                    facet = self.runELVIRA(ret=True)
                 else:
                     facet = None
                 if ret:
@@ -438,8 +456,8 @@ class BasePolygon:
                     if arccenter is None or arcradius is None or arcintersects is None:
                         if default_to_youngs:
                             facet = self.runYoungs(ret=True)
-                        elif default_to_lvira:
-                            facet = self.runLVIRA(ret=True)
+                        elif default_to_elvira:
+                            facet = self.runELVIRA(ret=True)
                         else:
                             facet = None
                     else:
@@ -455,8 +473,8 @@ class BasePolygon:
                     )
                     if default_to_youngs:
                         facet = self.runYoungs(ret=True)
-                    elif default_to_lvira:
-                        facet = self.runLVIRA(ret=True)
+                    elif default_to_elvira:
+                        facet = self.runELVIRA(ret=True)
                     else:
                         facet = None
                 except Exception as error:
@@ -465,8 +483,8 @@ class BasePolygon:
                     )
                     if default_to_youngs:
                         facet = self.runYoungs(ret=True)
-                    elif default_to_lvira:
-                        facet = self.runLVIRA(ret=True)
+                    elif default_to_elvira:
+                        facet = self.runELVIRA(ret=True)
                     else:
                         facet = None
 

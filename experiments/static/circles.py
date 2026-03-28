@@ -6,7 +6,7 @@ interface reconstruction algorithms on circular interfaces.
 
 EXPERIMENT OVERVIEW:
 - Tests reconstruction of circles with varying centers (random positions)
-- Compares different facet reconstruction algorithms: Youngs, LVIRA, safe_linear, linear, safe_circle, and circular
+- Compares different facet reconstruction algorithms: Youngs, ELVIRA, LVIRA, safe_linear, linear, safe_circle, and circular
 - Evaluates performance using curvature error and facet gap measurements
 - Supports both single experiments and comprehensive parameter sweeps
 
@@ -20,7 +20,8 @@ When run with --sweep flag, performs a comprehensive parameter sweep across:
 
 2. Facet Reconstruction Algorithms (6 algorithms):
    - Youngs: Classic Youngs' method for interface reconstruction
-   - LVIRA: Least Squares Volume-of-Fluid Interface Reconstruction Algorithm
+   - ELVIRA: Efficient LVIRA with finite-candidate slopes
+   - LVIRA: full least-squares Volume-of-Fluid Interface Reconstruction Algorithm
    - safe_linear: Linear reconstruction method without cell merging (faster but potentially less accurate)
    - linear: Our linear reconstruction method with cell merging
    - safe_circle: Circular reconstruction method without cell merging (faster but potentially less accurate)
@@ -563,6 +564,7 @@ def run_parameter_sweep(config_setting, num_circles=25, radius=10.0):
     resolutions = [0.32, 0.50, 0.64, 1.00, 1.28, 1.50]
     facet_algos = [
         "Youngs",
+        "ELVIRA",
         "LVIRA",
         "safe_linear",
         "linear",
@@ -571,6 +573,7 @@ def run_parameter_sweep(config_setting, num_circles=25, radius=10.0):
     ]
     save_names = [
         "circle_youngs",
+        "circle_elvira",
         "circle_lvira",
         "circle_safelinear",
         "circle_linear",

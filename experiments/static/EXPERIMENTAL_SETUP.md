@@ -28,23 +28,24 @@ We evaluate seven interface reconstruction algorithms representing different cla
 
 #### Baseline Methods
 1. **Youngs** (`Youngs`): Classical Youngs' PLIC (Piecewise Linear Interface Calculation) method with planar facets and no cell merging
-2. **LVIRA** (`LVIRA`): Least Squares Volume-of-Fluid Interface Reconstruction Algorithm with linear facets and least-squares optimization
+2. **ELVIRA** (`ELVIRA`): Efficient finite-candidate LVIRA specialization with planar facets and no cell merging
+3. **LVIRA** (`LVIRA`): Full least-squares Volume-of-Fluid Interface Reconstruction Algorithm with linear facets and no cell merging
 
 #### Linear Facet Methods
-3. **Safe Linear** (`safe_linear`): Linear facet reconstruction without cell merging for computational efficiency
-4. **Linear** (`linear`): Linear facet reconstruction with cell merging for improved accuracy near complex features
+4. **Safe Linear** (`safe_linear`): Linear facet reconstruction without cell merging for computational efficiency
+5. **Linear** (`linear`): Linear facet reconstruction with cell merging for improved accuracy near complex features
 
 #### Circular Facet Methods
-5. **Safe Circle** (`safe_circle`): Circular arc facet reconstruction without cell merging
-6. **Circular** (`circular`): Circular arc facet reconstruction with cell merging for higher accuracy on curved interfaces
-7. **Circular + Corner** (`circular+corner`): Circular facet reconstruction with explicit corner modeling and cell merging
+6. **Safe Circle** (`safe_circle`): Circular arc facet reconstruction without cell merging
+7. **Circular** (`circular`): Circular arc facet reconstruction with cell merging for higher accuracy on curved interfaces
+8. **Circular + Corner** (`circular+corner`): Circular facet reconstruction with explicit corner modeling and cell merging
 
 #### Algorithm Selection by Test
-- **Lines**: Youngs, LVIRA, safe_linear, linear
-- **Squares**: Youngs, LVIRA, safe_linear, linear, linear+corner, safe_circle, circular
-- **Circles**: Youngs, LVIRA, safe_linear, linear, safe_circle, circular
-- **Ellipses**: Youngs, LVIRA, safe_linear, linear, safe_circle, circular
-- **Zalesak**: Youngs, LVIRA, safe_linear, linear, safe_circle, circular, circular+corner
+- **Lines**: Youngs, ELVIRA, LVIRA, safe_linear, linear
+- **Squares**: Youngs, ELVIRA, LVIRA, safe_linear, linear, linear+corner, safe_circle, circular
+- **Circles**: Youngs, ELVIRA, LVIRA, safe_linear, linear, safe_circle, circular
+- **Ellipses**: Youngs, ELVIRA, LVIRA, safe_linear, linear, safe_circle, circular
+- **Zalesak**: Youngs, ELVIRA, LVIRA, safe_linear, linear, safe_circle, circular, circular+corner
 
 ### Evaluation Metrics
 
@@ -342,4 +343,3 @@ Suggested paper sections:
 - **Results**: Use performance plots with convergence analysis
 - **Discussion**: Algorithm-appropriate selection based on test case performance
 - **Supplementary Material**: Full parameter sweeps and statistical summaries
-

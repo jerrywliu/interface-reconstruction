@@ -10,7 +10,7 @@ import sys
 from datetime import datetime
 
 
-LINEAR_ALGOS = ["Youngs", "LVIRA", "safe_linear", "linear"]
+LINEAR_ALGOS = ["Youngs", "ELVIRA", "LVIRA", "safe_linear", "linear"]
 LINE_ALGOS = LINEAR_ALGOS
 CIRCLE_ALGOS = LINEAR_ALGOS + ["safe_circle", "circular"]
 ELLIPSE_ALGOS = LINEAR_ALGOS + ["safe_circle", "circular"]

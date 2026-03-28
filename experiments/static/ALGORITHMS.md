@@ -8,9 +8,13 @@ This document summarizes the reconstruction algorithms used across the static ex
   - Code identifier: `Youngs`
   - Description: Baseline Youngs' PLIC interface reconstruction (planar/linear, no merging, no corner modeling).
 
+- Friendly: ELVIRA
+  - Code identifier: `ELVIRA`
+  - Description: Efficient finite-candidate LVIRA specialization (planar/linear, no merging, no corner modeling).
+
 - Friendly: LVIRA
   - Code identifier: `LVIRA`
-  - Description: Least-squares VOF interface reconstruction (linear, no merging, no corner modeling).
+  - Description: Full local least-squares VOF interface reconstruction (linear, no merging, no corner modeling).
 
 - Friendly: Linear (without merging)
   - Code identifier: `safe_linear`

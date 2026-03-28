@@ -25,9 +25,9 @@ def getYoungsNormal(stencil):
     return normal
 
 # Input: stencil = 3x3 array of area fractions
-# Output: Young's normal as unit vector
+# Output: ELVIRA normal as unit vector
 # TODO l-inf
-def getLVIRANormal(stencil, norm="l-2"):
+def getELVIRANormal(stencil, norm="l-2"):
     def a(poly): # area fraction
         return 0 if poly is None else poly.getFraction()
     
@@ -87,6 +87,13 @@ def getLVIRANormal(stencil, norm="l-2"):
     #             curmin = option
 
     else:
-        raise ValueError(f"Unknown norm {norm} in getElviraNormal")
+        raise ValueError(f"Unknown norm {norm} in getELVIRANormal")
 
     return n[curmin]
+
+
+# Backward-compatible alias: older code paths and older result bundles still
+# refer to the efficient finite-candidate baseline as "LVIRA". The runtime
+# path is now exposed as ELVIRA, while true LVIRA is implemented separately.
+def getLVIRANormal(stencil, norm="l-2"):
+    return getELVIRANormal(stencil, norm=norm)

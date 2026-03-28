@@ -11,6 +11,7 @@ Assumes a perturbed Cartesian grid of quads. Polygons are stored in a 2D list of
 
 This class is used for the algorithms that do not merge cells:
 - Youngs
+- ELVIRA
 - LVIRA
 - Safe linear
 - Safe circle
@@ -194,6 +195,15 @@ class BaseMesh:
                     mixed_poly.set3x3Stencil(self.get3x3Stencil(x, y))
                     mixed_poly.runYoungs()
 
+    # ELVIRA
+    def runELVIRA(self):
+        for x in range(len(self.polys)):
+            for y in range(len(self.polys[0])):
+                if self.polys[x][y].isMixed():
+                    mixed_poly: BasePolygon = self.polys[x][y]
+                    mixed_poly.set3x3Stencil(self.get3x3Stencil(x, y))
+                    mixed_poly.runELVIRA()
+
     # LVIRA
     def runLVIRA(self):
         for x in range(len(self.polys)):
@@ -207,7 +217,7 @@ class BaseMesh:
     def runSafeLinear(
         self,
         default_to_youngs=False,
-        default_to_lvira=True,
+        default_to_elvira=True,
     ):
         for x in range(len(self.polys)):
             for y in range(len(self.polys[0])):
@@ -217,7 +227,7 @@ class BaseMesh:
                     mixed_poly.runSafeLinear(
                         check_threshold=False,
                         default_to_youngs=default_to_youngs,
-                        default_to_lvira=default_to_lvira,
+                        default_to_elvira=default_to_elvira,
                     )
 
     # Whenever orientation is unambiguous, run circle fit. Default to Youngs

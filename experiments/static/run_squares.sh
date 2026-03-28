@@ -3,6 +3,8 @@
 # Example usage:
 # Youngs
 # python3 -m experiments.static.squares --config static/square --num_squares 15 --facet_algo Youngs --save_name square_youngs
+# ELVIRA
+# python3 -m experiments.static.squares --config static/square --num_squares 15 --facet_algo ELVIRA --save_name square_elvira
 # LVIRA
 # python3 -m experiments.static.squares --config static/square --num_squares 15 --facet_algo LVIRA --save_name square_lvira
 # Our linear facets
@@ -25,6 +27,8 @@ python3 -m experiments.static.squares --config static/square --plot_only --resul
 
 # Youngs
 # python3 -m experiments.static.squares --config static/square --num_squares 15 --facet_algo Youngs --save_name square_youngs
+# ELVIRA
+# python3 -m experiments.static.squares --config static/square --num_squares 15 --facet_algo ELVIRA --save_name square_elvira
 # LVIRA
 # python3 -m experiments.static.squares --config static/square --num_squares 15 --facet_algo LVIRA --save_name square_lvira
 # Our linear facets

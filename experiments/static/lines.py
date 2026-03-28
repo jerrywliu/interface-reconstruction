@@ -6,7 +6,7 @@ interface reconstruction algorithms on straight line interfaces.
 
 EXPERIMENT OVERVIEW:
 - Tests reconstruction of straight lines with varying orientations (0 to 2π)
-- Compares different facet reconstruction algorithms: Youngs, LVIRA, linear, and safe_linear
+- Compares different facet reconstruction algorithms: Youngs, ELVIRA, LVIRA, linear, and safe_linear
 - Evaluates performance using Hausdorff distance between true and reconstructed facets
 - Supports both single experiments and comprehensive parameter sweeps
 
@@ -20,7 +20,8 @@ When run with --sweep flag, performs a comprehensive parameter sweep across:
 
 2. Facet Reconstruction Algorithms (4 algorithms):
    - Youngs: Classic Youngs' method for interface reconstruction
-   - LVIRA: Least Squares Volume-of-Fluid Interface Reconstruction Algorithm
+   - ELVIRA: Efficient LVIRA with finite-candidate slopes
+   - LVIRA: full least-squares Volume-of-Fluid Interface Reconstruction Algorithm
    - linear: Our linear reconstruction method with cell merging
    - safe_linear: Linear reconstruction method without cell merging (faster but potentially less accurate)
 
@@ -396,9 +397,10 @@ def run_parameter_sweep(config_setting, num_lines=25):
 
     # Define parameter ranges
     resolutions = [0.32, 0.50, 0.64, 1.00, 1.28, 1.50]
-    facet_algos = ["Youngs", "LVIRA", "safe_linear", "linear"]
+    facet_algos = ["Youngs", "ELVIRA", "LVIRA", "safe_linear", "linear"]
     save_names = [
         "line_youngs",
+        "line_elvira",
         "line_lvira",
         "line_safelinear",
         "line_mergelinear",

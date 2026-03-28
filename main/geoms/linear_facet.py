@@ -396,3 +396,83 @@ def getLinearFacetFromNormal(poly, a, normal, epsilon):
     #Final linear facet: find correct endpoints
     intersects = getPolyLineIntersects(poly, l1, l2)
     return intersects[0], intersects[-1]
+
+
+def _wrap_line_angle(theta):
+    while theta <= -math.pi:
+        theta += 2 * math.pi
+    while theta > math.pi:
+        theta -= 2 * math.pi
+    return theta
+
+
+def _lvira_center_line(stencil, epsilon, theta):
+    center_poly = stencil[1][1]
+    normal = [math.cos(theta), math.sin(theta)]
+    return getLinearFacetFromNormal(
+        center_poly.points,
+        center_poly.getFraction(),
+        normal,
+        epsilon,
+    )
+
+
+def _lvira_stencil_objective(stencil, epsilon, theta):
+    l1, l2 = _lvira_center_line(stencil, epsilon, theta)
+    objective = 0.0
+    for row in stencil:
+        for poly in row:
+            if poly is None:
+                continue
+            predicted_fraction = getPolyLineArea(poly.points, l1, l2) / poly.getMaxArea()
+            residual = predicted_fraction - poly.getFraction()
+            objective += residual * residual
+    return objective, l1, l2
+
+
+def getLVIRALinearFacet(stencil, epsilon, initial_normals):
+    center_poly = stencil[1][1]
+    if center_poly is None:
+        raise RuntimeError("LVIRA requires a centered 3x3 stencil")
+
+    best = None
+    for normal in initial_normals:
+        theta = _wrap_line_angle(math.atan2(normal[1], normal[0]))
+        for candidate_theta in (theta, _wrap_line_angle(theta + math.pi)):
+            try:
+                objective, _, _ = _lvira_stencil_objective(
+                    stencil, epsilon, candidate_theta
+                )
+            except Exception:
+                continue
+            if best is None or objective < best[0]:
+                best = (objective, candidate_theta)
+
+    if best is None:
+        raise RuntimeError("LVIRA could not build an initial least-squares guess")
+
+    best_objective, best_theta = best
+    step = math.pi / 8.0
+    max_iterations = 32
+
+    for _ in range(max_iterations):
+        improved = False
+        for direction in (-1.0, 1.0):
+            candidate_theta = _wrap_line_angle(best_theta + direction * step)
+            try:
+                candidate_objective, _, _ = _lvira_stencil_objective(
+                    stencil, epsilon, candidate_theta
+                )
+            except Exception:
+                continue
+            if candidate_objective + 1e-18 < best_objective:
+                best_objective = candidate_objective
+                best_theta = candidate_theta
+                improved = True
+        if not improved:
+            step *= 0.5
+            if step < 1e-6:
+                break
+
+    l1, l2 = _lvira_center_line(stencil, epsilon, best_theta)
+    return l1, l2

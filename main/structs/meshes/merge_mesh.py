@@ -289,6 +289,16 @@ class MergeMesh(BaseMesh):
                     mixed_facet = mixed_poly.runYoungs(ret=True)
                     self.merged_polys[self._get_merge_id(x, y)].setFacet(mixed_facet)
 
+    # Runs ELVIRA on all mixed cells. Run setFractions and createMergedPolys before.
+    def runELVIRA(self):
+        for x in range(len(self.polys)):
+            for y in range(len(self.polys[0])):
+                if self.polys[x][y].isMixed():
+                    mixed_poly: BasePolygon = self.polys[x][y]
+                    mixed_poly.set3x3Stencil(self.get3x3Stencil(x, y))
+                    mixed_facet = mixed_poly.runELVIRA(ret=True)
+                    self.merged_polys[self._get_merge_id(x, y)].setFacet(mixed_facet)
+
     # Runs LVIRA on all mixed cells. Run setFractions and createMergedPolys before.
     def runLVIRA(self):
         for x in range(len(self.polys)):
@@ -381,6 +391,7 @@ class MergeMesh(BaseMesh):
                                 success = False
                             elif left.hasFacet() and left.getFacet().name in [
                                 "Youngs",
+                                "ELVIRA",
                                 "LVIRA",
                                 "linear",
                             ]:
@@ -402,6 +413,7 @@ class MergeMesh(BaseMesh):
                                 success = False
                             elif right.hasFacet() and right.getFacet().name in [
                                 "Youngs",
+                                "ELVIRA",
                                 "LVIRA",
                                 "linear",
                             ]:

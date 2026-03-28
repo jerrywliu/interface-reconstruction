@@ -292,5 +292,6 @@ def primitive_type_code(primitive: Primitive) -> int:
         "default_linear": 4,
         "linear_deadend": 5,
         "Youngs": 6,
-        "LVIRA": 7,
+        "ELVIRA": 7,
+        "LVIRA": 8,
     }.get(primitive.source_name, 0)

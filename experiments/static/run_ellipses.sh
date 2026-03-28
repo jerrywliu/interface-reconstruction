@@ -3,6 +3,8 @@
 # Example usage:
 # Youngs
 # python3 -m experiments.static.ellipses --config static/circle --num_ellipses 15 --facet_algo Youngs --save_name ellipse_youngs
+# ELVIRA
+# python3 -m experiments.static.ellipses --config static/circle --num_ellipses 15 --facet_algo ELVIRA --save_name ellipse_elvira
 # LVIRA
 # python3 -m experiments.static.ellipses --config static/circle --num_ellipses 15 --facet_algo LVIRA --save_name ellipse_lvira
 # Our linear facets without merging

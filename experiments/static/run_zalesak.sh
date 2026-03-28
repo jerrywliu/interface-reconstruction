@@ -3,6 +3,8 @@
 # Example usage:
 # Youngs
 # python3 -m experiments.static.zalesak --config static/circle --num_cases 15 --facet_algo Youngs --save_name zalesak_youngs
+# ELVIRA
+# python3 -m experiments.static.zalesak --config static/circle --num_cases 15 --facet_algo ELVIRA --save_name zalesak_elvira
 # LVIRA
 # python3 -m experiments.static.zalesak --config static/circle --num_cases 15 --facet_algo LVIRA --save_name zalesak_lvira
 # Our linear facets without merging
@@ -20,5 +22,4 @@ python3 -m experiments.static.zalesak --config static/circle --sweep --num_cases
 
 # Plot only
 python3 -m experiments.static.zalesak --config static/circle --plot_only --results_file results/static/zalesak_reconstruction_results.txt
-
 

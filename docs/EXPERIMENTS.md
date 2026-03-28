@@ -23,12 +23,14 @@ Both sweep scripts run the same set of static experiments:
 
 - **Lines**
   - `Youngs`
+  - `ELVIRA`
   - `LVIRA`
   - `safe_linear`
   - `linear`
 
 - **Circles / Ellipses**
   - `Youngs`
+  - `ELVIRA`
   - `LVIRA`
   - `safe_linear`
   - `linear`
@@ -37,6 +39,7 @@ Both sweep scripts run the same set of static experiments:
 
 - **Squares**
   - `Youngs`
+  - `ELVIRA`
   - `LVIRA`
   - `safe_linear`
   - `linear`
@@ -46,6 +49,7 @@ Both sweep scripts run the same set of static experiments:
 
 - **Zalesak**
   - `Youngs`
+  - `ELVIRA`
   - `LVIRA`
   - `safe_linear`
   - `linear`

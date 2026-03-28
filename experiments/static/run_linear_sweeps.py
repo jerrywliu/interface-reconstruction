@@ -20,7 +20,7 @@ from util.io.slack import load_slack_env, send_results_to_slack
 from experiments.static import circles, ellipses, lines, squares, zalesak
 
 
-LINEAR_ALGOS = ["Youngs", "LVIRA", "safe_linear", "linear"]
+LINEAR_ALGOS = ["Youngs", "ELVIRA", "LVIRA", "safe_linear", "linear"]
 LINE_ALGOS = LINEAR_ALGOS
 CIRCLE_ALGOS = LINEAR_ALGOS + ["safe_circle", "circular"]
 ELLIPSE_ALGOS = LINEAR_ALGOS + ["safe_circle", "circular"]
@@ -168,6 +168,12 @@ def _parse_str_list(value):
     return [p.strip().lower() for p in value.split(",") if p.strip()]
 
 
+def _filter_algos(algos, selected_algos):
+    if not selected_algos:
+        return algos
+    return [algo for algo in algos if algo.lower() in selected_algos]
+
+
 def _sample_indices(count, sample_count):
     if sample_count <= 0 or count <= 0:
         return []
@@ -258,10 +264,11 @@ def run_circle_sweep(
     log_dir,
     notify=False,
     aggregate_samples=5,
+    selected_algos=None,
 ):
     min_error = 1e-14
     resolutions = DEFAULT_RESOLUTIONS
-    algos = CIRCLE_ALGOS
+    algos = _filter_algos(CIRCLE_ALGOS, selected_algos)
 
     curvature_results = {algo: [] for algo in algos}
     gap_results = {algo: [] for algo in algos}
@@ -408,10 +415,11 @@ def run_ellipse_sweep(
     log_dir,
     notify=False,
     aggregate_samples=5,
+    selected_algos=None,
 ):
     min_error = 1e-14
     resolutions = DEFAULT_RESOLUTIONS
-    algos = ELLIPSE_ALGOS
+    algos = _filter_algos(ELLIPSE_ALGOS, selected_algos)
 
     curvature_results = {algo: [] for algo in algos}
     gap_results = {algo: [] for algo in algos}
@@ -547,10 +555,11 @@ def run_line_sweep(
     log_dir,
     notify=False,
     aggregate_samples=5,
+    selected_algos=None,
 ):
     min_error = 1e-14
     resolutions = DEFAULT_RESOLUTIONS
-    algos = LINE_ALGOS
+    algos = _filter_algos(LINE_ALGOS, selected_algos)
 
     results = {algo: [] for algo in algos}
     gap_results = {algo: [] for algo in algos}
@@ -683,10 +692,11 @@ def run_square_sweep(
     log_dir,
     notify=False,
     aggregate_samples=5,
+    selected_algos=None,
 ):
     min_error = 1e-14
     resolutions = DEFAULT_RESOLUTIONS_SHORT
-    algos = SQUARE_ALGOS
+    algos = _filter_algos(SQUARE_ALGOS, selected_algos)
 
     area_results = {algo: [] for algo in algos}
     gap_results = {algo: [] for algo in algos}
@@ -800,10 +810,11 @@ def run_zalesak_sweep(
     log_dir,
     notify=False,
     aggregate_samples=5,
+    selected_algos=None,
 ):
     min_error = 1e-14
     resolutions = DEFAULT_RESOLUTIONS_SHORT
-    algos = ZALESAK_ALGOS
+    algos = _filter_algos(ZALESAK_ALGOS, selected_algos)
 
     area_results = {algo: [] for algo in algos}
     gap_results = {algo: [] for algo in algos}
@@ -917,6 +928,12 @@ def main():
         help="comma-separated experiment names to run (e.g., lines,ellipses)",
     )
     parser.add_argument(
+        "--algos",
+        type=str,
+        default=None,
+        help="comma-separated algorithms to run (e.g., ELVIRA,LVIRA)",
+    )
+    parser.add_argument(
         "--aggregate_samples",
         type=int,
         default=0,
@@ -947,6 +964,7 @@ def main():
         print("Slack auto-notify enabled via SLACK_NOTIFY.")
 
     only_experiments = set(_parse_str_list(args.only))
+    selected_algos = set(_parse_str_list(args.algos))
 
     log_dir = args.log_dir
     if args.subprocess and log_dir is None:
@@ -967,6 +985,7 @@ def main():
                 log_dir,
                 notify,
                 args.aggregate_samples,
+                selected_algos,
             )
         if not only_experiments or "ellipses" in only_experiments:
             all_plots += run_ellipse_sweep(
@@ -977,6 +996,7 @@ def main():
                 log_dir,
                 notify,
                 args.aggregate_samples,
+                selected_algos,
             )
         if not only_experiments or "lines" in only_experiments:
             all_plots += run_line_sweep(
@@ -987,6 +1007,7 @@ def main():
                 log_dir,
                 notify,
                 args.aggregate_samples,
+                selected_algos,
             )
         if not only_experiments or "squares" in only_experiments:
             all_plots += run_square_sweep(
@@ -997,6 +1018,7 @@ def main():
                 log_dir,
                 notify,
                 args.aggregate_samples,
+                selected_algos,
             )
         if not only_experiments or "zalesak" in only_experiments:
             all_plots += run_zalesak_sweep(
@@ -1007,6 +1029,7 @@ def main():
                 log_dir,
                 notify,
                 args.aggregate_samples,
+                selected_algos,
             )
 
     print("\n=== Cartesian sweep summary ===")
