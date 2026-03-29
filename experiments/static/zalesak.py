@@ -27,25 +27,11 @@ from util.logging.get_arc_facet_logger import arc_facet_log_context
 from main.structs.facets.circular_facet import ArcFacet
 from main.structs.facets.corner_facet import CornerFacet
 from main.structs.facets.linear_facet import LinearFacet
+from experiments.static.case_selection import parse_case_indices
 
 # Global seed for reproducibility
 RANDOM_SEED = 43
 ZALESAK_POINT_TOL = 1e-8
-
-
-def _parse_case_indices(raw_value):
-    if raw_value is None:
-        return None
-    if isinstance(raw_value, (list, tuple, set)):
-        values = [int(index) for index in raw_value]
-    else:
-        values = []
-        for item in str(raw_value).split(","):
-            item = item.strip()
-            if not item:
-                continue
-            values.append(int(item))
-    return sorted(set(values)) if values else None
 
 
 def rotate_point_around_center(point, center, theta):
@@ -303,7 +289,7 @@ def main(
     writeMesh(m, os.path.join(output_dirs["vtk"], f"mesh.vtk"))
 
     rng = np.random.default_rng(RANDOM_SEED)
-    case_indices = _parse_case_indices(case_indices)
+    case_indices = parse_case_indices(case_indices)
     case_index_set = set(case_indices) if case_indices is not None else None
     if case_index_set is not None:
         invalid_indices = [
@@ -324,6 +310,8 @@ def main(
     true_area = zalesak_total_area(radius, slot_width, slot_top_rel)
 
     for i in range(num_cases):
+        if case_index_set is not None and i not in case_index_set:
+            continue
         print(f"Processing Zalesak {i+1}/{num_cases}")
 
         # Re-initialize mesh
@@ -332,8 +320,6 @@ def main(
         # Random center and rotation
         center = [rng.uniform(50, 51), rng.uniform(50, 51)]
         theta = rng.uniform(0, math.pi / 2)
-        if case_index_set is not None and i not in case_index_set:
-            continue
 
         # Initialize Zalesak fractions
         fractions = initialize_zalesak(

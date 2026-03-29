@@ -17,6 +17,7 @@ from util.metrics.metrics import calculate_facet_gaps, hausdorff_interface
 from util.plotting.plt_utils import plotAreas, plotPartialAreas
 from util.plotting.vtk_utils import writeMesh
 from util.write_facets import writeFacets
+from experiments.static.case_selection import parse_case_indices
 
 # Global seed for reproducibility
 RANDOM_SEED = 42
@@ -115,6 +116,7 @@ def main(
     facet_algo=None,
     save_name=None,
     num_squares=25,
+    case_indices=None,
     mesh_type=None,
     perturb_wiggle=None,
     perturb_seed=None,
@@ -163,6 +165,8 @@ def main(
 
     # Random number generator for reproducibility
     rng = np.random.default_rng(RANDOM_SEED)
+    case_indices = parse_case_indices(case_indices)
+    case_index_set = set(case_indices) if case_indices is not None else None
 
     # Store metrics for all squares
     area_errors = []
@@ -170,6 +174,8 @@ def main(
     hausdorff_distances = []
 
     for i, side_length in enumerate(side_lengths):
+        if case_index_set is not None and i not in case_index_set:
+            continue
         print(f"Processing square {i+1}/{num_squares}")
 
         # Re-initialize mesh
@@ -457,6 +463,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--num_squares", type=int, help="number of squares to test", default=25
     )
+    parser.add_argument(
+        "--case_indices",
+        type=str,
+        help="comma-separated square indices to run",
+        default=None,
+    )
     parser.add_argument("--mesh_type", type=str, help="mesh type override", default=None)
     parser.add_argument(
         "--perturb_wiggle",
@@ -554,6 +566,7 @@ if __name__ == "__main__":
             facet_algo=args.facet_algo,
             save_name=args.save_name,
             num_squares=args.num_squares,
+            case_indices=args.case_indices,
             mesh_type=args.mesh_type,
             perturb_wiggle=args.perturb_wiggle,
             perturb_seed=args.perturb_seed,

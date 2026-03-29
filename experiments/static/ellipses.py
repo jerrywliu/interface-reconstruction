@@ -81,6 +81,7 @@ from util.initialize.mesh_factory import make_points_from_config, apply_mesh_ove
 from util.initialize.areas import initializeEllipse
 from util.plotting.plt_utils import plotAreas, plotPartialAreas
 from util.plotting.vtk_utils import writeMesh
+from experiments.static.case_selection import parse_case_indices
 
 # === Ellipse Hausdorff helpers ===
 def get_ellipse_to_circle_matrix(major_axis, minor_axis, theta):
@@ -231,6 +232,7 @@ def main(
     facet_algo=None,
     save_name=None,
     num_ellipses=25,
+    case_indices=None,
     mesh_type=None,
     perturb_wiggle=None,
     perturb_seed=None,
@@ -281,6 +283,8 @@ def main(
 
     # Random number generator for reproducibility
     rng = np.random.default_rng(RANDOM_SEED)
+    case_indices = parse_case_indices(case_indices)
+    case_index_set = set(case_indices) if case_indices is not None else None
 
     # Store metrics for all ellipses
     curvature_errors = []
@@ -290,6 +294,8 @@ def main(
     curvature_proxy_errors = []
 
     for i, aspect_ratio in enumerate(aspect_ratios):
+        if case_index_set is not None and i not in case_index_set:
+            continue
         print(f"Processing ellipse {i+1}/{num_ellipses}")
 
         # Re-initialize mesh
@@ -1025,6 +1031,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--num_ellipses", type=int, help="number of ellipses to test", default=25
     )
+    parser.add_argument(
+        "--case_indices",
+        type=str,
+        help="comma-separated ellipse indices to run",
+        default=None,
+    )
     parser.add_argument("--mesh_type", type=str, help="mesh type override", default=None)
     parser.add_argument(
         "--perturb_wiggle",
@@ -1120,6 +1132,7 @@ if __name__ == "__main__":
             facet_algo=args.facet_algo,
             save_name=args.save_name,
             num_ellipses=args.num_ellipses,
+            case_indices=args.case_indices,
             mesh_type=args.mesh_type,
             perturb_wiggle=args.perturb_wiggle,
             perturb_seed=args.perturb_seed,

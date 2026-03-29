@@ -81,6 +81,7 @@ from util.initialize.areas import initializeCircle
 from util.plotting.plt_utils import plotAreas, plotPartialAreas
 from util.plotting.vtk_utils import writeMesh
 from util.write_facets import writeFacets
+from experiments.static.case_selection import parse_case_indices
 
 # Global seed for reproducibility
 RANDOM_SEED = 41
@@ -114,6 +115,7 @@ def main(
     facet_algo=None,
     save_name=None,
     num_circles=25,
+    case_indices=None,
     radius=10.0,  # Fixed radius for all circles
     mesh_type=None,
     perturb_wiggle=None,
@@ -160,6 +162,8 @@ def main(
 
     # Random number generator for reproducibility
     rng = np.random.default_rng(RANDOM_SEED)
+    case_indices = parse_case_indices(case_indices)
+    case_index_set = set(case_indices) if case_indices is not None else None
 
     # Store metrics for all circles
     curvature_errors = []
@@ -169,6 +173,8 @@ def main(
     curvature_proxy_errors = []
 
     for i in range(num_circles):
+        if case_index_set is not None and i not in case_index_set:
+            continue
         print(f"Processing circle {i+1}/{num_circles}")
 
         # Re-initialize mesh
@@ -631,6 +637,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--num_circles", type=int, help="number of circles to test", default=25
     )
+    parser.add_argument(
+        "--case_indices",
+        type=str,
+        help="comma-separated circle indices to run",
+        default=None,
+    )
     parser.add_argument("--radius", type=float, help="circle radius", default=10.0)
     parser.add_argument("--mesh_type", type=str, help="mesh type override", default=None)
     parser.add_argument(
@@ -702,6 +714,7 @@ if __name__ == "__main__":
             facet_algo=args.facet_algo,
             save_name=args.save_name,
             num_circles=args.num_circles,
+            case_indices=args.case_indices,
             radius=args.radius,
             mesh_type=args.mesh_type,
             perturb_wiggle=args.perturb_wiggle,
