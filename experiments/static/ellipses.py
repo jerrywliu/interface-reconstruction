@@ -141,6 +141,21 @@ def sample_arc_points(center, radius, p1, p2, n=100):
 def sample_linear_facet_points(facet, n=100):
     return np.linspace(facet.pLeft, facet.pRight, n)
 
+
+def sample_reconstructed_facet_points(facet, n=100):
+    """Sample a reconstructed facet in its native geometry.
+
+    For arcs, this must respect the facet's signed orientation. The older
+    ellipse Hausdorff helper used a naive angle interpolation on
+    ``abs(radius)``, which can traverse the wrong branch for negative-radius
+    arcs and wildly inflate the measured distance.
+    """
+    if isinstance(facet, LinearFacet):
+        return np.linspace(facet.pLeft, facet.pRight, n)
+    if isinstance(facet, ArcFacet):
+        return np.asarray(facet.sample(n))
+    raise TypeError(f"Unsupported facet type for ellipse sampling: {type(facet)!r}")
+
 def plot_hausdorff_comparison(true_points, reconstructed_points, title, save_path=None):
     """Plot the true and reconstructed curves for Hausdorff comparison."""
     import matplotlib.pyplot as plt
@@ -192,11 +207,11 @@ def ellipse_hausdorff(mesh, reconstructed_facets, major_axis, minor_axis, theta,
             # Transform true arc samples back to ellipse space
             arc_samples_ellipse = inverse_transform_points(arc_samples_circ, circle_to_ellipse, center)
             # Sample points along the reconstructed facet in ellipse space
-            if isinstance(reconstructed_facet, LinearFacet):
-                rec_points_ellipse = np.linspace(reconstructed_facet.pLeft, reconstructed_facet.pRight, n)
-            elif isinstance(reconstructed_facet, ArcFacet):
-                rec_points_ellipse = sample_arc_points(reconstructed_facet.center, abs(reconstructed_facet.radius), reconstructed_facet.pLeft, reconstructed_facet.pRight, n)
-            else:
+            try:
+                rec_points_ellipse = sample_reconstructed_facet_points(
+                    reconstructed_facet, n
+                )
+            except TypeError:
                 continue  # skip unsupported facet types
             # Compute Hausdorff distance in ellipse space
             d1 = np.max([np.min(np.linalg.norm(rec_points_ellipse - p, axis=1)) for p in arc_samples_ellipse])
@@ -343,11 +358,11 @@ def main(
                 arc_samples_circ = sample_arc_points([0, 0], 1, arcpoints[0], arcpoints[-1], 100)
                 arc_samples_ellipse = inverse_transform_points(arc_samples_circ, circle_to_ellipse, center)
                 # Reconstructed facet points in ellipse space
-                if isinstance(reconstructed_facet, LinearFacet):
-                    rec_points_ellipse = np.linspace(reconstructed_facet.pLeft, reconstructed_facet.pRight, 100)
-                elif isinstance(reconstructed_facet, ArcFacet):
-                    rec_points_ellipse = sample_arc_points(reconstructed_facet.center, abs(reconstructed_facet.radius), reconstructed_facet.pLeft, reconstructed_facet.pRight, 100)
-                else:
+                try:
+                    rec_points_ellipse = sample_reconstructed_facet_points(
+                        reconstructed_facet, 100
+                    )
+                except TypeError:
                     continue
                 # Hausdorff distance
                 d1 = np.max([np.min(np.linalg.norm(rec_points_ellipse - p, axis=1)) for p in arc_samples_ellipse])
