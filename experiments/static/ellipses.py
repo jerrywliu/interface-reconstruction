@@ -222,6 +222,7 @@ def main(
     perturb_fix_boundary=None,
     perturb_max_tries=None,
     perturb_type=None,
+    do_c0=None,
     **kwargs,
 ):
     # Read config
@@ -236,7 +237,7 @@ def main(
     # Area and facet settings
     facet_algo = facet_algo if facet_algo is not None else config["GEOMS"]["FACET_ALGO"]
     threshold = config["GEOMS"]["THRESHOLD"]
-    do_c0 = config["GEOMS"]["DO_C0"]
+    do_c0 = config["GEOMS"]["DO_C0"] if do_c0 is None else bool(do_c0)
 
     # Setup output directories
     output_dirs = setupOutputDirs(save_name, clean_existing=True)
@@ -1039,6 +1040,13 @@ if __name__ == "__main__":
         default=None,
     )
     parser.add_argument(
+        "--do_c0",
+        type=int,
+        choices=[0, 1],
+        help="override C0 continuity enforcement (1=yes, 0=no)",
+        default=None,
+    )
+    parser.add_argument(
         "--sweep", action="store_true", help="run parameter sweep", default=False
     )
     parser.add_argument(
@@ -1103,4 +1111,5 @@ if __name__ == "__main__":
             perturb_fix_boundary=args.perturb_fix_boundary,
             perturb_max_tries=args.perturb_max_tries,
             perturb_type=args.perturb_type,
+            do_c0=args.do_c0,
         )

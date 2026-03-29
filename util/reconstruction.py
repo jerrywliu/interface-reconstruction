@@ -46,7 +46,9 @@ def runReconstruction(
             m, facet_algo, do_c0, iter, output_dirs, algo_kwargs
         )
 
-    # Write final reconstructed facets
+    # Write final reconstructed facets. If C0 is enabled, the returned facets should
+    # reflect the adjusted reconstruction because downstream static metrics and plots
+    # interpret the return value as the final interface.
     writeFacets(
         reconstructed_facets,
         os.path.join(output_dirs["vtk_reconstructed_facets"], f"{iter}.vtp"),
@@ -109,5 +111,6 @@ def _run_with_merge(
         writeFacets(
             C0_facets, os.path.join(output_dirs["vtk_reconstructed_c0"], f"{iter}.vtp")
         )
+        reconstructed_facets = C0_facets
 
     return reconstructed_facets, merged_polys

@@ -33,11 +33,14 @@ METHOD_ORDER = [
     "LVIRA",
     "safe_linear",
     "linear",
+    "linear+C0",
     "safe_linear_corner",
     "linear+corner",
     "safe_circle",
     "circular",
+    "circular+C0",
     "circular+corner",
+    "circular+corner+C0",
 ]
 
 DEFAULT_RESOLUTIONS = [0.32, 0.50, 0.64, 1.00, 1.28, 1.50]
@@ -51,10 +54,13 @@ DISPLAY_LABELS = {
     "LVIRA": "LVIRA",
     "safe_linear": "Ours (safe linear)",
     "linear": "Ours (linear)",
+    "linear+C0": "Ours (linear, C0)",
     "linear+corner": "Ours (linear+corner)",
     "safe_circle": "Ours (safe circular)",
     "circular": "Ours (circular)",
+    "circular+C0": "Ours (circular, C0)",
     "circular+corner": "Ours (circular+corner)",
+    "circular+corner+C0": "Ours (circular+corner, C0)",
 }
 
 METHOD_STYLES = {
@@ -63,10 +69,13 @@ METHOD_STYLES = {
     "LVIRA": {"color": "#212529", "linestyle": "-.", "linewidth": 1.8},
     "safe_linear": {"color": "#74a9cf", "linestyle": "--", "linewidth": 1.9},
     "linear": {"color": "#1d4ed8", "linestyle": "-", "linewidth": 2.3},
+    "linear+C0": {"color": "#1d4ed8", "linestyle": "--", "linewidth": 2.3},
     "linear+corner": {"color": "#0f766e", "linestyle": "-", "linewidth": 2.4},
     "safe_circle": {"color": "#f59e0b", "linestyle": "--", "linewidth": 1.9},
     "circular": {"color": "#d97706", "linestyle": "-", "linewidth": 2.3},
+    "circular+C0": {"color": "#d97706", "linestyle": "--", "linewidth": 2.3},
     "circular+corner": {"color": "#b91c1c", "linestyle": "-", "linewidth": 2.5},
+    "circular+corner+C0": {"color": "#b91c1c", "linestyle": "--", "linewidth": 2.5},
 }
 
 METRIC_LABELS = {

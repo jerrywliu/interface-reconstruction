@@ -264,6 +264,7 @@ def main(
     perturb_type=None,
     case_indices=None,
     return_case_records=False,
+    do_c0=None,
     **kwargs,
 ):
     # Read config
@@ -278,7 +279,7 @@ def main(
     # Area and facet settings
     facet_algo = facet_algo if facet_algo is not None else config["GEOMS"]["FACET_ALGO"]
     threshold = config["GEOMS"]["THRESHOLD"]
-    do_c0 = config["GEOMS"]["DO_C0"]
+    do_c0 = config["GEOMS"]["DO_C0"] if do_c0 is None else bool(do_c0)
 
     # Setup output directories
     output_dirs = setupOutputDirs(save_name, clean_existing=True)
@@ -680,6 +681,13 @@ if __name__ == "__main__":
         help="comma-separated deterministic case indices to run",
         default=None,
     )
+    parser.add_argument(
+        "--do_c0",
+        type=int,
+        choices=[0, 1],
+        help="override C0 continuity enforcement (1=yes, 0=no)",
+        default=None,
+    )
 
     args = parser.parse_args()
 
@@ -716,4 +724,5 @@ if __name__ == "__main__":
             perturb_max_tries=args.perturb_max_tries,
             perturb_type=args.perturb_type,
             case_indices=args.case_indices,
+            do_c0=args.do_c0,
         )

@@ -1024,6 +1024,9 @@ def _generate_representative_figure(exp_name: str, spec: dict, out_path: Path):
             bounds=(x0, x1, y0, y1),
         )
 
+    for ax in flat_axes[len(spec["methods"]) :]:
+        ax.set_axis_off()
+
     fig.tight_layout()
     fig.savefig(out_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
