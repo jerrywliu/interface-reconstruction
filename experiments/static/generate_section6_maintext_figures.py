@@ -730,6 +730,10 @@ def _add_true_region_fill(
     spec: dict,
     bounds: tuple[float, float, float, float],
 ):
+    override_vertices = spec.get("true_fill_vertices")
+    if override_vertices is not None:
+        _add_fill_patch(ax, np.asarray(override_vertices, dtype=float))
+        return
     case_index = spec["case_index"]
     if exp_name == "lines":
         vertices = _line_fill_polygon(case_index, bounds)
@@ -833,6 +837,9 @@ def _generate_quantitative_panel(exp_name: str, exp_data: dict, methods: list[st
 
 
 def _inset_bounds(exp_name: str, spec: dict) -> tuple[float, float, float, float] | None:
+    override_bounds = spec.get("inset_bounds")
+    if override_bounds is not None:
+        return tuple(float(v) for v in override_bounds)
     inset_spec = spec.get("inset")
     if not inset_spec:
         return None

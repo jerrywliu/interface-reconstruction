@@ -161,16 +161,231 @@ def _run_subprocess(cmd, log_path):
     return result.returncode
 
 
-def _load_true_segments(exp_spec, base_save_name: str):
+def _true_vtp_segments(exp_name: str, save_name: str, case_index: int) -> np.ndarray:
+    true_path = maintext_figs._true_vtp_path(exp_name, save_name, case_index)
+    return maintext_figs._segments_from_polydata(maintext_figs._read_polydata(true_path))
+
+
+def _dedupe_points(points: list[np.ndarray], tol: float = 1e-8) -> list[np.ndarray]:
+    deduped = []
+    for point in points:
+        if any(np.linalg.norm(point - existing) <= tol for existing in deduped):
+            continue
+        deduped.append(point)
+    return deduped
+
+
+def _clip_infinite_line_to_bounds(
+    p1: np.ndarray,
+    p2: np.ndarray,
+    bounds: tuple[float, float, float, float],
+) -> np.ndarray:
+    x0, x1, y0, y1 = bounds
+    dx = float(p2[0] - p1[0])
+    dy = float(p2[1] - p1[1])
+    intersections = []
+
+    if abs(dx) > 1e-14:
+        for x in (x0, x1):
+            t = (x - p1[0]) / dx
+            y = p1[1] + t * dy
+            if y0 - 1e-8 <= y <= y1 + 1e-8:
+                intersections.append(np.asarray([x, y], dtype=float))
+    if abs(dy) > 1e-14:
+        for y in (y0, y1):
+            t = (y - p1[1]) / dy
+            x = p1[0] + t * dx
+            if x0 - 1e-8 <= x <= x1 + 1e-8:
+                intersections.append(np.asarray([x, y], dtype=float))
+
+    intersections = _dedupe_points(intersections)
+    if len(intersections) < 2:
+        return np.asarray([[p1, p2]], dtype=float)
+    if len(intersections) > 2:
+        # Keep the farthest pair if the line passes exactly through a corner.
+        best_pair = None
+        best_dist = -1.0
+        for i in range(len(intersections)):
+            for j in range(i + 1, len(intersections)):
+                dist = float(np.linalg.norm(intersections[j] - intersections[i]))
+                if dist > best_dist:
+                    best_dist = dist
+                    best_pair = (intersections[i], intersections[j])
+        intersections = list(best_pair)
+    return np.asarray([[intersections[0], intersections[1]]], dtype=float)
+
+
+def _line_fill_polygon_from_points(
+    p1: np.ndarray,
+    p2: np.ndarray,
+    bounds: tuple[float, float, float, float],
+) -> np.ndarray:
+    rect = np.asarray(
+        [
+            [bounds[0], bounds[2]],
+            [bounds[1], bounds[2]],
+            [bounds[1], bounds[3]],
+            [bounds[0], bounds[3]],
+        ],
+        dtype=float,
+    )
+
+    def _cross(point):
+        return (p2[0] - p1[0]) * (point[1] - p1[1]) - (p2[1] - p1[1]) * (point[0] - p1[0])
+
+    def _intersect(start, end):
+        s_val = _cross(start)
+        e_val = _cross(end)
+        denom = s_val - e_val
+        if abs(denom) < 1e-14:
+            return end
+        t = s_val / denom
+        return start + t * (end - start)
+
+    clipped = []
+    for start, end in zip(rect, np.roll(rect, -1, axis=0)):
+        start_inside = _cross(start) >= 0
+        end_inside = _cross(end) >= 0
+        if start_inside and end_inside:
+            clipped.append(end)
+        elif start_inside and not end_inside:
+            clipped.append(_intersect(start, end))
+        elif (not start_inside) and end_inside:
+            clipped.append(_intersect(start, end))
+            clipped.append(end)
+    if not clipped:
+        return np.empty((0, 2), dtype=float)
+    return np.asarray(clipped, dtype=float)
+
+
+def _ordered_loop_vertices(segments: np.ndarray) -> np.ndarray:
+    if len(segments) == 0:
+        return np.empty((0, 2), dtype=float)
+    remaining = [np.asarray(seg, dtype=float) for seg in segments]
+    current = remaining.pop(0)
+    points = [current[0], current[1]]
+
+    while remaining:
+        last = points[-1]
+        next_index = None
+        next_point = None
+        for idx, seg in enumerate(remaining):
+            if np.linalg.norm(seg[0] - last) <= 1e-6:
+                next_index = idx
+                next_point = seg[1]
+                break
+            if np.linalg.norm(seg[1] - last) <= 1e-6:
+                next_index = idx
+                next_point = seg[0]
+                break
+        if next_index is None:
+            break
+        points.append(next_point)
+        remaining.pop(next_index)
+
+    if len(points) > 1 and np.linalg.norm(points[0] - points[-1]) <= 1e-6:
+        points = points[:-1]
+    return np.asarray(points, dtype=float)
+
+
+def _single_case_ellipse_segments(case_index: int, sample_count: int = 720) -> np.ndarray:
+    rng = np.random.default_rng(maintext_figs.ELLIPSE_RANDOM_SEED)
+    aspect_ratio = np.linspace(1.5, 3.0, 25)[case_index]
+    center = np.asarray([rng.uniform(50, 51), rng.uniform(50, 51)], dtype=float)
+    theta = float(rng.uniform(0, np.pi / 2))
+    major_axis = 30.0
+    minor_axis = major_axis / aspect_ratio
+    ts = np.linspace(0.0, 2.0 * np.pi, sample_count, endpoint=False)
+    pts = np.zeros((sample_count, 2), dtype=float)
+    c = np.cos(theta)
+    s = np.sin(theta)
+    for i, t in enumerate(ts):
+        x_local = major_axis * np.cos(t)
+        y_local = minor_axis * np.sin(t)
+        pts[i, 0] = center[0] + c * x_local - s * y_local
+        pts[i, 1] = center[1] + s * x_local + c * y_local
+    return np.stack([pts, np.roll(pts, -1, axis=0)], axis=1)
+
+
+def _single_case_zalesak_truth(case_index: int) -> tuple[np.ndarray, np.ndarray, tuple[float, float, float, float]]:
+    rng = np.random.default_rng(maintext_figs.ZALESAK_RANDOM_SEED)
+    center = [rng.uniform(50, 51), rng.uniform(50, 51)]
+    theta = float(rng.uniform(0, np.pi / 2))
+    radius = 15.0
+    slot_width = 5.0
+    slot_top_rel = 10.0
+    cx, cy = center
+    half_w = slot_width * 0.5
+    y_bottom = cy - radius - 1.0e-6
+    y_top = cy + slot_top_rel
+    rect = [
+        [cx - half_w, y_bottom],
+        [cx + half_w, y_bottom],
+        [cx + half_w, y_top],
+        [cx - half_w, y_top],
+    ]
+    rect = [maintext_figs.rotate_point_around_center(point, center, theta) for point in rect]
+    true_reference = maintext_figs.build_true_reference_zalesak(center, radius, rect, theta)
+    true_facets = true_reference["facets"]
+    segment_chunks = []
+    for facet in true_facets:
+        chunk = maintext_figs._facet_segments(facet)
+        if len(chunk):
+            segment_chunks.append(chunk)
+    true_segments = np.concatenate(segment_chunks, axis=0)
+    fill_vertices = maintext_figs._concat_facet_points(true_facets)
+    slot_rect = np.asarray(rect, dtype=float)
+    corner = slot_rect[np.argmax(slot_rect[:, 0] + slot_rect[:, 1])]
+    inset_bounds = (
+        float(corner[0] - 4.5),
+        float(corner[0] + 4.5),
+        float(corner[1] - 4.5),
+        float(corner[1] + 4.5),
+    )
+    return true_segments, fill_vertices, inset_bounds
+
+
+def _truth_payload(
+    exp_spec: dict,
+    base_save_name: str,
+    mesh_bounds: tuple[float, float, float, float],
+) -> tuple[np.ndarray, np.ndarray | None, tuple[float, float, float, float] | None]:
     exp_name = exp_spec["name"]
     case_index = exp_spec["case_index"]
+
     if exp_name == "lines":
-        mesh_segments = maintext_figs._mesh_segments(PLOTS_ROOT / base_save_name / "vtk" / "mesh.vtk")
-        bounds = maintext_figs._segments_bounds(mesh_segments)
-        true_segments = maintext_figs._line_true_segments(case_index, bounds)
-    else:
-        true_segments = maintext_figs._load_true_segments(exp_name, base_save_name, case_index)
-    return true_segments
+        saved_segments = _true_vtp_segments(exp_name, base_save_name, case_index)
+        p1, p2 = saved_segments[0]
+        true_segments = _clip_infinite_line_to_bounds(p1, p2, mesh_bounds)
+        fill_vertices = _line_fill_polygon_from_points(p1, p2, mesh_bounds)
+        return true_segments, fill_vertices, None
+
+    if exp_name == "squares":
+        true_segments = _true_vtp_segments(exp_name, base_save_name, case_index)
+        fill_vertices = _ordered_loop_vertices(true_segments)
+        corner = fill_vertices[np.argmax(fill_vertices[:, 0] + fill_vertices[:, 1])]
+        inset_bounds = (
+            float(corner[0] - 4.0),
+            float(corner[0] + 4.0),
+            float(corner[1] - 4.0),
+            float(corner[1] + 4.0),
+        )
+        return true_segments, fill_vertices, inset_bounds
+
+    if exp_name == "circles":
+        true_segments = _true_vtp_segments(exp_name, base_save_name, case_index)
+        fill_vertices = _ordered_loop_vertices(true_segments)
+        return true_segments, fill_vertices, None
+
+    if exp_name == "ellipses":
+        true_segments = _single_case_ellipse_segments(case_index)
+        fill_vertices = true_segments[:, 0, :]
+        return true_segments, fill_vertices, None
+
+    if exp_name == "zalesak":
+        return _single_case_zalesak_truth(case_index)
+
+    return maintext_figs._load_true_segments(exp_name, base_save_name, case_index), None, None
 
 
 def _figure_bounds(exp_spec, true_segments: np.ndarray):
@@ -197,7 +412,13 @@ def _generate_figure(exp_spec: dict, out_path: Path):
         exp_spec["wiggles"][0],
         exp_spec["seed"],
     )
-    true_segments = _load_true_segments(exp_spec, base_save_name)
+    base_mesh_segments = maintext_figs._mesh_segments(PLOTS_ROOT / base_save_name / "vtk" / "mesh.vtk")
+    mesh_bounds = maintext_figs._segments_bounds(base_mesh_segments)
+    true_segments, true_fill_vertices, inset_bounds = _truth_payload(
+        exp_spec,
+        base_save_name,
+        mesh_bounds,
+    )
     bounds = _figure_bounds(exp_spec, true_segments)
 
     for row, resolution in enumerate(exp_spec["resolutions"]):
@@ -219,7 +440,12 @@ def _generate_figure(exp_spec: dict, out_path: Path):
             maintext_figs._plot_panel(
                 ax,
                 exp_name=exp_spec["name"],
-                spec={"case_index": exp_spec["case_index"], "inset": exp_spec["inset"]},
+                spec={
+                    "case_index": exp_spec["case_index"],
+                    "inset": exp_spec["inset"],
+                    "true_fill_vertices": true_fill_vertices,
+                    "inset_bounds": inset_bounds,
+                },
                 algo=exp_spec["algo"],
                 mesh_segments=mesh_segments,
                 true_segments=true_segments,
