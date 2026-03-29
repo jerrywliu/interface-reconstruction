@@ -24,6 +24,14 @@ EDGE = (0.37, 0.40, 0.45)
 TRUE_LINE = (0.35, 0.35, 0.35)
 RECON_LINE = (0.08, 0.08, 0.08)
 
+plt.rcParams.update(
+    {
+        "text.usetex": True,
+        "font.family": "serif",
+        "text.latex.preamble": r"\usepackage{txfonts}",
+    }
+)
+
 
 def _make_perturbed_stencil(seed: int) -> list[list[BasePolygon]]:
     rng = random.Random(seed)
@@ -99,6 +107,19 @@ def _plot_panel(ax, stencil, title, bounds, true_line=None, recon_line=None):
                 )
             )
 
+    center_poly = stencil[1][1]
+    ax.add_patch(
+        MplPolygon(
+            center_poly.points,
+            closed=True,
+            facecolor="none",
+            edgecolor=EDGE,
+            linewidth=1.9,
+            joinstyle="round",
+            zorder=3,
+        )
+    )
+
     if true_line is not None:
         ax.plot(
             [true_line[0][0], true_line[1][0]],
@@ -125,7 +146,7 @@ def _plot_panel(ax, stencil, title, bounds, true_line=None, recon_line=None):
     ax.set_yticks([])
     for spine in ax.spines.values():
         spine.set_visible(False)
-    ax.set_title(title, fontsize=9, pad=6)
+    ax.set_title(rf"\textbf{{{title}}}", fontsize=10.5, pad=6)
 
 
 def build_figure(out_base: Path):
