@@ -19,7 +19,7 @@ from main.structs.polys.base_polygon import BasePolygon
 
 
 WHITE = (1.0, 1.0, 1.0)
-TEAL = (0.45, 0.74, 0.78)
+TOPOfull = tuple(v / 255.0 for v in (171, 201, 234))
 EDGE = (0.37, 0.40, 0.45)
 TRUE_LINE = (0.35, 0.35, 0.35)
 RECON_LINE = (0.08, 0.08, 0.08)
@@ -87,7 +87,7 @@ def _plot_panel(ax, stencil, title, bounds, true_line=None, recon_line=None):
     for i in range(3):
         for j in range(3):
             poly = stencil[i][j]
-            fill = _mix_with_white(TEAL, poly.getFraction())
+            fill = _mix_with_white(TOPOfull, poly.getFraction())
             ax.add_patch(
                 MplPolygon(
                     poly.points,
@@ -157,11 +157,31 @@ def build_figure(out_base: Path):
     elvira_line = _full_line_from_segment(elvira.pLeft, elvira.pRight, bounds)
     lvira_line = _full_line_from_segment(lvira.pLeft, lvira.pRight, bounds)
 
-    fig, axes = plt.subplots(1, 4, figsize=(10.0, 2.75), constrained_layout=True)
-    _plot_panel(axes[0], stencil, "Given Fractions", bounds)
-    _plot_panel(axes[1], stencil, "Youngs", bounds, true_line=(true_l1, true_l2), recon_line=youngs_line)
-    _plot_panel(axes[2], stencil, "ELVIRA", bounds, true_line=(true_l1, true_l2), recon_line=elvira_line)
-    _plot_panel(axes[3], stencil, "LVIRA", bounds, true_line=(true_l1, true_l2), recon_line=lvira_line)
+    fig, axes = plt.subplots(1, 3, figsize=(8.0, 2.75), constrained_layout=True)
+    _plot_panel(
+        axes[0],
+        stencil,
+        "Youngs",
+        bounds,
+        true_line=(true_l1, true_l2),
+        recon_line=(youngs.pLeft, youngs.pRight),
+    )
+    _plot_panel(
+        axes[1],
+        stencil,
+        "ELVIRA",
+        bounds,
+        true_line=(true_l1, true_l2),
+        recon_line=(elvira.pLeft, elvira.pRight),
+    )
+    _plot_panel(
+        axes[2],
+        stencil,
+        "LVIRA",
+        bounds,
+        true_line=(true_l1, true_l2),
+        recon_line=(lvira.pLeft, lvira.pRight),
+    )
 
     fig.savefig(out_base.with_suffix(".pdf"), bbox_inches="tight")
     fig.savefig(out_base.with_suffix(".png"), dpi=300, bbox_inches="tight")
