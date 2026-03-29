@@ -354,11 +354,10 @@ def _truth_payload(
     case_index = exp_spec["case_index"]
 
     if exp_name == "lines":
-        saved_segments = _true_vtp_segments(exp_name, base_save_name, case_index)
-        p1, p2 = saved_segments[0]
-        true_segments = _clip_infinite_line_to_bounds(p1, p2, mesh_bounds)
-        fill_vertices = _line_fill_polygon_from_points(p1, p2, mesh_bounds)
-        return true_segments, fill_vertices, None
+        true_segments = maintext_figs._line_true_segments(case_index, mesh_bounds)
+        # Let the shared plotting helper derive the filled half-plane from the
+        # final panel bounds, exactly as in the main-text line representative.
+        return true_segments, None, None
 
     if exp_name == "squares":
         true_segments = _true_vtp_segments(exp_name, base_save_name, case_index)
