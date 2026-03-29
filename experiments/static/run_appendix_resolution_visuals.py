@@ -387,10 +387,15 @@ def _truth_payload(
     return maintext_figs._load_true_segments(exp_name, base_save_name, case_index), None, None
 
 
-def _figure_bounds(exp_spec, true_segments: np.ndarray):
+def _figure_bounds(
+    exp_spec,
+    true_segments: np.ndarray,
+    mesh_bounds: tuple[float, float, float, float],
+):
     if exp_spec["name"] == "lines":
-        # For lines, the true segments are already built against the domain bounds.
-        return maintext_figs._segments_bounds(true_segments)
+        # Match the main-text line representative: show the full mesh-domain
+        # window rather than collapsing the panel to the line's y-span.
+        return mesh_bounds
     return maintext_figs._compute_view_bounds(
         true_segments,
         min_span=exp_spec["min_span"],
@@ -418,7 +423,7 @@ def _generate_figure(exp_spec: dict, out_path: Path):
         base_save_name,
         mesh_bounds,
     )
-    bounds = _figure_bounds(exp_spec, true_segments)
+    bounds = _figure_bounds(exp_spec, true_segments, mesh_bounds)
 
     for row, resolution in enumerate(exp_spec["resolutions"]):
         for col, wiggle in enumerate(exp_spec["wiggles"]):
