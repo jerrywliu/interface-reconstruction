@@ -87,7 +87,7 @@ REPRESENTATIVE_CASES = {
         "resolution": 0.32,
         "wiggle": 0.30,
         "seed": 0,
-        "case_index": 12,
+        "case_index": 6,
         "methods": [
             ("Youngs", "Youngs"),
             ("ELVIRA", "ELVIRA"),
@@ -96,7 +96,7 @@ REPRESENTATIVE_CASES = {
         ],
         "min_span": 100.0,
         "margin_frac": 0.00,
-        "inset": None,
+        "inset": {"kind": "line_fit", "half_span": 4.0},
     },
     "squares": {
         "resolution": 0.50,
@@ -854,6 +854,16 @@ def _inset_bounds(exp_name: str, spec: dict) -> tuple[float, float, float, float
             float(corner[1] - half_span),
             float(corner[1] + half_span),
         )
+    if inset_spec["kind"] == "line_fit":
+        params = _line_case_params(case_index)
+        center = 0.5 * (params["p1"] + params["p2"])
+        half_span = float(inset_spec.get("half_span", 4.0))
+        return (
+            float(center[0] - half_span),
+            float(center[0] + half_span),
+            float(center[1] - half_span),
+            float(center[1] + half_span),
+        )
     if inset_spec["kind"] == "zalesak_corner":
         slot_rect = _zalesak_case_params(case_index)["slot_rect"]
         corner = slot_rect[np.argmax(slot_rect[:, 0] + slot_rect[:, 1])]
@@ -1108,11 +1118,29 @@ def main():
         ),
         help="Output directory for generated main-text figures.",
     )
+    parser.add_argument(
+        "--experiments",
+        type=str,
+        default="all",
+        help="Comma-separated experiment names to regenerate (default: all).",
+    )
     args = parser.parse_args()
 
     rows = _load_sweep_rows(args.csv)
     rows = _backfill_circle_tangent_rows(rows)
     metric_index = _build_metric_index(rows)
+
+    if args.experiments.strip().lower() == "all":
+        selected_experiments = list(MAINTEXT_METHODS.keys())
+    else:
+        selected_experiments = [
+            name.strip()
+            for name in args.experiments.split(",")
+            if name.strip()
+        ]
+        unknown = sorted(set(selected_experiments) - set(MAINTEXT_METHODS.keys()))
+        if unknown:
+            raise ValueError(f"Unknown experiments requested: {', '.join(unknown)}")
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     summary_dir = args.out_dir / "summary_plots"
@@ -1130,6 +1158,8 @@ def main():
         "cases": REPRESENTATIVE_CASES,
     }
     for exp_name, methods in MAINTEXT_METHODS.items():
+        if exp_name not in selected_experiments:
+            continue
         out_name = f"{exp_name}_maintext_metrics.png"
         out_path = summary_dir / out_name
         _generate_quantitative_panel(
@@ -1142,18 +1172,24 @@ def main():
         outputs["quantitative"][exp_name] = str(out_path)
 
     for exp_name, spec in REPRESENTATIVE_CASES.items():
+        if exp_name not in selected_experiments:
+            continue
         out_name = f"{exp_name}_maintext_representative.png"
         out_path = compare_dir / out_name
         _generate_representative_figure(exp_name, spec, out_path)
         outputs["representative"][exp_name] = str(out_path)
 
     for exp_name, spec in APPENDIX_BEST_METHODS.items():
+        if exp_name not in selected_experiments:
+            continue
         out_name = f"{exp_name}_best_by_resolution.png"
         out_path = appendix_dir / out_name
         _generate_resolution_strip(exp_name, spec, out_path)
         outputs["appendix_resolutions"][exp_name] = str(out_path)
 
     for exp_name, spec in APPENDIX_CARTESIAN_CASES.items():
+        if exp_name not in selected_experiments:
+            continue
         out_name = f"{exp_name}_cartesian_representative.png"
         out_path = appendix_dir / out_name
         _generate_representative_figure(exp_name, spec, out_path)
