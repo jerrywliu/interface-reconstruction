@@ -1442,6 +1442,29 @@ def main():
         help="comma-separated algorithms to run (e.g., ELVIRA,LVIRA)",
     )
     parser.add_argument(
+        "--plic_fallback",
+        type=str,
+        choices=["Youngs", "ELVIRA", "LVIRA"],
+        default="LVIRA",
+        help="PLIC fallback for unresolved merged cells in merged-method runs",
+    )
+    parser.add_argument(
+        "--rescue_profile",
+        type=str,
+        choices=[
+            "full",
+            "no_corner_rescues",
+            "no_linear_corner_rescues",
+            "no_curved_corner_rescues",
+            "no_repeated_corner_rescues",
+            "no_repeated_tiny_corner_rescues",
+            "no_repeated_corner_component_rescues",
+            "candidate_keep_12346_drop_9",
+        ],
+        default="full",
+        help="Zalesak merged-reconstruction rescue profile",
+    )
+    parser.add_argument(
         "--aggregate_samples",
         type=int,
         default=0,
@@ -1568,6 +1591,11 @@ def main():
                             save_name = _make_save_name(
                                 exp["name"], algo, resolution, wiggle, seed
                             )
+                            if (
+                                exp["name"] == "zalesak"
+                                and args.rescue_profile != "full"
+                            ):
+                                save_name = f"{save_name}_{args.rescue_profile}"
                             cmd = [
                                 sys.executable,
                                 "-m",
@@ -1591,6 +1619,10 @@ def main():
                             ]
                             if num_value is not None:
                                 cmd += [exp["num_arg"], str(num_value)]
+                            if args.plic_fallback is not None:
+                                cmd += ["--plic_fallback", args.plic_fallback]
+                            if exp["name"] == "zalesak":
+                                cmd += ["--rescue_profile", args.rescue_profile]
 
                             if args.collect_existing:
                                 metrics = _collect_metrics(exp["name"], save_name)

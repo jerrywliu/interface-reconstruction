@@ -76,7 +76,12 @@ def _run_no_merge(m: MergeMesh, facet_algo, iter, output_dirs, algo_kwargs={}):
     elif facet_algo == "LVIRA":
         m.runLVIRA()
     elif facet_algo == "safe_linear":
-        m.runSafeLinear(**algo_kwargs)
+        safe_linear_kwargs = {
+            key: value
+            for key, value in algo_kwargs.items()
+            if key in {"check_threshold", "default_to_youngs", "fit_1neighbor"}
+        }
+        m.runSafeLinear(**safe_linear_kwargs)
     elif facet_algo == "safe_circle":
         m.runSafeCircle()
     elif facet_algo == "safe_linear_corner":
@@ -94,6 +99,8 @@ def _run_with_merge(
     Run reconstruction for algorithms that merge cells.
     These algorithms first merge neighboring cells, then fit interfaces.
     """
+    algo_kwargs = algo_kwargs or {}
+
     m.merge1Neighbors()
     merge_ids = m.findOrientations()
 
@@ -102,7 +109,12 @@ def _run_with_merge(
         m, os.path.join(output_dirs["vtk_reconstructed_mixed"], f"{iter}.vtp")
     )
 
-    merged_polys = m.fitFacets(merge_ids, setting=facet_algo)
+    merged_polys = m.fitFacets(
+        merge_ids,
+        setting=facet_algo,
+        plic_fallback=algo_kwargs.get("plic_fallback", "LVIRA"),
+        rescue_profile=algo_kwargs.get("rescue_profile", "full"),
+    )
     reconstructed_facets = [p.getFacet() for p in merged_polys]
 
     if do_c0:

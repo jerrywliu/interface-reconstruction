@@ -38,6 +38,7 @@ class MergeMesh(BaseMesh):
 
     def __init__(self, points, threshold, areas=None):
         super().__init__(points, threshold, areas)
+        self.plic_fallback_records = []
         # Let self.polys be a list of NeighboredPolygon objects
         self.polys: list[list[NeighboredPolygon]] = [
             [None] * (len(points[0]) - 1) for _ in range(len(points) - 1)
@@ -2809,8 +2810,97 @@ class MergeMesh(BaseMesh):
         self._plt_patchpartialareas = np.array(self._plt_patchpartialareas)
         self._plt_patchinitialareas = np.array(self._plt_patchinitialareas)
 
+    def _run_unresolved_plic_fallback(
+        self, merged_poly: NeighboredPolygon, merge_id, setting, plic_fallback
+    ):
+        policy_lookup = {
+            "youngs": "Youngs",
+            "elvira": "ELVIRA",
+            "lvira": "LVIRA",
+        }
+        policy_key = str(plic_fallback or "LVIRA").lower()
+        if policy_key not in policy_lookup:
+            raise ValueError(
+                f"Unknown plic_fallback={plic_fallback!r}; expected Youngs, ELVIRA, or LVIRA"
+            )
+
+        policy = policy_lookup[policy_key]
+        if policy == "Youngs":
+            facet = merged_poly.runYoungs(ret=True)
+        elif policy == "ELVIRA":
+            facet = merged_poly.runELVIRA(ret=True)
+        else:
+            facet = merged_poly.runLVIRA(ret=True)
+
+        merged_poly.setFacet(facet)
+        self.plic_fallback_records.append(
+            {
+                "setting": setting,
+                "merge_id": merge_id,
+                "policy": policy,
+                "facet_name": getattr(facet, "name", ""),
+                "num_vertices": len(merged_poly.points),
+            }
+        )
+
     # TODO why are we popping the merge ids that fail?
-    def fitFacets(self, merge_ids, setting="circular"):
+    def fitFacets(
+        self,
+        merge_ids,
+        setting="circular",
+        plic_fallback="LVIRA",
+        rescue_profile="full",
+        stage_callback=None,
+    ):
+        self.plic_fallback_records = []
+        rescue_profile = str(rescue_profile or "full").lower()
+        valid_rescue_profiles = {
+            "full",
+            "no_corner_rescues",
+            "no_linear_corner_rescues",
+            "no_curved_corner_rescues",
+            "no_repeated_corner_rescues",
+            "no_repeated_tiny_corner_rescues",
+            "no_repeated_corner_component_rescues",
+            "candidate_keep_12346_drop_9",
+        }
+        if rescue_profile not in valid_rescue_profiles:
+            raise ValueError(
+                f"Unknown rescue_profile={rescue_profile!r}; "
+                f"expected one of {sorted(valid_rescue_profiles)}"
+            )
+        use_linear_corner_rescues = rescue_profile not in {
+            "no_corner_rescues",
+            "no_linear_corner_rescues",
+        }
+        use_curved_corner_rescues = rescue_profile not in {
+            "no_corner_rescues",
+            "no_curved_corner_rescues",
+            "candidate_keep_12346_drop_9",
+        }
+        use_repeated_corner_rescues = rescue_profile not in {
+            "no_corner_rescues",
+            "no_linear_corner_rescues",
+            "no_repeated_corner_rescues",
+        }
+        use_repeated_tiny_corner_rescues = rescue_profile not in {
+            "no_corner_rescues",
+            "no_linear_corner_rescues",
+            "no_repeated_corner_rescues",
+            "no_repeated_tiny_corner_rescues",
+        }
+        use_repeated_corner_component_rescues = rescue_profile not in {
+            "no_corner_rescues",
+            "no_linear_corner_rescues",
+            "no_repeated_corner_rescues",
+            "no_repeated_corner_component_rescues",
+            "candidate_keep_12346_drop_9",
+        }
+
+        def emit_stage(stage):
+            if stage_callback is not None:
+                stage_callback(stage, self, tuple(merge_ids))
+
         if setting == "linear":
             i = 0
             while i < len(merge_ids):
@@ -2819,7 +2909,9 @@ class MergeMesh(BaseMesh):
                 if merged_poly.fullyOriented():
                     merged_poly.fitLinearFacet()
                 elif merged_poly.has3x3Stencil():
-                    merged_poly.runYoungs()
+                    self._run_unresolved_plic_fallback(
+                        merged_poly, merge_id, setting, plic_fallback
+                    )
                 else:
                     print("Something wrong with facet fitting!")
                     print(self.merged_polys[merge_id])
@@ -2848,7 +2940,9 @@ class MergeMesh(BaseMesh):
                             merged_poly.fitLinearFacet()
                             merged_poly.getFacet().name = "default_linear"
                 elif merged_poly.has3x3Stencil():
-                    merged_poly.runYoungs()
+                    self._run_unresolved_plic_fallback(
+                        merged_poly, merge_id, setting, plic_fallback
+                    )
                 else:
                     print("Something wrong with facet fitting!")
                     merge_ids.pop(i)
@@ -2945,7 +3039,9 @@ class MergeMesh(BaseMesh):
                     elif merged_poly.has3x3Stencil():
                         # print("Youngs on poly")
                         # print(merged_poly)
-                        merged_poly.runYoungs()
+                        self._run_unresolved_plic_fallback(
+                            merged_poly, merge_id, setting, plic_fallback
+                        )
                     else:
                         print("Something wrong with facet fitting!")
                         print(self.merged_polys[merge_id])
@@ -2964,6 +3060,8 @@ class MergeMesh(BaseMesh):
                         )
                     else:
                         merged_poly.fitLinearFacet(doCollinearityCheck=True)
+
+            emit_stage("linear")
 
             print("Using corners")
             # For the ones not fit properly, try a corner
@@ -3035,6 +3133,8 @@ class MergeMesh(BaseMesh):
                         # print(merged_poly)
                         pass
 
+            emit_stage("linear_corners")
+
             # Try fitting circular facets
             i = 0
             while i < len(merge_ids):
@@ -3051,6 +3151,8 @@ class MergeMesh(BaseMesh):
                                 root_guess=self._find_arc_fit_guess(merge_id)
                             )
                 i += 1
+
+            emit_stage("circular")
 
             print("Using circular corners")
             # For the ones not fit properly, try a corner
@@ -3262,7 +3364,7 @@ class MergeMesh(BaseMesh):
                                 "Failed to fit curved corners: issue with at least one checkCurvedCornerFacet"
                             )
 
-                    if not curved_corner_applied:
+                    if use_curved_corner_rescues and not curved_corner_applied:
                         rescue_assignments = self._try_local_curved_corner_loop_rescue(
                             merged_poly
                         )
@@ -3271,7 +3373,7 @@ class MergeMesh(BaseMesh):
                                 rescue_poly.setFacet(rescue_facet)
                             curved_corner_applied = True
 
-                    if not curved_corner_applied:
+                    if use_curved_corner_rescues and not curved_corner_applied:
                         rescue_assignments = (
                             self._try_local_curved_corner_transition_rescue(
                                 merged_poly
@@ -3281,12 +3383,14 @@ class MergeMesh(BaseMesh):
                             for rescue_poly, rescue_facet in rescue_assignments.items():
                                 rescue_poly.setFacet(rescue_facet)
 
-            # Rebuild straight geometry into nearby weak cells using exact support lines
-            # or accepted corner-branch normals before falling all the way back to linear.
-            self._rescue_corner_arc_corner_triplets(merge_ids)
-            self._rescue_repeated_tiny_corner_triplets(merge_ids)
-            self._propagate_exact_linear_supports(merge_ids)
-            self._rescue_corner_linear_bridge_cells(merge_ids)
+            if use_linear_corner_rescues:
+                # Rebuild straight geometry into nearby weak cells using exact support lines
+                # or accepted corner-branch normals before falling all the way to linear.
+                self._rescue_corner_arc_corner_triplets(merge_ids)
+                if use_repeated_corner_rescues and use_repeated_tiny_corner_rescues:
+                    self._rescue_repeated_tiny_corner_triplets(merge_ids)
+                self._propagate_exact_linear_supports(merge_ids)
+                self._rescue_corner_linear_bridge_cells(merge_ids)
 
             # For anything left, fit a linear facet
             i = 0
@@ -3297,18 +3401,27 @@ class MergeMesh(BaseMesh):
                     if merged_poly.fullyOriented():
                         merged_poly.fitLinearFacet()
                     elif merged_poly.has3x3Stencil():
-                        merged_poly.runYoungs()
+                        self._run_unresolved_plic_fallback(
+                            merged_poly, merge_id, setting, plic_fallback
+                        )
                     else:
                         print("Something wrong with facet fitting!")
                         merge_ids.pop(i)
                         i -= 1
                 i += 1
 
-            # After the fallback pass, some outer support cells have settled into
-            # reliable line facets. Revisit repeated curved-corner triplets now
-            # that those linear supports are available.
-            self._rescue_repeated_corner_components_as_linear_corners(merge_ids)
-            self._rescue_linear_corner_owner_intruder_arcs(merge_ids)
+            if use_linear_corner_rescues:
+                # After the fallback pass, some outer support cells have settled into
+                # reliable line facets. Revisit repeated curved-corner triplets now
+                # that those linear supports are available.
+                if (
+                    use_repeated_corner_rescues
+                    and use_repeated_corner_component_rescues
+                ):
+                    self._rescue_repeated_corner_components_as_linear_corners(merge_ids)
+                self._rescue_linear_corner_owner_intruder_arcs(merge_ids)
+
+            emit_stage("final")
 
         elif setting == "extra_corners":
             pass

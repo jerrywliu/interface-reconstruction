@@ -1,4 +1,5 @@
 import argparse
+import csv
 import os
 import math
 import numpy as np
@@ -251,6 +252,8 @@ def main(
     case_indices=None,
     return_case_records=False,
     do_c0=None,
+    plic_fallback="LVIRA",
+    rescue_profile="full",
     **kwargs,
 ):
     # Read config
@@ -269,6 +272,22 @@ def main(
 
     # Setup output directories
     output_dirs = setupOutputDirs(save_name, clean_existing=True)
+    fallback_metrics_path = os.path.join(
+        output_dirs["metrics"], "unresolved_plic_fallbacks.csv"
+    )
+    with open(fallback_metrics_path, "w", newline="") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "case_index",
+                "setting",
+                "merge_id",
+                "policy",
+                "facet_name",
+                "num_vertices",
+            ],
+        )
+        writer.writeheader()
 
     # Initialize mesh once
     print("Generating mesh...")
@@ -310,16 +329,16 @@ def main(
     true_area = zalesak_total_area(radius, slot_width, slot_top_rel)
 
     for i in range(num_cases):
+        # Random center and rotation
+        center = [rng.uniform(50, 51), rng.uniform(50, 51)]
+        theta = rng.uniform(0, math.pi / 2)
+
         if case_index_set is not None and i not in case_index_set:
             continue
         print(f"Processing Zalesak {i+1}/{num_cases}")
 
         # Re-initialize mesh
         m = MergeMesh(opoints, threshold)
-
-        # Random center and rotation
-        center = [rng.uniform(50, 51), rng.uniform(50, 51)]
-        theta = rng.uniform(0, math.pi / 2)
 
         # Initialize Zalesak fractions
         fractions = initialize_zalesak(
@@ -350,9 +369,28 @@ def main(
                 do_c0,
                 i,
                 output_dirs,
-                algo_kwargs={},
+                algo_kwargs={
+                    "plic_fallback": plic_fallback,
+                    "rescue_profile": rescue_profile,
+                },
                 return_polys=True,
             )
+            fallback_records = getattr(m, "plic_fallback_records", [])
+            if fallback_records:
+                with open(fallback_metrics_path, "a", newline="") as f:
+                    writer = csv.DictWriter(
+                        f,
+                        fieldnames=[
+                            "case_index",
+                            "setting",
+                            "merge_id",
+                            "policy",
+                            "facet_name",
+                            "num_vertices",
+                        ],
+                    )
+                    for record in fallback_records:
+                        writer.writerow({"case_index": i, **record})
 
             # ---------- Save true facets to VTK ----------
             # Reconstruct the slot rectangle
@@ -434,6 +472,7 @@ def main(
                         "area_error": area_error,
                         "facet_gap": avg_gap,
                         "hausdorff": hausdorff_distance,
+                        "plic_fallback_records": fallback_records,
                         "output_dirs": dict(output_dirs),
                     }
                 )
@@ -674,6 +713,29 @@ if __name__ == "__main__":
         help="override C0 continuity enforcement (1=yes, 0=no)",
         default=None,
     )
+    parser.add_argument(
+        "--plic_fallback",
+        type=str,
+        choices=["Youngs", "ELVIRA", "LVIRA"],
+        default="LVIRA",
+        help="PLIC fallback for unresolved merged cells with a 3x3 stencil",
+    )
+    parser.add_argument(
+        "--rescue_profile",
+        type=str,
+        choices=[
+            "full",
+            "no_corner_rescues",
+            "no_linear_corner_rescues",
+            "no_curved_corner_rescues",
+            "no_repeated_corner_rescues",
+            "no_repeated_tiny_corner_rescues",
+            "no_repeated_corner_component_rescues",
+            "candidate_keep_12346_drop_9",
+        ],
+        default="full",
+        help="corner rescue profile for merged reconstruction",
+    )
 
     args = parser.parse_args()
 
@@ -711,4 +773,6 @@ if __name__ == "__main__":
             perturb_type=args.perturb_type,
             case_indices=args.case_indices,
             do_c0=args.do_c0,
+            plic_fallback=args.plic_fallback,
+            rescue_profile=args.rescue_profile,
         )
