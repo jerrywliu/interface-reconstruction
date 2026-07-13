@@ -113,7 +113,9 @@ def _run_with_merge(
         merge_ids,
         setting=facet_algo,
         plic_fallback=algo_kwargs.get("plic_fallback", "LVIRA"),
-        rescue_profile=algo_kwargs.get("rescue_profile", "full"),
+        rescue_profile=algo_kwargs.get(
+            "rescue_profile", "no_curved_corner_rescues"
+        ),
     )
     reconstructed_facets = [p.getFacet() for p in merged_polys]
 

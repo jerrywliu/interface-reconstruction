@@ -2849,11 +2849,13 @@ class MergeMesh(BaseMesh):
         merge_ids,
         setting="circular",
         plic_fallback="LVIRA",
-        rescue_profile="full",
+        rescue_profile="no_curved_corner_rescues",
         stage_callback=None,
     ):
         self.plic_fallback_records = []
-        rescue_profile = str(rescue_profile or "full").lower()
+        rescue_profile = str(
+            rescue_profile or "no_curved_corner_rescues"
+        ).lower()
         valid_rescue_profiles = {
             "full",
             "no_corner_rescues",

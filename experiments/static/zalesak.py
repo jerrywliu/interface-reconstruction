@@ -253,7 +253,7 @@ def main(
     return_case_records=False,
     do_c0=None,
     plic_fallback="LVIRA",
-    rescue_profile="full",
+    rescue_profile="no_curved_corner_rescues",
     **kwargs,
 ):
     # Read config
@@ -733,7 +733,7 @@ if __name__ == "__main__":
             "no_repeated_corner_component_rescues",
             "candidate_keep_12346_drop_9",
         ],
-        default="full",
+        default="no_curved_corner_rescues",
         help="corner rescue profile for merged reconstruction",
     )
 

@@ -1461,7 +1461,7 @@ def main():
             "no_repeated_corner_component_rescues",
             "candidate_keep_12346_drop_9",
         ],
-        default="full",
+        default="no_curved_corner_rescues",
         help="Zalesak merged-reconstruction rescue profile",
     )
     parser.add_argument(
