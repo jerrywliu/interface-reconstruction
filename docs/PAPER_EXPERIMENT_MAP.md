@@ -73,6 +73,12 @@ $RELEASE/
 and final-primitive provenance. `run_inventory.csv` maps each row to a
 release-relative raw bundle.
 
+Compare a completed final release with the July affected-method baseline using
+`submission/compare_release_results.py`. The utility matches exact case keys,
+reports the expected candidate-only methods separately, and writes CSV, JSON,
+and Markdown summaries without modifying either release. See
+`submission/COMPARE_RELEASE_RESULTS.md` for the command and interpretation.
+
 ## Benchmark Map
 
 The CLI config name in commands is `static/<name>`; its file is
