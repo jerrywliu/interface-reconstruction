@@ -8,9 +8,9 @@ checked-in pins. Consequently, Python 3.9 is the current CI and reproduction tar
 not yet a multi-version public support guarantee.
 
 `requirements.txt` is the frozen submission-era runtime input. It intentionally
-remains unchanged in this cleanup because changing NumPy, SciPy, Matplotlib,
-Shapely, or VTK immediately before accepting a result set can change numerical or
-rendering behavior. It currently contains both direct and transitive pins.
+remains unchanged because changing NumPy, SciPy, Matplotlib, Shapely, or VTK can
+change numerical or rendering behavior. It currently contains both direct and
+transitive pins.
 
 ## Installation Tiers
 
@@ -33,7 +33,7 @@ Install the runtime stack plus automated tests:
 
 ```bash
 python -m pip install -r requirements-test.txt
-python -m pytest -q test
+MPLBACKEND=Agg python -m pytest -q test
 ```
 
 The Slack integration test is intentionally opt-in because it sends a real message
@@ -63,23 +63,27 @@ repository test tree with a noninteractive Matplotlib backend. It does not run t
 970-job scientific sweep, build the paper, exercise Slack, or establish bitwise
 agreement across platforms.
 
-## Clean-Environment Decisions Still Open
+## Reproducibility Policy
 
-Before publishing a general-purpose environment specification:
+The exact environment that produced an accepted result set is the archival
+authority for that result set and must be captured with
+`submission/capture_environment.py`. The pinned requirements are the public clean
+installation target.
 
-1. Recreate `requirements.txt` in a clean CPython 3.9 environment and require
-   `python -m pip check` to pass.
-2. Compare a compact numerical acceptance suite against the accepted final release.
-3. Decide whether the checked-in pins or the exact accepted-sweep environment is the
-   archival authority when they differ.
-4. Only then consider splitting the mixed runtime/transitive pins, adding a lock
-   file, or declaring additional Python and operating-system support.
+The frozen requirements were validated in a clean CPython 3.9.13 environment on
+macOS arm64. The dependency graph passed `pip check`, the full repository suite
+passed with only the intentionally skipped Slack integration, three representative
+paper-facing reconstructions agreed with the workstation stack to numerical
+tolerance, and both deterministic vector figures passed PDF QA. Exact commands,
+metrics, package versions, and limitations are recorded in
+`submission/CLEAN_ENV_REPRODUCIBILITY_VALIDATION.md`.
 
-The additive test and figure files do not alter any existing runtime pin. They make
-tooling roles explicit while preserving the frozen installation input.
+The project does not claim bitwise-identical results across numerical stacks or
+operating systems. Changes to the frozen numerical pins require a focused numerical
+comparison and, when paper-facing outputs can change, regeneration of the affected
+results and figures. Broader support still requires repeating the compact acceptance
+suite in a clean Linux environment.
 
-Both additive files resolve with `pip --dry-run --ignore-installed` under the current
-CPython 3.9 interpreter. That checks dependency compatibility, not installation or
-numerical acceptance in a clean environment. The shared workstation environment
-still fails `pip check` because of unrelated Torch/TorchSDE packages, so it is not
-being presented as the public release environment.
+The additive test and figure requirement files do not alter any numerical runtime
+pin; they make tooling roles explicit while preserving the frozen installation
+input.
