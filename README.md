@@ -41,6 +41,8 @@ For a full description of the sweep experiments (linear + perturbed), see `docs/
 For local plotting, reconstruction inspection, and paper-figure regeneration, see `docs/VISUALIZATION_WORKFLOW.md`.
 For the paper-to-code map of Section 6 experiments, final data, diagnostics, and figure assets, see `docs/PAPER_EXPERIMENT_MAP.md`.
 
+For deterministic, fail-closed assembly of the final code/manuscript package, see `submission/SUBMISSION_PACKAGING.md`.
+
 ## Contributors
 
 Jerry Liu, jwl50@stanford.edu
