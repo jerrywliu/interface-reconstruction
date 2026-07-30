@@ -6,7 +6,7 @@ This script runs one representative case per experiment, method, resolution, and
 mesh perturbation setting, then assembles qualitative comparison figures with:
   - Cartesian grid on the left
   - Perturbed grid on the right
-  - rows for N = 32, 50, 64
+  - rows for N = 16, 32, 64
 
 The best-method comparison used for each geometry is:
   - lines: linear
@@ -49,7 +49,7 @@ APPENDIX_RESOLUTION_EXPERIMENTS = [
         "case_index": 12,
         "algo": "linear",
         "display": "Ours (linear)",
-        "resolutions": [0.32, 0.50, 0.64],
+        "resolutions": [0.16, 0.32, 0.64],
         "wiggles": [0.0, 0.1],
         "seed": 0,
         "min_span": 100.0,
@@ -62,10 +62,10 @@ APPENDIX_RESOLUTION_EXPERIMENTS = [
         "config": "static/square",
         "num_arg": "--num_squares",
         "num_default": 25,
-        "case_index": 12,
+        "case_index": 24,
         "algo": "linear+corner",
         "display": "Ours (linear+corner)",
-        "resolutions": [0.32, 0.50, 0.64],
+        "resolutions": [0.16, 0.32, 0.64],
         "wiggles": [0.0, 0.1],
         "seed": 0,
         "min_span": 42.0,
@@ -81,7 +81,7 @@ APPENDIX_RESOLUTION_EXPERIMENTS = [
         "case_index": 12,
         "algo": "circular",
         "display": "Ours (circular)",
-        "resolutions": [0.32, 0.50, 0.64],
+        "resolutions": [0.16, 0.32, 0.64],
         "wiggles": [0.0, 0.1],
         "seed": 0,
         "min_span": 26.0,
@@ -97,7 +97,7 @@ APPENDIX_RESOLUTION_EXPERIMENTS = [
         "case_index": 12,
         "algo": "circular",
         "display": "Ours (circular)",
-        "resolutions": [0.32, 0.50, 0.64],
+        "resolutions": [0.16, 0.32, 0.64],
         "wiggles": [0.0, 0.1],
         "seed": 0,
         "min_span": 66.0,
@@ -113,7 +113,7 @@ APPENDIX_RESOLUTION_EXPERIMENTS = [
         "case_index": 12,
         "algo": "circular+corner",
         "display": "Ours (circular+corner)",
-        "resolutions": [0.32, 0.50, 0.64],
+        "resolutions": [0.16, 0.32, 0.64],
         "wiggles": [0.0, 0.1],
         "seed": 0,
         "min_span": 42.0,
@@ -129,16 +129,53 @@ def _parse_str_list(raw):
     return [part.strip().lower() for part in str(raw).split(",") if part.strip()]
 
 
-def _selected_experiments(raw_only):
+def _parse_float_list(raw):
+    if raw is None:
+        return None
+    values = [float(part.strip()) for part in str(raw).split(",") if part.strip()]
+    return values or None
+
+
+def _selected_experiments(
+    raw_only,
+    *,
+    resolutions=None,
+    wiggles=None,
+    case_index=None,
+    save_prefix=None,
+):
     only = set(_parse_str_list(raw_only))
     if not only:
-        return APPENDIX_RESOLUTION_EXPERIMENTS
-    return [exp for exp in APPENDIX_RESOLUTION_EXPERIMENTS if exp["name"] in only]
+        selected = APPENDIX_RESOLUTION_EXPERIMENTS
+    else:
+        selected = [exp for exp in APPENDIX_RESOLUTION_EXPERIMENTS if exp["name"] in only]
+
+    configured = []
+    for exp in selected:
+        exp = dict(exp)
+        if resolutions is not None:
+            exp["resolutions"] = resolutions
+        if wiggles is not None:
+            exp["wiggles"] = wiggles
+        if case_index is not None:
+            exp["case_index"] = case_index
+        if save_prefix is not None:
+            exp["save_prefix"] = save_prefix
+        configured.append(exp)
+    return configured
 
 
-def _save_name(exp_name: str, algo: str, resolution: float, wiggle: float, seed: int) -> str:
+def _save_name(
+    exp_name: str,
+    algo: str,
+    resolution: float,
+    wiggle: float,
+    seed: int,
+    *,
+    prefix: str = "appendix_resolution",
+) -> str:
     base = sweeps._make_save_name(exp_name, algo, resolution, wiggle, seed)
-    return f"appendix_resolution_{base}"
+    return f"{prefix}_{base}"
 
 
 def _required_paths(save_name: str, case_index: int) -> tuple[Path, Path]:
@@ -289,52 +326,14 @@ def _ordered_loop_vertices(segments: np.ndarray) -> np.ndarray:
 
 
 def _single_case_ellipse_segments(case_index: int, sample_count: int = 720) -> np.ndarray:
-    rng = np.random.default_rng(maintext_figs.ELLIPSE_RANDOM_SEED)
-    aspect_ratio = np.linspace(1.5, 3.0, 25)[case_index]
-    center = np.asarray([rng.uniform(50, 51), rng.uniform(50, 51)], dtype=float)
-    theta = float(rng.uniform(0, np.pi / 2))
-    major_axis = 30.0
-    minor_axis = major_axis / aspect_ratio
-    ts = np.linspace(0.0, 2.0 * np.pi, sample_count, endpoint=False)
-    pts = np.zeros((sample_count, 2), dtype=float)
-    c = np.cos(theta)
-    s = np.sin(theta)
-    for i, t in enumerate(ts):
-        x_local = major_axis * np.cos(t)
-        y_local = minor_axis * np.sin(t)
-        pts[i, 0] = center[0] + c * x_local - s * y_local
-        pts[i, 1] = center[1] + s * x_local + c * y_local
-    return np.stack([pts, np.roll(pts, -1, axis=0)], axis=1)
+    return maintext_figs._ellipse_true_segments(case_index, sample_count=sample_count)
 
 
 def _single_case_zalesak_truth(case_index: int) -> tuple[np.ndarray, np.ndarray, tuple[float, float, float, float]]:
-    rng = np.random.default_rng(maintext_figs.ZALESAK_RANDOM_SEED)
-    center = [rng.uniform(50, 51), rng.uniform(50, 51)]
-    theta = float(rng.uniform(0, np.pi / 2))
-    radius = 15.0
-    slot_width = 5.0
-    slot_top_rel = 10.0
-    cx, cy = center
-    half_w = slot_width * 0.5
-    y_bottom = cy - radius - 1.0e-6
-    y_top = cy + slot_top_rel
-    rect = [
-        [cx - half_w, y_bottom],
-        [cx + half_w, y_bottom],
-        [cx + half_w, y_top],
-        [cx - half_w, y_top],
-    ]
-    rect = [maintext_figs.rotate_point_around_center(point, center, theta) for point in rect]
-    true_reference = maintext_figs.build_true_reference_zalesak(center, radius, rect, theta)
-    true_facets = true_reference["facets"]
-    segment_chunks = []
-    for facet in true_facets:
-        chunk = maintext_figs._facet_segments(facet)
-        if len(chunk):
-            segment_chunks.append(chunk)
-    true_segments = np.concatenate(segment_chunks, axis=0)
+    true_facets = maintext_figs._zalesak_true_facets(case_index)
+    true_segments = maintext_figs._zalesak_true_segments(case_index)
     fill_vertices = maintext_figs._concat_facet_points(true_facets)
-    slot_rect = np.asarray(rect, dtype=float)
+    slot_rect = maintext_figs._zalesak_case_params(case_index)["slot_rect"]
     corner = slot_rect[np.argmax(slot_rect[:, 0] + slot_rect[:, 1])]
     inset_bounds = (
         float(corner[0] - 4.5),
@@ -406,7 +405,9 @@ def _figure_bounds(
 def _generate_figure(exp_spec: dict, out_path: Path):
     nrows = len(exp_spec["resolutions"])
     ncols = len(exp_spec["wiggles"])
-    fig, axes = plt.subplots(nrows, ncols, figsize=(6.8, 3.1 * nrows))
+    has_spyglass = bool(exp_spec.get("inset"))
+    fig_width = 9.2 if has_spyglass else 6.8
+    fig, axes = plt.subplots(nrows, ncols, figsize=(fig_width, 3.1 * nrows))
     axes = np.atleast_2d(axes)
 
     base_save_name = _save_name(
@@ -415,6 +416,7 @@ def _generate_figure(exp_spec: dict, out_path: Path):
         exp_spec["resolutions"][0],
         exp_spec["wiggles"][0],
         exp_spec["seed"],
+        prefix=exp_spec.get("save_prefix", "appendix_resolution"),
     )
     base_mesh_segments = maintext_figs._mesh_segments(PLOTS_ROOT / base_save_name / "vtk" / "mesh.vtk")
     mesh_bounds = maintext_figs._segments_bounds(base_mesh_segments)
@@ -434,38 +436,61 @@ def _generate_figure(exp_spec: dict, out_path: Path):
                 resolution,
                 wiggle,
                 exp_spec["seed"],
+                prefix=exp_spec.get("save_prefix", "appendix_resolution"),
             )
             mesh_segments = maintext_figs._mesh_segments(PLOTS_ROOT / save_name / "vtk" / "mesh.vtk")
-            recon_segments, endpoint_points = maintext_figs._load_reconstructed_segments_and_endpoints(
-                save_name, exp_spec["case_index"]
+            (
+                recon_segments,
+                endpoint_points,
+                corner_tip_points,
+                corner_boundary_points,
+            ) = maintext_figs._load_reconstructed_plot_geometry(
+                save_name,
+                exp_spec["case_index"],
+                exp_name=exp_spec["name"],
+                mesh_segments=mesh_segments,
             )
             condition = "Cartesian" if wiggle == 0.0 else "Perturbed"
             title = f"{condition}, N={int(round(resolution * 100))}"
             maintext_figs._plot_panel(
                 ax,
                 exp_name=exp_spec["name"],
-                spec={
+                spec=maintext_figs._panel_spyglass_spec({
                     "case_index": exp_spec["case_index"],
                     "inset": exp_spec["inset"],
                     "true_fill_vertices": true_fill_vertices,
                     "inset_bounds": inset_bounds,
-                },
+                }, col),
                 algo=exp_spec["algo"],
                 mesh_segments=mesh_segments,
                 true_segments=true_segments,
                 recon_segments=recon_segments,
                 endpoint_points=endpoint_points,
+                corner_tip_points=corner_tip_points,
+                corner_boundary_points=corner_boundary_points,
                 title=title,
                 bounds=bounds,
             )
 
     fig.suptitle(f"{exp_spec['display']} on {exp_spec['name'].title()}", fontsize=12.5, fontweight="bold", y=0.995)
-    fig.tight_layout(rect=[0, 0, 1, 0.98])
-    fig.savefig(out_path, dpi=300, bbox_inches="tight")
+    if has_spyglass:
+        fig.subplots_adjust(
+            left=0.16,
+            right=0.84,
+            bottom=0.04,
+            top=0.95,
+            wspace=0.24,
+            hspace=0.24,
+        )
+    else:
+        fig.tight_layout(rect=[0, 0, 1, 0.98])
+    maintext_figs._save_figure(fig, out_path)
     plt.close(fig)
 
 
 def main():
+    global PLOTS_ROOT
+
     parser = argparse.ArgumentParser(
         description="Run deterministic appendix resolution-study reconstruction visuals."
     )
@@ -475,7 +500,20 @@ def main():
     parser.add_argument("--skip_existing", action="store_true", help="skip runs whose required artifacts already exist")
     parser.add_argument("--plot_only", action="store_true", help="generate figures only from existing run outputs")
     parser.add_argument("--dry_run", action="store_true", help="print commands without executing")
+    parser.add_argument("--resolutions", type=str, default=None, help="comma-separated resolution values, e.g. 0.16,0.32,0.64")
+    parser.add_argument("--wiggles", type=str, default=None, help="comma-separated perturbation magnitudes")
+    parser.add_argument("--case_index", type=int, default=None, help="single case index override for quick example-swap checks")
+    parser.add_argument("--save_prefix", type=str, default=None, help="prefix for plot save directories, useful for non-clobbering case probes")
+    parser.add_argument(
+        "--plots_root",
+        type=Path,
+        default=PLOTS_ROOT,
+        help="root containing saved per-run plot artifacts",
+    )
     args = parser.parse_args()
+
+    PLOTS_ROOT = args.plots_root.resolve()
+    maintext_figs.PLOTS_ROOT = PLOTS_ROOT
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_dir = Path(
@@ -498,7 +536,16 @@ def main():
         "runs": [],
     }
 
-    for exp_spec in _selected_experiments(args.only):
+    resolutions = _parse_float_list(args.resolutions)
+    wiggles = _parse_float_list(args.wiggles)
+
+    for exp_spec in _selected_experiments(
+        args.only,
+        resolutions=resolutions,
+        wiggles=wiggles,
+        case_index=args.case_index,
+        save_prefix=args.save_prefix,
+    ):
         for resolution in exp_spec["resolutions"]:
             for wiggle in exp_spec["wiggles"]:
                 save_name = _save_name(
@@ -507,6 +554,7 @@ def main():
                     resolution,
                     wiggle,
                     exp_spec["seed"],
+                    prefix=exp_spec.get("save_prefix", "appendix_resolution"),
                 )
                 run_record = {
                     "experiment": exp_spec["name"],

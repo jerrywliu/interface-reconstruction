@@ -1,0 +1,52 @@
+import math
+
+from experiments.submission.diagnose_topology_conflicts import (
+    TAXONOMY,
+    assign_taxonomy,
+    direct_phase_test,
+)
+
+
+def test_direct_phase_test_respects_signed_circle_complement():
+    positive = {
+        "class": "circular",
+        "center": [0.0, 0.0],
+        "radius": 2.0,
+        "p_left": [2.0, 0.0],
+        "p_right": [0.0, 2.0],
+    }
+    negative = {**positive, "radius": -2.0}
+
+    assert direct_phase_test(positive, [0.0, 0.0], 1.0e-12)[0] == "full"
+    assert direct_phase_test(positive, [3.0, 0.0], 1.0e-12)[0] == "empty"
+    assert direct_phase_test(negative, [0.0, 0.0], 1.0e-12)[0] == "empty"
+    assert direct_phase_test(negative, [3.0, 0.0], 1.0e-12)[0] == "full"
+
+
+def test_direct_phase_test_normalizes_linear_margin():
+    line = {
+        "class": "linear",
+        "p_left": [0.0, 0.0],
+        "p_right": [2.0, 0.0],
+    }
+    label, margin = direct_phase_test(line, [1.0, 0.25], 1.0e-12)
+    assert label == "full"
+    assert math.isclose(margin, 0.25)
+
+
+def test_taxonomy_prioritizes_auditable_data_and_diagnostic_failures():
+    common = {
+        "vtk_conflict": True,
+        "exact_conflict": True,
+        "metadata_mismatch": False,
+        "classification_mismatch": False,
+        "min_abs_exact_margin": 1.0e-2,
+        "ambiguity_tolerance": 1.0e-6,
+    }
+    assert assign_taxonomy(**common) == TAXONOMY["a"]
+    assert assign_taxonomy(**{**common, "metadata_mismatch": True}) == TAXONOMY["d"]
+    assert assign_taxonomy(**{**common, "classification_mismatch": True}) == TAXONOMY["b"]
+    assert assign_taxonomy(**{**common, "exact_conflict": False}) == TAXONOMY["c"]
+    assert assign_taxonomy(
+        **{**common, "min_abs_exact_margin": 1.0e-8}
+    ) == TAXONOMY["e"]

@@ -1,0 +1,25 @@
+{
+  "cases": [
+    {
+      "case_index": 0,
+      "run_root": "plots/perturb_sweep_lines_linear_r0p32_w0p2_s0"
+    },
+    {
+      "case_index": 4,
+      "run_root": "plots/perturb_sweep_circles_circular_r0p32_w0p0_s0"
+    },
+    {
+      "case_index": 16,
+      "run_root": "plots/perturb_sweep_ellipses_circular_r0p32_w0p1_s0"
+    },
+    {
+      "case_index": 2,
+      "run_root": "plots/perturb_sweep_squares_linearpluscorner_r0p5_w0p0_s0_corner_pre_f8_corner"
+    },
+    {
+      "case_index": 1,
+      "run_root": "plots/perturb_sweep_zalesak_circularpluscorner_r0p5_w0p0_s0_corner_pre_f8_corner_exact_linear_support_only"
+    }
+  ],
+  "source_bundle": "results/static/static_paper_simplified_default_20260717_212413"
+}

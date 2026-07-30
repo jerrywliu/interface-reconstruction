@@ -161,9 +161,9 @@ def _selected_variants(exp_spec, raw_algos):
     return selected
 
 
-def _variant_save_name(exp_name, label, resolution, wiggle, seed):
+def _variant_save_name(exp_name, label, resolution, wiggle, seed, prefix="appendix_c0"):
     base = sweeps._make_save_name(exp_name, label, resolution, wiggle, seed)
-    return f"appendix_c0_{base}"
+    return f"{prefix}_{base}"
 
 
 def _build_rows_index(rows):
@@ -180,7 +180,7 @@ def _load_rows(csv_path):
         return list(reader)
 
 
-def _generate_plots(csv_path: Path, out_dir: Path):
+def _generate_plots(csv_path: Path, out_dir: Path, save_prefix: str = "appendix_c0"):
     rows = _load_rows(csv_path)
     data = sweeps._build_metric_index(rows)
 
@@ -191,7 +191,11 @@ def _generate_plots(csv_path: Path, out_dir: Path):
 
     outputs = {"summary": {}, "representative": {}}
     original_make_save_name = maintext_figs._make_save_name
-    maintext_figs._make_save_name = _variant_save_name
+    maintext_figs._make_save_name = (
+        lambda exp_name, label, resolution, wiggle, seed: _variant_save_name(
+            exp_name, label, resolution, wiggle, seed, prefix=save_prefix
+        )
+    )
     try:
         for exp_spec in APPENDIX_EXPERIMENTS:
             exp_name = exp_spec["name"]
@@ -252,8 +256,17 @@ def main():
     parser.add_argument("--log_dir", type=str, default=None, help="log directory")
     parser.add_argument("--collect_existing", action="store_true", help="collect existing runs only")
     parser.add_argument("--plot_from_csv", type=str, default=None, help="generate plots only from an existing CSV")
+    parser.add_argument("--save_prefix", type=str, default="appendix_c0", help="prefix for plot save directories")
+    parser.add_argument(
+        "--plots_root",
+        type=Path,
+        default=maintext_figs.PLOTS_ROOT,
+        help="root containing saved per-run plot artifacts",
+    )
+    parser.add_argument("--case_indices", type=str, default=None, help="comma-separated deterministic case indices to run")
     parser.add_argument("--dry_run", action="store_true", help="print commands without executing")
     args = parser.parse_args()
+    maintext_figs.PLOTS_ROOT = args.plots_root.resolve()
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_dir = Path(
@@ -268,7 +281,7 @@ def main():
 
     if args.plot_from_csv:
         csv_path = Path(args.plot_from_csv).resolve()
-        outputs = _generate_plots(csv_path, out_dir)
+        outputs = _generate_plots(csv_path, out_dir, save_prefix=args.save_prefix)
         print(f"Generated appendix C0 plots from {csv_path}")
         for bucket, paths in outputs.items():
             for name, path in paths.items():
@@ -319,6 +332,7 @@ def main():
                                 resolution,
                                 wiggle,
                                 seed,
+                                prefix=args.save_prefix,
                             )
                             cmd = [
                                 sys.executable,
@@ -345,6 +359,8 @@ def main():
                                 exp_spec["num_arg"],
                                 str(num_value),
                             ]
+                            if args.case_indices is not None:
+                                cmd += ["--case_indices", args.case_indices]
 
                             if args.dry_run:
                                 print(" ".join(cmd))
@@ -382,7 +398,7 @@ def main():
                                     }
                                 )
 
-    outputs = _generate_plots(out_csv, out_dir)
+    outputs = _generate_plots(out_csv, out_dir, save_prefix=args.save_prefix)
     print(f"Appendix C0 sweep CSV: {out_csv}")
     for bucket, paths in outputs.items():
         for name, path in paths.items():
