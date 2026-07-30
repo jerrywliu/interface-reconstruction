@@ -27,6 +27,7 @@ from experiments.static.sweep_diagnostics import (
     archive_run_bundle,
     consolidate_run_diagnostics,
     prepare_diagnostic_bundle,
+    remove_archived_run_source,
 )
 from main.structs.meshes.merge_mesh import MergeMesh
 from util.io.slack import load_slack_env, send_results_to_slack
@@ -2115,6 +2116,12 @@ def main():
                             release_root if raw_bundle_dir is not None else None
                         ),
                     )
+                    if raw_bundle_dir is not None:
+                        remove_archived_run_source(
+                            source_run_dir,
+                            Path("plots"),
+                            diagnostic_run_dir,
+                        )
                 except (DiagnosticBundleError, OSError, csv.Error, KeyError) as exc:
                     failure = _failure_record(
                         spec,

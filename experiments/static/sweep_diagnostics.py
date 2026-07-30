@@ -34,6 +34,8 @@ OUTPUT_FILENAMES = [
     *CSV_ARTIFACTS,
 ]
 
+ARCHIVE_EXCLUDED_DIRS = frozenset({"plt"})
+
 
 class DiagnosticBundleError(RuntimeError):
     pass
@@ -61,7 +63,11 @@ def _make_tree_writable(root):
 
 
 def archive_run_bundle(run_dir, raw_bundle_root, save_name=None):
-    """Copy one run bundle into a collision-proof, read-only release location."""
+    """Copy replayable scientific data into a read-only release location.
+
+    Per-case raster previews are intentionally excluded. Final figures are replayed
+    from the archived mesh, facet, geometry, metric, and provenance data.
+    """
     run_dir = Path(run_dir)
     raw_bundle_root = Path(raw_bundle_root)
     relative_bundle = Path(save_name or run_dir.name)
@@ -85,7 +91,12 @@ def archive_run_bundle(run_dir, raw_bundle_root, save_name=None):
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     try:
-        shutil.copytree(run_dir, staging, copy_function=shutil.copy2)
+        shutil.copytree(
+            run_dir,
+            staging,
+            copy_function=shutil.copy2,
+            ignore=shutil.ignore_patterns(*ARCHIVE_EXCLUDED_DIRS),
+        )
         _make_tree_read_only(staging)
         if destination.exists():
             raise DiagnosticBundleError(
@@ -98,6 +109,48 @@ def archive_run_bundle(run_dir, raw_bundle_root, save_name=None):
             shutil.rmtree(staging)
         raise
     return destination
+
+
+def remove_archived_run_source(run_dir, source_root, archived_dir):
+    """Remove one temporary run only after its scientific archive is verified."""
+    run_dir = Path(run_dir).resolve()
+    source_root = Path(source_root).resolve()
+    archived_dir = Path(archived_dir).resolve()
+    try:
+        relative_run = run_dir.relative_to(source_root)
+    except ValueError as exc:
+        raise DiagnosticBundleError(
+            f"Run bundle {run_dir} is outside temporary source root {source_root}"
+        ) from exc
+    if len(relative_run.parts) != 1:
+        raise DiagnosticBundleError(
+            f"Refusing to remove nested temporary run bundle: {run_dir}"
+        )
+    if not run_dir.is_dir() or not archived_dir.is_dir():
+        raise DiagnosticBundleError(
+            f"Source/archive bundle is missing: {run_dir}, {archived_dir}"
+        )
+
+    source_files = {}
+    for source_path in run_dir.rglob("*"):
+        if not source_path.is_file():
+            continue
+        relative_path = source_path.relative_to(run_dir)
+        if relative_path.parts[0] in ARCHIVE_EXCLUDED_DIRS:
+            continue
+        source_files[relative_path] = source_path.stat().st_size
+    archived_files = {
+        archived_path.relative_to(archived_dir): archived_path.stat().st_size
+        for archived_path in archived_dir.rglob("*")
+        if archived_path.is_file()
+    }
+    if source_files != archived_files:
+        raise DiagnosticBundleError(
+            f"Archived run bundle does not match temporary source: {run_dir}"
+        )
+
+    _make_tree_writable(run_dir)
+    shutil.rmtree(run_dir)
 
 
 def prepare_diagnostic_bundle(output_dir):

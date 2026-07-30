@@ -88,5 +88,9 @@ bash submission/run_final_static_sweep.sh
 The launcher refuses tracked or untracked source/config/test changes, resolves the
 exact source commit, assigns a collision-proof namespace, requires the explicit
 `launch_approved` gate, checks the configuration, and then starts the explicit
-`970`-run controller sweep. Each raw run bundle is copied read-only into the release
-directory so the final result set is self-contained.
+`970`-run controller sweep. Each scientific run bundle is copied read-only into the
+release directory so the final result set is self-contained. Exact meshes, facets,
+metrics, case geometry, and provenance are retained; disposable per-case raster
+previews are excluded because final figures are replayed as vector PDFs. After the
+archive is verified, only that run's temporary namespaced `plots/` directory is
+removed.

@@ -9,6 +9,7 @@ from experiments.static.sweep_diagnostics import (
     archive_run_bundle,
     consolidate_run_diagnostics,
     prepare_diagnostic_bundle,
+    remove_archived_run_source,
 )
 
 
@@ -249,6 +250,9 @@ def test_archived_run_bundle_is_self_contained_and_inventory_is_release_relative
     release_root = tmp_path / "release"
     diagnostics = prepare_diagnostic_bundle(release_root / "diagnostics")
     _make_run_bundle(source)
+    preview = source / "plt" / "areas" / "0.png"
+    preview.parent.mkdir(parents=True)
+    preview.write_bytes(b"review-only raster preview")
 
     archived = archive_run_bundle(source, release_root / "raw_runs")
     consolidate_run_diagnostics(
@@ -269,14 +273,8 @@ def test_archived_run_bundle_is_self_contained_and_inventory_is_release_relative
     assert (archived / "run_manifest.json").is_file()
     assert archived.stat().st_mode & 0o222 == 0
     assert (archived / "run_manifest.json").stat().st_mode & 0o222 == 0
+    assert not (archived / "plt").exists()
 
-    source_manifest = json.loads(
-        (source / "run_manifest.json").read_text(encoding="utf-8")
-    )
-    source_manifest["source_commit"] = "changed-after-release"
-    (source / "run_manifest.json").write_text(
-        json.dumps(source_manifest), encoding="utf-8"
-    )
     archived_manifest = json.loads(
         (archived / "run_manifest.json").read_text(encoding="utf-8")
     )
@@ -288,6 +286,22 @@ def test_archived_run_bundle_is_self_contained_and_inventory_is_release_relative
         inventory = next(csv.DictReader(stream))
     assert inventory["run_bundle"] == "raw_runs/run-a"
     assert (release_root / inventory["run_bundle"]).is_dir()
+
+    remove_archived_run_source(source, tmp_path / "plots", archived)
+    assert not source.exists()
+    assert (archived / "run_manifest.json").is_file()
+
+
+def test_remove_archived_run_source_refuses_paths_outside_source_root(tmp_path):
+    source = tmp_path / "elsewhere" / "run-a"
+    archived = tmp_path / "release" / "raw_runs" / "run-a"
+    _make_run_bundle(source)
+    archive_run_bundle(source, archived.parent)
+
+    with pytest.raises(DiagnosticBundleError, match="outside temporary source root"):
+        remove_archived_run_source(source, tmp_path / "plots", archived)
+
+    assert source.is_dir()
 
 
 def test_archive_collision_preserves_existing_release_bundle(tmp_path):
