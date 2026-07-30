@@ -2,6 +2,8 @@ import csv
 import hashlib
 import io
 import json
+import subprocess
+import sys
 import tarfile
 from pathlib import Path
 
@@ -19,6 +21,9 @@ from submission.package_submission import (
     verify_package_checksums,
 )
 from submission.pdf_vector_qa import PdfQaReport
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _sha256(path: Path) -> str:
@@ -132,6 +137,17 @@ def test_safe_relative_path_rejects_escape_and_absolute_paths():
         _safe_relative_path("../secret", "test")
     with pytest.raises(SubmissionPackagingError, match="safe relative"):
         _safe_relative_path("/tmp/secret", "test")
+
+
+def test_documented_direct_cli_entry_point_runs():
+    completed = subprocess.run(
+        [sys.executable, "submission/package_submission.py", "--help"],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "Build a deterministic, fail-closed submission package" in completed.stdout
 
 
 def test_paper_source_allowlist_excludes_generated_and_binary_files(tmp_path):
