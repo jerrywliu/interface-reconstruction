@@ -15,6 +15,10 @@ from matplotlib.collections import PatchCollection
 from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.patches import FancyArrowPatch, Patch, Polygon, Rectangle
 
+from experiments.static.figure_generation_provenance import (
+    frozen_reconstruction_profile,
+    generation_provenance,
+)
 from experiments.static.zalesak import RANDOM_SEED, initialize_zalesak
 from main.structs.facets.circular_facet import ArcFacet
 from main.structs.facets.corner_facet import CornerFacet
@@ -476,6 +480,7 @@ def build_figure(
 def main() -> None:
     args = parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    reconstruction_profile = frozen_reconstruction_profile()
 
     config = read_yaml("config/static/zalesak.yaml")
     mesh_config = apply_mesh_overrides(
@@ -487,6 +492,9 @@ def main() -> None:
     )
     points = make_points_from_config(mesh_config)
     mesh = MergeMesh(points, config["GEOMS"]["THRESHOLD"])
+    mesh.configure_corner_behavior(
+        reconstruction_profile["corner_behavior_profile"]
+    )
     center, theta = case_parameters(args.case_index)
     fractions = initialize_zalesak(
         mesh,
@@ -511,7 +519,8 @@ def main() -> None:
     mesh.fitFacets(
         merge_ids,
         setting="circular+corner",
-        plic_fallback="LVIRA",
+        plic_fallback=reconstruction_profile["plic_fallback"],
+        rescue_profile=reconstruction_profile["rescue_profile"],
         stage_callback=record_stage,
     )
 
@@ -522,6 +531,10 @@ def main() -> None:
     bounds = crop_bounds(snapshots["volume_fractions"], args.resolution)
     metadata = {
         "source": "perturbed Zalesak reconstruction",
+        "generation_provenance": generation_provenance(
+            profile=reconstruction_profile,
+            profile_application="explicitly_applied_to_staged_reconstruction",
+        ),
         "case_index": args.case_index,
         "resolution": args.resolution,
         "wiggle": args.wiggle,

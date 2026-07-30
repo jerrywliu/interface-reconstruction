@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import argparse
 import csv
-import os
+import json
 import subprocess
 import sys
 from datetime import datetime
@@ -29,6 +29,12 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from experiments.static import generate_section6_maintext_figures as maintext_figs
+from experiments.static.figure_generation_provenance import (
+    frozen_reconstruction_profile,
+    generation_provenance,
+    reconstruction_cli_args,
+    vector_figure_artifacts,
+)
 from experiments.static import run_perturbed_sweeps as sweeps
 
 
@@ -180,7 +186,12 @@ def _load_rows(csv_path):
         return list(reader)
 
 
-def _generate_plots(csv_path: Path, out_dir: Path, save_prefix: str = "appendix_c0"):
+def _generate_plots(
+    csv_path: Path,
+    out_dir: Path,
+    save_prefix: str = "appendix_c0",
+    endpoint_variants: str = "annotated",
+):
     rows = _load_rows(csv_path)
     data = sweeps._build_metric_index(rows)
 
@@ -213,26 +224,55 @@ def _generate_plots(csv_path: Path, out_dir: Path, save_prefix: str = "appendix_
                 metrics=exp_spec["metrics"],
                 out_path=metric_out,
             )
-            outputs["summary"][exp_name] = str(metric_out)
+            outputs["summary"][exp_name] = vector_figure_artifacts(metric_out)
 
-            rep_out = representative_dir / f"{exp_name}_appendix_c0_representative.png"
             rep_spec = exp_spec["representative"]
-            try:
-                maintext_figs._generate_representative_figure(
-                    exp_name=exp_name,
-                    spec=rep_spec,
-                    out_path=rep_out,
+            variant_outputs = {}
+            for (
+                variant_name,
+                suffix,
+                show_main_endpoints,
+            ) in maintext_figs._endpoint_variant_specs(endpoint_variants):
+                rep_out = (
+                    representative_dir
+                    / f"{exp_name}_appendix_c0_representative{suffix}.png"
                 )
-                outputs["representative"][exp_name] = str(rep_out)
-            except FileNotFoundError:
-                print(
-                    f"[WARN] skipping representative figure for {exp_name}: "
-                    f"representative case {rep_spec['case_index']} artifacts not present in this run set"
-                )
+                try:
+                    maintext_figs._generate_representative_figure(
+                        exp_name=exp_name,
+                        spec=maintext_figs._endpoint_visibility_spec(
+                            rep_spec,
+                            show_main_endpoints=show_main_endpoints,
+                        ),
+                        out_path=rep_out,
+                    )
+                    variant_outputs[variant_name] = vector_figure_artifacts(rep_out)
+                except FileNotFoundError:
+                    print(
+                        f"[WARN] skipping representative figure for {exp_name}: "
+                        f"representative case {rep_spec['case_index']} artifacts "
+                        "not present in this run set"
+                    )
+                    variant_outputs = {}
+                    break
+            if variant_outputs:
+                outputs["representative"][exp_name] = variant_outputs
     finally:
         maintext_figs._make_save_name = original_make_save_name
 
     return outputs
+
+
+def _print_outputs(outputs):
+    for exp_name, artifacts in outputs["summary"].items():
+        print(f"[summary] {exp_name}: {artifacts['pdf']}")
+    for exp_name, variants in outputs["representative"].items():
+        for variant_name, artifacts in variants.items():
+            print(f"[representative:{variant_name}] {exp_name}: {artifacts['pdf']}")
+
+
+def _write_manifest(path: Path, manifest: dict):
+    path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
 
 def _run_subprocess(cmd, log_path):
@@ -258,6 +298,15 @@ def main():
     parser.add_argument("--plot_from_csv", type=str, default=None, help="generate plots only from an existing CSV")
     parser.add_argument("--save_prefix", type=str, default="appendix_c0", help="prefix for plot save directories")
     parser.add_argument(
+        "--endpoint_variants",
+        choices=sorted(maintext_figs.ENDPOINT_VARIANT_MODES),
+        default="annotated",
+        help=(
+            "Qualitative endpoint-marker exports: annotated, clean main panels, "
+            "or paired. Spyglass endpoint labels are always retained."
+        ),
+    )
+    parser.add_argument(
         "--plots_root",
         type=Path,
         default=maintext_figs.PLOTS_ROOT,
@@ -278,14 +327,46 @@ def main():
         / f"static_appendix_c0_{stamp}"
     ).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
+    reconstruction_profile = frozen_reconstruction_profile()
+    manifest_path = out_dir / "manifest.json"
+    manifest = {
+        "schema_version": 1,
+        "status": "planned" if args.dry_run else "running",
+        "generation_provenance": generation_provenance(
+            profile=reconstruction_profile,
+            profile_application="explicitly_applied_to_dedicated_guarded_c0_runs",
+        ),
+        "parameters": {
+            "only": args.only,
+            "algos": args.algos,
+            "resolutions": args.resolutions,
+            "wiggles": args.wiggles,
+            "seeds": args.seeds,
+            "case_indices": args.case_indices,
+            "save_prefix": args.save_prefix,
+            "endpoint_variants": args.endpoint_variants,
+        },
+        "inputs": {},
+        "runs": [],
+        "outputs": {},
+    }
+    _write_manifest(manifest_path, manifest)
 
     if args.plot_from_csv:
         csv_path = Path(args.plot_from_csv).resolve()
-        outputs = _generate_plots(csv_path, out_dir, save_prefix=args.save_prefix)
+        outputs = _generate_plots(
+            csv_path,
+            out_dir,
+            save_prefix=args.save_prefix,
+            endpoint_variants=args.endpoint_variants,
+        )
+        manifest["status"] = "completed"
+        manifest["inputs"]["aggregate_metrics"] = str(csv_path)
+        manifest["outputs"] = outputs
+        _write_manifest(manifest_path, manifest)
         print(f"Generated appendix C0 plots from {csv_path}")
-        for bucket, paths in outputs.items():
-            for name, path in paths.items():
-                print(f"[{bucket}] {name}: {path}")
+        _print_outputs(outputs)
+        print(f"Manifest: {manifest_path}")
         return
 
     out_csv = Path(args.out_csv or out_dir / "csv" / "appendix_c0_sweep.csv").resolve()
@@ -359,8 +440,27 @@ def main():
                                 exp_spec["num_arg"],
                                 str(num_value),
                             ]
+                            cmd.extend(
+                                reconstruction_cli_args(
+                                    exp_spec["name"], reconstruction_profile
+                                )
+                            )
                             if args.case_indices is not None:
                                 cmd += ["--case_indices", args.case_indices]
+
+                            run_record = {
+                                "experiment": exp_spec["name"],
+                                "variant": variant["label"],
+                                "facet_algo": variant["facet_algo"],
+                                "do_c0": bool(variant["do_c0"]),
+                                "resolution": resolution,
+                                "wiggle": wiggle,
+                                "seed": seed,
+                                "save_name": save_name,
+                                "command": cmd,
+                                "status": "planned",
+                            }
+                            manifest["runs"].append(run_record)
 
                             if args.dry_run:
                                 print(" ".join(cmd))
@@ -372,15 +472,24 @@ def main():
                                     print(
                                         f"[SKIP] missing existing metrics for {exp_spec['name']} {variant['label']} r={resolution} w={wiggle} s={seed}"
                                     )
+                                    run_record["status"] = "missing"
+                                    _write_manifest(manifest_path, manifest)
                                     continue
+                                run_record["status"] = "collected"
                             else:
                                 log_path = log_dir / f"{save_name}.log"
                                 code = _run_subprocess(cmd, log_path)
                                 if code != 0:
+                                    run_record["status"] = "failed"
+                                    run_record["log"] = str(log_path)
+                                    manifest["status"] = "failed"
+                                    _write_manifest(manifest_path, manifest)
                                     raise RuntimeError(
                                         f"{exp_spec['name']} {variant['label']} r={resolution} w={wiggle} s={seed} failed; see {log_path}"
                                     )
                                 metrics = sweeps._collect_metrics(exp_spec["name"], save_name)
+                                run_record["status"] = "completed"
+                                run_record["log"] = str(log_path)
 
                             for key, value in metrics.items():
                                 writer.writerow(
@@ -397,12 +506,29 @@ def main():
                                         "save_name": save_name,
                                     }
                                 )
+                            _write_manifest(manifest_path, manifest)
 
-    outputs = _generate_plots(out_csv, out_dir, save_prefix=args.save_prefix)
+    outputs = (
+        {}
+        if args.dry_run
+        else _generate_plots(
+            out_csv,
+            out_dir,
+            save_prefix=args.save_prefix,
+            endpoint_variants=args.endpoint_variants,
+        )
+    )
+    missing_runs = any(run["status"] == "missing" for run in manifest["runs"])
+    manifest["status"] = (
+        "planned" if args.dry_run else "incomplete" if missing_runs else "completed"
+    )
+    manifest["outputs"] = outputs
+    manifest["outputs"]["aggregate_metrics"] = str(out_csv)
+    _write_manifest(manifest_path, manifest)
     print(f"Appendix C0 sweep CSV: {out_csv}")
-    for bucket, paths in outputs.items():
-        for name, path in paths.items():
-            print(f"[{bucket}] {name}: {path}")
+    if not args.dry_run:
+        _print_outputs(outputs)
+    print(f"Manifest: {manifest_path}")
 
 
 if __name__ == "__main__":

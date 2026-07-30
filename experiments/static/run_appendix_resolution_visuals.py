@@ -34,6 +34,12 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from experiments.static import generate_section6_maintext_figures as maintext_figs
+from experiments.static.figure_generation_provenance import (
+    frozen_reconstruction_profile,
+    generation_provenance,
+    reconstruction_cli_args,
+    vector_figure_artifacts,
+)
 from experiments.static import run_perturbed_sweeps as sweeps
 
 
@@ -402,7 +408,12 @@ def _figure_bounds(
     )
 
 
-def _generate_figure(exp_spec: dict, out_path: Path):
+def _generate_figure(
+    exp_spec: dict,
+    out_path: Path,
+    *,
+    show_main_endpoints: bool = True,
+):
     nrows = len(exp_spec["resolutions"])
     ncols = len(exp_spec["wiggles"])
     has_spyglass = bool(exp_spec.get("inset"))
@@ -452,15 +463,19 @@ def _generate_figure(exp_spec: dict, out_path: Path):
             )
             condition = "Cartesian" if wiggle == 0.0 else "Perturbed"
             title = f"{condition}, N={int(round(resolution * 100))}"
-            maintext_figs._plot_panel(
-                ax,
-                exp_name=exp_spec["name"],
-                spec=maintext_figs._panel_spyglass_spec({
+            panel_spec = maintext_figs._endpoint_visibility_spec(
+                maintext_figs._panel_spyglass_spec({
                     "case_index": exp_spec["case_index"],
                     "inset": exp_spec["inset"],
                     "true_fill_vertices": true_fill_vertices,
                     "inset_bounds": inset_bounds,
                 }, col),
+                show_main_endpoints=show_main_endpoints,
+            )
+            maintext_figs._plot_panel(
+                ax,
+                exp_name=exp_spec["name"],
+                spec=panel_spec,
                 algo=exp_spec["algo"],
                 mesh_segments=mesh_segments,
                 true_segments=true_segments,
@@ -488,6 +503,28 @@ def _generate_figure(exp_spec: dict, out_path: Path):
     plt.close(fig)
 
 
+def _generate_endpoint_variant_figures(
+    exp_spec: dict,
+    summary_dir: Path,
+    endpoint_variants: str,
+) -> dict[str, dict[str, str]]:
+    outputs = {}
+    for variant_name, suffix, show_main_endpoints in maintext_figs._endpoint_variant_specs(
+        endpoint_variants
+    ):
+        review_png = (
+            summary_dir
+            / f"{exp_spec['name']}_resolution_cartesian_vs_perturbed{suffix}.png"
+        )
+        _generate_figure(
+            exp_spec,
+            review_png,
+            show_main_endpoints=show_main_endpoints,
+        )
+        outputs[variant_name] = vector_figure_artifacts(review_png)
+    return outputs
+
+
 def main():
     global PLOTS_ROOT
 
@@ -504,6 +541,15 @@ def main():
     parser.add_argument("--wiggles", type=str, default=None, help="comma-separated perturbation magnitudes")
     parser.add_argument("--case_index", type=int, default=None, help="single case index override for quick example-swap checks")
     parser.add_argument("--save_prefix", type=str, default=None, help="prefix for plot save directories, useful for non-clobbering case probes")
+    parser.add_argument(
+        "--endpoint_variants",
+        choices=sorted(maintext_figs.ENDPOINT_VARIANT_MODES),
+        default="annotated",
+        help=(
+            "Qualitative endpoint-marker exports: annotated, clean main panels, "
+            "or paired. Spyglass endpoint labels are always retained."
+        ),
+    )
     parser.add_argument(
         "--plots_root",
         type=Path,
@@ -530,11 +576,24 @@ def main():
     summary_dir = out_dir / "summary_plots"
     summary_dir.mkdir(parents=True, exist_ok=True)
 
+    reconstruction_profile = frozen_reconstruction_profile()
     manifest = {
+        "schema_version": 2,
+        "status": "planned" if args.dry_run else "running",
+        "generation_provenance": generation_provenance(
+            profile=reconstruction_profile,
+            profile_application="explicitly_applied_to_dedicated_resolution_runs",
+        ),
+        "endpoint_variants": args.endpoint_variants,
         "out_dir": str(out_dir),
         "summary_plots": {},
         "runs": [],
     }
+    manifest_path = out_dir / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2) + "\n",
+        encoding="utf-8",
+    )
 
     resolutions = _parse_float_list(args.resolutions)
     wiggles = _parse_float_list(args.wiggles)
@@ -564,6 +623,7 @@ def main():
                     "seed": exp_spec["seed"],
                     "case_index": exp_spec["case_index"],
                     "save_name": save_name,
+                    "status": "planned",
                 }
                 manifest["runs"].append(run_record)
 
@@ -595,35 +655,66 @@ def main():
                     exp_spec["num_arg"],
                     str(exp_spec["num_default"]),
                 ]
+                cmd.extend(
+                    reconstruction_cli_args(exp_spec["name"], reconstruction_profile)
+                )
+                run_record["command"] = cmd
 
                 if args.dry_run:
                     print(" ".join(cmd))
                     continue
 
                 if args.skip_existing and _run_exists(save_name, exp_spec["case_index"]):
+                    run_record["status"] = "existing"
                     print(
                         f"[SKIP] {exp_spec['name']} {exp_spec['algo']} "
                         f"N={int(round(resolution * 100))} wiggle={wiggle}"
+                    )
+                    manifest_path.write_text(
+                        json.dumps(manifest, indent=2) + "\n",
+                        encoding="utf-8",
                     )
                     continue
 
                 log_path = log_dir / f"{save_name}.log"
                 code = _run_subprocess(cmd, log_path)
                 if code != 0:
+                    run_record["status"] = "failed"
+                    run_record["log"] = str(log_path)
+                    manifest["status"] = "failed"
+                    manifest_path.write_text(
+                        json.dumps(manifest, indent=2) + "\n",
+                        encoding="utf-8",
+                    )
                     raise RuntimeError(
                         f"{exp_spec['name']} {exp_spec['algo']} N={resolution} w={wiggle} failed; see {log_path}"
                     )
+                run_record["status"] = "completed"
+                run_record["log"] = str(log_path)
+                manifest_path.write_text(
+                    json.dumps(manifest, indent=2) + "\n",
+                    encoding="utf-8",
+                )
 
         if args.dry_run:
             continue
 
-        out_path = summary_dir / f"{exp_spec['name']}_resolution_cartesian_vs_perturbed.png"
-        _generate_figure(exp_spec, out_path)
-        manifest["summary_plots"][exp_spec["name"]] = str(out_path)
-        print(f"[summary] {exp_spec['name']}: {out_path}")
+        variant_outputs = _generate_endpoint_variant_figures(
+            exp_spec,
+            summary_dir,
+            args.endpoint_variants,
+        )
+        manifest["summary_plots"][exp_spec["name"]] = variant_outputs
+        for variant_name, artifacts in variant_outputs.items():
+            print(f"[summary:{variant_name}] {exp_spec['name']}: {artifacts['pdf']}")
 
-    manifest_path = out_dir / "manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2))
+    if not args.dry_run:
+        manifest["status"] = "completed"
+
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2) + "\n",
+        encoding="utf-8",
+    )
     print(f"Manifest: {manifest_path}")
 
 

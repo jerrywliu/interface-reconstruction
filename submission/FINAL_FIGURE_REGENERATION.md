@@ -172,21 +172,31 @@ Do not choose or rename a variant until author review.
 
 ### Resolution Studies
 
-Source: final VTK and facet metadata in `PLOTS_VIEW`. Current proposed cases are
-lines `0`, squares `22`, circles `12`, ellipses `12`, and Zalesak `20`; the
-resolutions are defined in `APPENDIX_BEST_METHODS` in the same driver.
+These are dedicated final-commit companion runs at `N=16,32,64`, not rows in
+the primary sweep. Current proposed cases are lines `0`, squares `22`, circles
+`12`, ellipses `12`, and Zalesak `20`.
 
 ```bash
-python -m experiments.static.generate_section6_maintext_figures \
-  --csv "$FINAL_ROOT/perturbed_sweep.csv" \
-  --plots_root "$PLOTS_VIEW" \
-  --out_dir "$FIGURE_ROOT/section6" \
-  --figure_groups appendix_resolutions \
-  --endpoint_variants paired
+python -m experiments.static.run_appendix_resolution_visuals --only lines \
+  --case_index 0 --resolutions 0.16,0.32,0.64 --wiggles 0,0.1 \
+  --endpoint_variants paired --out_dir "$FIGURE_ROOT/resolution/lines"
+python -m experiments.static.run_appendix_resolution_visuals --only squares \
+  --case_index 22 --resolutions 0.16,0.32,0.64 --wiggles 0,0.1 \
+  --endpoint_variants paired --out_dir "$FIGURE_ROOT/resolution/squares"
+python -m experiments.static.run_appendix_resolution_visuals --only circles \
+  --case_index 12 --resolutions 0.16,0.32,0.64 --wiggles 0,0.1 \
+  --endpoint_variants paired --out_dir "$FIGURE_ROOT/resolution/circles"
+python -m experiments.static.run_appendix_resolution_visuals --only ellipses \
+  --case_index 12 --resolutions 0.16,0.32,0.64 --wiggles 0,0.1 \
+  --endpoint_variants paired --out_dir "$FIGURE_ROOT/resolution/ellipses"
+python -m experiments.static.run_appendix_resolution_visuals --only zalesak \
+  --case_index 20 --resolutions 0.16,0.32,0.64 --wiggles 0,0.1 \
+  --endpoint_variants paired --out_dir "$FIGURE_ROOT/resolution/zalesak"
 ```
 
 Outputs are
-`section6/appendix_cases/<experiment>_best_by_resolution_{with_endpoints,clean}.pdf`.
+`resolution/<experiment>/summary_plots/<experiment>_resolution_cartesian_vs_perturbed_{with_endpoints,clean}.pdf`.
+Preserve each companion `manifest.json`, log set, and raw geometry directory.
 
 ### All-Method Panels
 
@@ -224,7 +234,8 @@ python -m experiments.static.run_appendix_c0_study \
   --save_prefix "final_guarded_c0_${SOURCE_COMMIT:0:12}" \
   --seeds 0 \
   --ellipses 25 \
-  --zalesak 25
+  --zalesak 25 \
+  --endpoint_variants paired
 ```
 
 Before accepting the plots, verify the complete `165`-setting study and all raw
@@ -249,7 +260,7 @@ PY
 
 Authoritative outputs are
 `C0_ROOT/summary_plots/{ellipses,zalesak}_appendix_c0_2x2.pdf` and
-`C0_ROOT/representative_cases/{ellipses,zalesak}_appendix_c0_representative.pdf`.
+`C0_ROOT/representative_cases/{ellipses,zalesak}_appendix_c0_representative_{with_endpoints,clean}.pdf`.
 The captions must describe C0 continuity as conditional because infeasible
 endpoint refits retain the conservative pre-C0 facet.
 
@@ -297,14 +308,14 @@ The PDF is authoritative. The 300-DPI PNG is only for review.
 | `section6/summary_plots/ellipses_maintext_metrics.pdf` | `ellipse_reconstruction_maintext_metrics.pdf` |
 | `section6/summary_plots/zalesak_maintext_metrics.pdf` | `zalesak_reconstruction_maintext_metrics.pdf` |
 | `section6/representative_cases/<experiment>_maintext_representative_<approved>.pdf` | `<singular>_reconstruction_maintext_representative.pdf` |
-| `section6/appendix_cases/<experiment>_best_by_resolution_<approved>.pdf` | `<experiment>_resolution_cartesian_vs_perturbed.pdf` |
+| `resolution/<experiment>/summary_plots/<experiment>_resolution_cartesian_vs_perturbed_<approved>.pdf` | `<experiment>_resolution_cartesian_vs_perturbed.pdf` |
 | `all_method_summary_plots/lines_all_methods_2x2.pdf` | `line_reconstruction_perturbed_all_methods_2x2.pdf` |
 | `all_method_summary_plots/squares_all_methods_2x2.pdf` | `square_reconstruction_perturbed_all_methods_2x2.pdf` |
 | `all_method_summary_plots/circles_all_methods_5x2_axes.pdf` | `circle_reconstruction_perturbed_all_methods_5x2_axes.pdf` |
 | `all_method_summary_plots/ellipses_all_methods_5x2_axes.pdf` | `ellipse_reconstruction_perturbed_all_methods_5x2_axes.pdf` |
 | `all_method_summary_plots/zalesak_all_methods_2x2.pdf` | `zalesak_reconstruction_perturbed_all_methods_2x2.pdf` |
 | `C0_ROOT/summary_plots/<experiment>_appendix_c0_2x2.pdf` | same basename |
-| `C0_ROOT/representative_cases/<experiment>_appendix_c0_representative.pdf` | same basename |
+| `C0_ROOT/representative_cases/<experiment>_appendix_c0_representative_<approved>.pdf` | unsuffixed representative basename |
 
 `<approved>` is either `with_endpoints` or `clean`. Record that choice and the
 final release path in `submission/figure_provenance.csv` before installation.
@@ -318,7 +329,7 @@ may rasterize pages for convenient review and is not a manuscript asset.
 python submission/pdf_vector_qa.py \
   "$FIGURE_ROOT/section6/summary_plots" \
   "$FIGURE_ROOT/section6/representative_cases" \
-  "$FIGURE_ROOT/section6/appendix_cases" \
+  "$FIGURE_ROOT/resolution" \
   "$FIGURE_ROOT/all_method_summary_plots" \
   "$FIGURE_ROOT/deterministic" \
   --json "$FIGURE_ROOT/pdf_vector_qa.json"

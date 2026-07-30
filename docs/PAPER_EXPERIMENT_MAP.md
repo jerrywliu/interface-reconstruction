@@ -191,6 +191,9 @@ These are deterministic companion runs at `N=16,32,64`, not rows in the
 python -m experiments.static.run_appendix_resolution_visuals \
   --only <benchmark> \
   --case_index <case> \
+  --resolutions 0.16,0.32,0.64 \
+  --wiggles 0,0.1 \
+  --endpoint_variants paired \
   --out_dir "$FIGURES/resolution/<benchmark>"
 ```
 

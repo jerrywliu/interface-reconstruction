@@ -13,6 +13,10 @@ import numpy as np
 from matplotlib.lines import Line2D
 from matplotlib.patches import Polygon as MplPolygon
 
+from experiments.static.figure_generation_provenance import (
+    frozen_reconstruction_profile,
+    generation_provenance,
+)
 from experiments.static.lines import RANDOM_SEED
 from main.geoms.linear_facet import getPolyLineIntersects
 from main.structs.facets.linear_facet import LinearFacet
@@ -294,6 +298,12 @@ def build_figure(
 
     metadata = {
         "source": "extracted from the perturbed Cartesian line benchmark",
+        "generation_provenance": generation_provenance(
+            profile=frozen_reconstruction_profile(),
+            profile_application=(
+                "context_only_not_applied_to_independent_plic_stencil_baselines"
+            ),
+        ),
         "case_index": case_index,
         "center_cell": [cell_x, cell_y],
         "resolution": resolution,
