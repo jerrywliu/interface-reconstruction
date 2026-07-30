@@ -2,6 +2,10 @@
 
 Updated: 2026-07-30
 
+For the audited mapping of all 26 active manuscript PDF includes, including the
+`N=16,32,64` companion-run decision and paired-variant tooling gaps, follow
+`submission/POST_SWEEP_FIGURE_MANIFEST.md`.
+
 ## Policy And Scope
 
 - Reviewed July 2026 figures are the oldest eligible submission sources.

@@ -6,6 +6,10 @@ This is the paper-to-code index for the static reconstruction results in
 Section 6 and its appendix. Run commands from the repository root. The target
 submission outputs are vector PDFs; PNG files are review previews only.
 
+The audited, per-include execution checklist for the completed sweep is
+`submission/POST_SWEEP_FIGURE_MANIFEST.md`. It resolves the low-resolution
+companion-run and endpoint-variant requirements against the active manuscript.
+
 ## Result Sources
 
 | Tier | Location | Use |
