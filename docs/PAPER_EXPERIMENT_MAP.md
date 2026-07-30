@@ -15,8 +15,8 @@ companion-run and endpoint-variant requirements against the active manuscript.
 | Tier | Location | Use |
 | --- | --- | --- |
 | Historical paper assets | March/May 2026 camera-ready bundles | Layout comparison only. Do not use as final numerical provenance. |
-| July candidate | `results/static/static_paper_simplified_default_20260717_212413/` | Reviewed candidate: 300 affected-method runs, 7,500 cases. Its source snapshot is reproducible but dirty, and its historical square/Zalesak `area_error` columns must not be promoted. |
-| Final release | `results/static/submission_static_<UTC>_<12-char-commit>/` | Pending canonical source: 970 all-method runs, 24,250 cases, clean source commit, read-only raw bundles, and consolidated diagnostics. This supersedes July wherever data or figures are regenerated. |
+| July baseline | `results/static/static_paper_simplified_default_20260717_212413/` | Comparison/recovery only: 300 affected-method runs, 7,500 cases. Its source snapshot is reproducible but dirty, and its historical square/Zalesak `area_error` columns are not submission-equivalent. |
+| Final release | `results/static/submission_static_<UTC>_<12-char-commit>/` | Canonical after completion and audit: 970 all-method runs, 24,250 cases, clean source commit, read-only raw bundles, and consolidated diagnostics. |
 
 The machine-readable specification is `submission/submission_config.json`.
 Figure promotion status and the paper filename contract are in
@@ -26,8 +26,8 @@ Set these shell variables when a final release exists:
 
 ```bash
 RELEASE=results/static/submission_static_<UTC>_<12-char-commit>
-JULY=results/static/static_paper_simplified_default_20260717_212413
 FIGURES="$RELEASE/figures"
+PLOTS_VIEW="$FIGURES/final_plots_view"
 ```
 
 ## Final Sweep
@@ -121,28 +121,17 @@ it to `$RELEASE/raw_runs/<unique-save-name>/`.
 
 ### Prepare final geometry aliases
 
-Paper figure code uses stable, profile-free run names. Build a review view that
-maps those names to the namespaced final raw bundles. The July merged CSV is a
-key/name contract here, not the promoted numerical source:
-
-```bash
-python -m experiments.static.prepare_figure_review \
-  --run_root "$RELEASE" \
-  --baseline_csv "$JULY/figure_review/current_run_section6_merged.csv" \
-  --current_plots_root "$RELEASE/raw_runs" \
-  --archive_plots_root "$JULY/figure_review/plots_union"
-```
-
-Inspect `$RELEASE/figure_review/review_data_manifest.json`. Final rows should
-replace every paper-grid key that is present in the final sweep. The resulting
-geometry root is `$RELEASE/figure_review/plots_union`.
+Paper figure code uses stable, profile-free run names. Build the final-only,
+symlink-based canonical view from immutable raw bundles using the exact snippet in
+`submission/FINAL_FIGURE_REGENERATION.md`. Do not fill missing geometry from July;
+the release audit and view construction must fail instead.
 
 ### Main-text panels
 
 ```bash
 python -m experiments.static.generate_section6_maintext_figures \
   --csv "$RELEASE/perturbed_sweep.csv" \
-  --plots_root "$RELEASE/figure_review/plots_union" \
+  --plots_root "$PLOTS_VIEW" \
   --out_dir "$FIGURES/section6" \
   --figure_groups quantitative,representative \
   --endpoint_variants paired

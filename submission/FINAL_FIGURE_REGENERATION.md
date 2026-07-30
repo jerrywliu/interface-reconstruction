@@ -3,14 +3,13 @@
 Updated: 2026-07-30
 
 For the audited mapping of all 26 active manuscript PDF includes, including the
-`N=16,32,64` companion-run decision and paired-variant tooling gaps, follow
+`N=16,32,64` companion-run decision and paired-variant contract, follow
 `submission/POST_SWEEP_FIGURE_MANIFEST.md`.
 
 ## Policy And Scope
 
-- Reviewed July 2026 figures are the oldest eligible submission sources.
-- Prefer figures regenerated from the completed final sweep whenever its data,
-  algorithm, metrics, or method comparison supersedes the July source.
+- The completed, audited final sweep is the primary numerical and geometry source.
+- July 2026 figures are comparison/recovery provenance only after that gate passes.
 - March and May assets are layout references only.
 - Submission assets are PDF. They must contain no raster image objects and every
   reported font must be embedded. PNG exports are 300-DPI review previews only;
@@ -19,9 +18,9 @@ For the audited mapping of all 26 active manuscript PDF includes, including the
   circles in the annotated version, and clean main panels in the clean version.
   Both retain endpoint/cell-crossing markers in spyglasses and semantic corner
   diamonds everywhere.
-- Do not regenerate from a partial release. At the time this workflow was written,
-  `submission_static_20260730_201510_df31a8d5f9b3` was still `running` and was
-  therefore intentionally not used.
+- Do not regenerate from a partial release. The earlier
+  `submission_static_20260730_201510_df31a8d5f9b3` namespace was an aborted
+  storage-layout attempt and is never an eligible source.
 
 This workflow does not change the reconstruction algorithm or the experiment map.
 It builds a read-only canonical-name view of the immutable raw bundles because the

@@ -4,25 +4,23 @@ Status: **candidate, not frozen**
 
 ## Decision
 
-The submission figures should be promoted from the July 2026 review bundle wherever
-they pass scientific and visual review. July 2026 is the oldest eligible final
-provenance date. New figures produced by the submission validation or final sweep
-supersede July candidates whenever data, algorithms, or comparison sets changed.
-March and May assets remain useful only as comparison baselines.
+The completed, audited final sweep is the primary source for submission metrics,
+geometry, and all-method comparisons. July 2026 remains comparison/recovery
+provenance only, while March and May assets remain layout references.
 
 The current manuscript is not yet a single-version result set. It contains 26 active
 PDF graphics: 24 vector conversions of historically approved March/May plots and two
 July deterministic method figures. The numerical panels therefore must be replaced
 or explicitly revalidated before the result set is called frozen.
 
-The July review bundle already contains vector-only PDF candidates for all five main
-quantitative panels and for the paired main/appendix qualitative views. Direct main-
-text promotion is therefore available after case/style approval. The all-method and
-  any reorganized resolution/supplement panels should be regenerated from the final
-  result bundle instead of converting the July PNG exports. C0 panels should be
-  regenerated from the repaired conservation-guarded implementation.
+The July review bundle contains vector-only comparison candidates for all five main
+quantitative panels and paired qualitative views. Use them to diagnose visual or
+numerical differences, not as the promotion source. Regenerate main, all-method,
+resolution, and supplement panels from the final result bundle or final-commit
+companion runs. Regenerate C0 panels from the repaired conservation-guarded
+implementation.
 
-## Candidate Sources
+## Comparison And Recovery Sources
 
 - July affected-method sweep:
   `results/static/static_paper_simplified_default_20260717_212413/`

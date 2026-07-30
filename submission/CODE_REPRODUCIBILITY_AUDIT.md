@@ -18,12 +18,11 @@ a collision-proof namespace, saves exact case geometry and case/cell/merge/fallb
 diagnostics, snapshots the source, and copies every raw run into the release root.
 The deterministic case and mesh seeds are explicit.
 
-The remaining reproducibility risk is primarily environmental and archival rather
-than algorithmic. The repository does not declare a supported Python/platform
-envelope, the checked-in requirements do not match the environment currently used
-for validation, and the release has no environment record or whole-release checksum
-manifest. Those items should be resolved or explicitly captured before a submission
-bundle is called independently reproducible.
+The remaining reproducibility risk is primarily environmental rather than
+algorithmic. The launcher captures the exact sweep environment, but the checked-in
+requirements do not match the validation environment and a clean-environment
+numerical acceptance run is still required. The release audit can generate and
+verify a whole-release checksum manifest after the approved figure packet is added.
 
 ## Status By Area
 
@@ -34,12 +33,12 @@ bundle is called independently reproducible.
 | Deterministic cases | Good for the final sweep | The launcher fixes perturbation seed `0`; static drivers use benchmark-specific constant RNG seeds for case geometry and record both seeds in manifests. |
 | Configuration discovery | Adequate for the launcher | The resolved submission config is archived. Direct module/config entry points still assume the repository root as the working directory. |
 | Run manifests | Good | Per-run manifests record source commit/branch, command, numerical parameters, and relative artifact names. Sweep manifests record planned/successful counts and failures. |
-| Raw-bundle self-containment | Good with two gaps | Scientific raw runs, consolidated diagnostics, source snapshot, logs, resolved config, and environment capture live under one result root. Disposable raster previews are omitted because figures replay from exact VTK/metadata. The sweep manifest stores absolute artifact paths, and the release has no file-level checksum inventory. |
-| Dependency capture | Needs action | `requirements.txt` is pinned, but no Python version, OS/architecture, BLAS/LAPACK, GEOS, FreeType, or full installed-package record is archived. |
+| Raw-bundle self-containment | Good with one portability gap | Scientific raw runs, consolidated diagnostics, source snapshot, logs, resolved config, and environment capture live under one result root. Disposable raster previews are omitted because figures replay from exact VTK/metadata. The sweep manifest still stores some absolute artifact paths. |
+| Dependency capture | Good for the accepted run | `environment.json` records Python/platform details, installed packages, NumPy/SciPy builds, GEOS, FreeType, VTK, and requirements fingerprints. General public support still needs clean-environment acceptance. |
 | Environment consistency | Needs action | The audited Python 3.9.13 environment differs from checked-in pins, including NumPy `1.24.4` vs `1.23.4`, SciPy `1.8.1` vs `1.9.2`, and Matplotlib `3.8.3` vs `3.6.1`. `pip check` also fails because of unrelated Torch packages. |
-| Test capture | Partial | The repository suite passes, but there is no CI workflow, pytest configuration, declared test dependency set, or tested Python/platform matrix. |
-| Generated-file hygiene | Needs cleanup after freeze | `.gitignore` covers `plots/*` and result PNGs, but not result CSV/JSON/PDF, `output/`, `tmp/`, `logs/`, or `.pytest_cache/`. This is the source of the large untracked worktree seen during July work. |
-| Stale scripts | Needs classification, not deletion now | Legacy advection/reconstruction modules and several older camera-ready launchers remain callable. Removing or redirecting them immediately would be higher risk than documenting the canonical submission path. |
+| Test capture | Good for the declared target | `requirements-test.txt` and a CPython 3.9 GitHub Actions workflow run the source audit and full suite. A broader Python/platform matrix is not claimed. |
+| Generated-file hygiene | Good | `.gitignore` excludes scratch roots and raster previews while keeping release CSV/JSON/PDF/VTK/manifests visible; `docs/GENERATED_FILES.md` records the policy. |
+| Stale scripts | Classified | `docs/ENTRY_POINTS.md` distinguishes canonical, supported research, and legacy/superseded paths without deleting replay code. |
 
 ## Completed Low-Risk Cleanup
 
@@ -97,12 +96,12 @@ not substitute for rerunning a compact cross-environment acceptance suite.
 ## Packaging And Dependency Findings
 
 `requirements.txt` pins runtime and transitive packages together and includes the
-formatter `black`, but omits at least the test runner `pytest` and figure-packet
-dependency `reportlab`. There is no `pyproject.toml`, package metadata, lock file,
-environment file, container definition, or supported Python version declaration.
-The code is normally run in-place through `python -m ...`, so installation metadata
-is not required for the current launcher, but a fresh user cannot infer which pins
-are runtime, test, plotting, or optional tooling.
+formatter `black`. Additive `requirements-test.txt` and
+`requirements-figures.txt` now identify `pytest` and `reportlab` without changing
+the frozen numerical stack. There is still no package metadata, lock file,
+environment file, container definition, or broad supported-platform declaration.
+The code is run in place through `python -m ...`, so installation metadata is not
+required for the current launcher.
 
 Recommended packaging follow-up after the result freeze:
 
@@ -110,10 +109,10 @@ Recommended packaging follow-up after the result freeze:
    set or the environment that produced the accepted final results.
 2. Validate that environment from a clean virtual environment and record the exact
    Python version and platform.
-3. Split runtime, test, and figure-tool dependencies, or encode them as optional
-   dependency groups in `pyproject.toml`.
-4. Add one clean-environment installation smoke and the focused reconstruction test
-   suite to CI. A broad platform matrix can follow after submission.
+3. Consider a lock file or optional dependency groups only after the accepted
+   environment and numerical tolerance checks are recorded.
+4. Add one clean-environment numerical acceptance job. A broad platform matrix can
+   follow after submission.
 
 Do not update numerical library pins immediately before the sweep without rerunning
 the acceptance tests; that would be a scientific change even if the source code is
@@ -130,9 +129,9 @@ bash submission/run_final_static_sweep.sh
 The launcher changes to the repository root before invoking modules, which avoids
 the relative-path assumptions in `util/config.py`. Direct use of `run.py` and some
 legacy shell scripts remains dependent on being launched from the repository root.
-The root README also describes older experiment commands and known issues alongside
-the newer workflow docs, so it should not be considered the authoritative
-submission recipe.
+The root README points readers to `docs/ENTRY_POINTS.md`,
+`docs/DEPENDENCIES.md`, and `docs/PAPER_EXPERIMENT_MAP.md`; the launcher and map,
+not historical command examples later in the README, define the submission recipe.
 
 For the final archive, retain these three distinct records:
 
@@ -157,12 +156,12 @@ Remaining archival risks:
 
 - `sweep_manifest.json` uses absolute paths for aggregate artifacts, so it is not
   fully relocatable even though the raw-run inventory is relative;
-- only the source tarball has a recorded SHA-256 digest; raw runs, consolidated CSVs,
-  figures, logs, resolved config, and environment capture do not;
+- a whole-release SHA-256 manifest is intentionally absent until approved figures
+  are installed;
 - read-only permission bits prevent casual edits but are not an integrity proof;
-- no single verifier currently checks expected run/case/cell counts, duplicate keys,
-  missing/nonfinite metrics, raw-bundle existence, and all file hashes after copying
-  the release to its archival destination.
+- `submission/audit_final_release.py` now verifies expected run/case counts,
+  duplicate keys, required finite metrics, raw-bundle coverage, source/config
+  consistency, and optional checksum generation/verification.
 
 Before upload, generate a sorted SHA-256 manifest rooted at the release directory,
 copy the bundle, verify the manifest at the destination, and retain the audit report
@@ -171,18 +170,11 @@ environment record are final.
 
 ## Generated Files And Stale Code
 
-The narrow ignore rules are useful during a source audit because unexpected files
-remain visible, but they make ordinary development status difficult to read. A later
-cleanup should choose one of two policies:
-
-1. ignore all generated roots and rely on explicit release directories/manifests; or
-2. keep result metadata visible but ignore timestamped run directories through a
-   documented naming convention.
-
-Apply that policy only after the final bundle is archived so it does not hide files
-that still need review. Also classify `run_old.py`, old initialization modules,
-historical camera-ready launchers, and optional VisIt tooling in a deprecation index.
-Do not delete them based solely on names; some remain useful for historical replay.
+The repository now ignores disposable scratch roots and raster previews while
+leaving release CSV, JSON, PDF, SVG, VTK, environment, checksum, and manifest files
+visible. `docs/GENERATED_FILES.md` records this policy. `docs/ENTRY_POINTS.md`
+classifies `run_old.py`, old initialization modules, historical camera-ready
+launchers, and optional research tooling without deleting paths needed for replay.
 
 ## Tests And Verification Still Required
 
@@ -220,11 +212,9 @@ The final release still needs these operational checks:
 
 ### P1 Before Public Code Release
 
-- Declare supported Python/platform versions and separate runtime/test/figure deps.
-- Add CI for clean installation and focused/full tests.
+- Complete clean-environment numerical acceptance before declaring broader
+  Python/platform support.
 - Make aggregate manifest paths release-relative.
-- Document or retire legacy entry points and stale launchers.
-- Adopt a deliberate generated-file ignore/archive policy.
 - Add a compact public reproduction command for every paper table/figure after the
   experiment-to-code map is finalized.
 

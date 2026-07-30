@@ -34,37 +34,27 @@ candidate figure packet, and the selected endpoint variants have been approved.
    and all reported fonts embedded. PNG siblings are 300-DPI review previews,
    never manuscript inputs.
 
-## Known Documentation And Tooling Gaps
+## Integrated Tooling And Remaining Review Work
 
-- `submission/FINAL_FIGURE_REGENERATION.md` currently regenerates appendix
-  resolution strips from the primary sweep through
-  `generate_section6_maintext_figures --figure_groups appendix_resolutions`.
-  The live constants produce `N=32,64,100,150` for lines/circles/ellipses and
-  `N=50,64,100,150` for squares/Zalesak, so those figures do not match the active
-  `N=16,32,64` captions.
+- `submission/FINAL_FIGURE_REGENERATION.md` now uses dedicated companion runs for
+  the active `N=16,32,64` captions. Do not substitute primary-sweep resolution
+  strips, whose grids differ by benchmark.
 - The correct low-resolution entry point is
   `experiments.static.run_appendix_resolution_visuals`. Its default cases are
   stale for lines, squares, and Zalesak, so invoke it once per benchmark with
   the explicit case indices in Command R below.
-- `run_appendix_resolution_visuals` does not yet accept an endpoint-variant
-  option. Add paired export support before the final low-resolution run. The
-  required stems are
+- `run_appendix_resolution_visuals` and `run_appendix_c0_study` now accept
+  `--endpoint_variants paired`. The required qualitative stems are
   `<experiment>_resolution_cartesian_vs_perturbed_{with_endpoints,clean}.pdf`.
-- `run_appendix_c0_study` likewise emits one endpoint-labeled representative.
-  Add paired export support before the guarded-`C0` study. Metrics remain
-  unpaired.
-- The low-resolution and guarded-`C0` top-level manifests, and the two
-  deterministic figure data JSON files, do not all record the source commit and
-  frozen reconstruction profile explicitly. Add those fields (or write one
-  enclosing generation manifest that records them and the input/output paths)
-  before treating the regenerated packet as archival provenance.
+  Guarded-`C0` metrics remain unpaired.
+- Low-resolution and guarded-`C0` manifests, plus both deterministic figure data
+  JSON files, now record the source commit and frozen reconstruction profile.
 - The active `C0` prose and captions contain historical pre-guard numerical
   summaries. Reconcile them against the new guarded study and make any
   manuscript changes in blue.
-- The final-figure document's note that
-  `submission_static_20260730_201510_df31a8d5f9b3` is running is stale; that was
-  the aborted storage-layout attempt. Use only the completed release selected by
-  the release audit.
+- `submission_static_20260730_201510_df31a8d5f9b3` was the aborted
+  storage-layout attempt. Use only the completed release selected by the release
+  audit.
 - The July-baseline alias path in `docs/PAPER_EXPERIMENT_MAP.md` is unnecessary
   for a complete final release. Prefer the final-only symlink view in
   `submission/FINAL_FIGURE_REGENERATION.md`; it prevents historical geometry
@@ -127,8 +117,7 @@ python -m experiments.static.run_perturbed_sweeps \
 
 ### R: Paired `N=16,32,64` Resolution Companions
 
-This command requires the paired-export extension noted above. Run benchmarks
-separately so each manifest retains its explicit case selection:
+Run benchmarks separately so each manifest retains its explicit case selection:
 
 ```bash
 python -m experiments.static.run_appendix_resolution_visuals --only lines \
@@ -153,7 +142,7 @@ Cartesian/perturbed (`w=0,0.1`). Preserve `manifest.json`, logs, and raw geometr
 
 ### C: Guarded-`C0` Study And Paired Representatives
 
-This command requires the paired-export extension noted above:
+Run the paired representative export with the guarded study:
 
 ```bash
 test ! -e "$C0_ROOT"
@@ -248,9 +237,10 @@ Their gate is a clean manuscript compile and visual inspection at 800% zoom.
 ## Final QA And Installation Checklist
 
 - [ ] Final release audit passes before plotting.
-- [ ] Resolution and guarded-`C0` runners support paired PDF exports.
-- [ ] Every command writes a manifest or data JSON identifying source commit,
-      case, resolution, perturbation, seed, method, fallback, and profile.
+- [x] Resolution and guarded-`C0` runners support paired PDF exports.
+- [x] Dedicated companion commands write a manifest or data JSON identifying
+      source commit, case, resolution, perturbation, seed, method, fallback, and
+      profile.
 - [ ] All 26 candidate manuscript PDFs pass:
 
   ```bash

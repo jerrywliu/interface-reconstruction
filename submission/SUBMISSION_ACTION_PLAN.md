@@ -84,8 +84,8 @@ All substantive additions or replacements remain blue until collaborator approva
 
 - [x] Inventory all 26 active manuscript PDFs.
 - [x] Confirm the July main quantitative and paired qualitative candidates are vector-only.
-- [ ] Promote reviewed July figures, superseded by newer submission-pass outputs.
-  - July 2026 is the oldest eligible final provenance; do not promote March/May numerical assets
+- [ ] Regenerate and promote figures from the completed, audited final sweep.
+  - use July only for comparison/recovery; do not promote March/May numerical assets
 - [ ] Approve representative cases and clean versus endpoint variants.
 - [ ] Regenerate all-method and reorganized resolution/supplement panels from the final
   result bundle rather than reusing historical PNG data.
@@ -122,5 +122,5 @@ March and May assets are historical comparison baselines, not the target submiss
 3. Accept the blue conditional-C0 wording and regenerated guarded-C0 figures.
 4. Accept the blue manuscript diff and supplement split.
 5. Freeze and run one clean full sweep.
-6. Approve the July/newer figure packet.
+6. Approve the final-sweep figure packet.
 7. Promote figures, remove accepted revision coloring, compile, and package submission files.

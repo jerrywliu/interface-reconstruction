@@ -3,8 +3,8 @@
   "status": "candidate_not_frozen",
   "launch_approved": true,
   "figure_policy": {
-    "primary_source": "Promote reviewed July 2026 figures, superseded by newer submission-validation outputs where available.",
-    "historical_sources": "March and May 2026 paper assets are comparison baselines only.",
+    "primary_source": "Use the completed, audited final sweep for numerical and geometry figures.",
+    "historical_sources": "July 2026 is comparison/recovery provenance only; March and May 2026 paper assets are layout references only.",
     "promotion_gate": [
       "all required validation checks pass",
       "representative case and endpoint style are approved",
@@ -23,7 +23,7 @@
       "source_dirty": true,
       "source_snapshot_sha256": "4975ad99db05ac6d606de4f6f17f74242df78b993d4070a0e51c7ce0a5c1e7fd",
       "scope": "300 affected-method runs and 7500 cases",
-      "role": "candidate and comparison source, not the final clean-commit freeze"
+      "role": "comparison and recovery source, not the final clean-commit freeze"
     }
   },
   "numerics": {

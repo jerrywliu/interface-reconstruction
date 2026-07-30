@@ -2,7 +2,8 @@
 
 `compare_release_results.py` compares the shared deterministic cases in two
 completed static-sweep releases. It is intended for the final 970-run release
-and the authoritative July 2026 affected-method release.
+and the historical July 2026 affected-method baseline. The completed, audited
+final release is authoritative; July is comparison/recovery provenance only.
 
 The 970-run release contains 670 method runs that July does not. Those rows are
 reported as candidate-only coverage and are not an error. Every July run should
