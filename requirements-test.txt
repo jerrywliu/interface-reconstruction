@@ -1,0 +1,4 @@
+-r requirements.txt
+
+# Test-only dependency; verified with the repository suite on CPython 3.9.
+pytest==8.4.2

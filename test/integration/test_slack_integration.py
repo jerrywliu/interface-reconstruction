@@ -16,7 +16,15 @@ import json
 import tempfile
 from datetime import datetime
 
+import pytest
+
 from util.io.slack import send_results_to_slack
+
+
+pytestmark = pytest.mark.skipif(
+    os.getenv("RUN_SLACK_INTEGRATION") != "1",
+    reason="set RUN_SLACK_INTEGRATION=1 to send a real Slack test message",
+)
 
 
 def _build_message():

@@ -1,5 +1,11 @@
 # Static Shape Reconstruction Experiments
 
+> **Submission entry point:** Use `submission/run_final_static_sweep.sh` for the
+> frozen full paper result set. The lower-level and camera-ready commands below are
+> useful for targeted research or historical replay but do not, by themselves,
+> reproduce the approved submission grid. See `docs/ENTRY_POINTS.md` and
+> `docs/PAPER_EXPERIMENT_MAP.md`.
+
 This directory contains experiments for evaluating interface reconstruction algorithms on static shapes (lines, squares, circles, ellipses, and Zalesak's disk). Each experiment tests different reconstruction algorithms across various resolutions and measures reconstruction quality using appropriate metrics for each shape type.
 
 ## Experimental Setup
@@ -18,7 +24,7 @@ All experiments use a 100x100 Cartesian grid with varying resolutions. The shape
 
 ## Running the Experiments
 
-### Current Paper-Facing Rerun
+### Historical Affected-Row Rerun
 
 Use the dedicated launcher for the affected paper rows. It fixes the method set,
 LVIRA fallback, rescue profile, and canonical perturbation spectrum; the Python

@@ -1,5 +1,10 @@
 # Experiments Overview
 
+> **Scope:** This page documents general development sweep interfaces. The frozen
+> paper result set uses `submission/run_final_static_sweep.sh`; see
+> `docs/ENTRY_POINTS.md` and `docs/PAPER_EXPERIMENT_MAP.md` before reproducing a
+> manuscript result.
+
 This document describes the **static experiment suites** that are run by the two sweep scripts:
 
 - `experiments/static/run_linear_sweeps.py`

@@ -2,6 +2,11 @@
 
 Updated: 2026-03-03
 
+> **Superseded for final results:** This March 2026 bundling workflow is retained
+> for historical replay. New submission results use
+> `submission/run_final_static_sweep.sh` and the immutable release workflow mapped
+> in `docs/PAPER_EXPERIMENT_MAP.md`.
+
 ## Current State (Snapshot)
 
 - Raw static run outputs are mostly under `plots/` in a flat namespace (`perturb_sweep_*`).

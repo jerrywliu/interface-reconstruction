@@ -4,14 +4,38 @@ An example implementation in Python of an interface reconstruction method, using
 
 ## Quick Start
 
-Run all linear (and linear-corner where applicable) static experiments in one go:
+This repository includes current paper workflows alongside historical research
+drivers. Start with the status index before choosing an entry point:
+
+- `docs/ENTRY_POINTS.md`: canonical, supported research, and legacy commands
+- `docs/DEPENDENCIES.md`: runtime, test, and figure environments
+- `docs/GENERATED_FILES.md`: scratch-output and release-metadata policy
+- `docs/PAPER_EXPERIMENT_MAP.md`: paper experiments and plots mapped to code
+
+Install the frozen runtime and test tooling, then run the test suite:
 
 ```bash
-# Subprocess mode keeps memory low; --notify uploads summary plots to Slack (if configured).
-python -m experiments.static.run_linear_sweeps --subprocess --notify
+python3.9 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements-test.txt
+python -m pytest -q test
 ```
 
-Summary plots are written to `results/static/linear_*.png` and uploaded to Slack when `--notify` is set.
+For a compact targeted reconstruction, run one deterministic circle case:
+
+```bash
+python -m experiments.static.circles \
+  --config static/circle \
+  --facet_algo circular \
+  --resolution 1.0 \
+  --case_indices 0 \
+  --save_name quickstart_circle
+```
+
+The frozen full-paper sweep is launched through
+`submission/run_final_static_sweep.sh`. It is intentionally not the quick-start
+command because it plans 970 runs and 24,250 cases; consult the submission config
+and paper experiment map first.
 
 For a full description of the sweep experiments (linear + perturbed), see `docs/EXPERIMENTS.md`.
 For local plotting, reconstruction inspection, and paper-figure regeneration, see `docs/VISUALIZATION_WORKFLOW.md`.
@@ -26,7 +50,7 @@ Jerry Liu, jwl50@stanford.edu
 - [Algorithms](#algorithms)
 - [Static Experiments](#static-experiments)
 - [Advection Experiments](#advection-experiments)
-- [TODO](#todo)
+- [Limitations](#limitations)
 
 ## Algorithms
 
@@ -43,13 +67,13 @@ Our algorithms consist of two main features:
 
 #### Our Algorithms
 
-**Without Cell Merging (Faster)**
-- **safe_linear**: Linear reconstruction method without cell merging
-- **safe_circle**: Circular reconstruction method without cell merging
+**Independent Cells**
+- **safe_linear**: Linear reconstruction without shared topology or merging
+- **safe_circle**: Circular reconstruction without shared topology or merging
 
-**With Cell Merging (More Accurate)**
-- **linear**: Linear reconstruction method with cell merging
-- **circular**: Circular reconstruction method with cell merging
+**Coordinated Topology And Merging**
+- **linear**: Linear reconstruction with coordinated topology and merging
+- **circular**: Circular reconstruction with coordinated topology and merging
 
 ## Static Experiments
 
@@ -112,11 +136,9 @@ To run the unit test for the square edge alignment metric:
 python -m experiments.static.squares --test_edge_metric
 ```
 
-Note: There are currently no dedicated unit tests for square-specific helper functions.
-
 ### Zalesak (Static)
 ```bash
-python -m experiments.static.zalesak --config static/circle --sweep --num_cases 15
+python -m experiments.static.zalesak --config static/zalesak --sweep --num_cases 15
 ```
 Tests reconstruction of Zalesak's disk (circle with slot) with random centers and random rotations.
 
@@ -125,11 +147,10 @@ To plot:
 python -m experiments.static.zalesak --plot_only --results_file results/static/zalesak_reconstruction_results.txt
 ```
 
-### TODO
-- Randomly generated polygons (corners)
-- Pac-man (circular corners)
-
 ## Advection Experiments
+
+These are supported research configurations, not sources for the paper's final
+static result set. See `docs/ENTRY_POINTS.md` for that distinction.
 
 ### Zalesak's Disk
 ```bash
@@ -159,26 +180,12 @@ python3 run.py --config advection/vortex/50/vortex_50_safecircle
 python3 run.py --config advection/vortex/100/vortex_100_safecircle
 ```
 
-## TODO
+## Limitations
 
-Mainly two lingering bugs with the full algorithm:
-
-### Known Issues
-1. **Corners**: Sometimes fail to generate, other times generate in completely wrong places
-   - Possible causes: threshold used to generate corner, failing to find a proper facet to extend (resolution issue)
-2. **Circles**: Very rarely (usually low resolution) will choose the wrong curvature solution
-   - Likely because of heuristics used to choose the orientation
-
-### C0 Issues
-- C0 doesn't seem to work with merge-less algorithms (e.g., safe-circle)
-
-### Fixes Needed
-- Corner threshold adjustment
-- `findOrientation()` in MergeMesh needs to be fixed
-
-### Checkpointing Bug
-- Bug relating to circular references within MergeMesh
-- Likely because of neighbor storing
+The manuscript and submission audit document the validated scope and known
+limitations of the frozen method. Historical scripts and profiles may retain older
+failure modes and are classified in `docs/ENTRY_POINTS.md`; they are not supported
+sources of new paper results.
 
 ---
 
