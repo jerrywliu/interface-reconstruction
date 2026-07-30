@@ -15,6 +15,7 @@ Summary plots are written to `results/static/linear_*.png` and uploaded to Slack
 
 For a full description of the sweep experiments (linear + perturbed), see `docs/EXPERIMENTS.md`.
 For local plotting, reconstruction inspection, and paper-figure regeneration, see `docs/VISUALIZATION_WORKFLOW.md`.
+For the paper-to-code map of Section 6 experiments, final data, diagnostics, and figure assets, see `docs/PAPER_EXPERIMENT_MAP.md`.
 
 ## Contributors
 

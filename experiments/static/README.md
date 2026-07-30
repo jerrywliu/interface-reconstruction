@@ -57,6 +57,7 @@ For the current local visualization workflow, including:
 see:
 
 - `docs/VISUALIZATION_WORKFLOW.md`
+- `docs/PAPER_EXPERIMENT_MAP.md` for the paper-to-code experiment, result, and figure map
 
 ### Camera-Ready Pipelines
 
