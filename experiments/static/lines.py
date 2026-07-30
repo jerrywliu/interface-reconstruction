@@ -51,6 +51,7 @@ OUTPUTS:
 """
 
 import argparse
+import csv
 import os
 import numpy as np
 import matplotlib.pyplot as plt
@@ -63,6 +64,11 @@ from util.metrics.metrics import hausdorffFacets, calculate_facet_gaps
 from util.config import read_yaml
 from util.io.setup import setupOutputDirs
 from util.reconstruction import runReconstruction
+from util.reconstruction_diagnostics import (
+    append_case_geometry,
+    append_case_metrics,
+    write_run_manifest,
+)
 from util.initialize.mesh_factory import make_points_from_config, apply_mesh_overrides
 from util.initialize.areas import initializeLine
 from util.plotting.plt_utils import plotAreas, plotPartialAreas
@@ -237,6 +243,8 @@ def main(
     perturb_fix_boundary=None,
     perturb_max_tries=None,
     perturb_type=None,
+    plic_fallback="LVIRA",
+    corner_behavior_profile=MergeMesh.default_corner_behavior_profile,
     **kwargs,
 ):
     # Read config
@@ -255,6 +263,41 @@ def main(
 
     # Setup output directories
     output_dirs = setupOutputDirs(save_name, clean_existing=True)
+    write_run_manifest(
+        output_dirs,
+        "lines",
+        {
+            "config": config_setting,
+            "resolution": resolution,
+            "facet_algo": facet_algo,
+            "do_c0": do_c0,
+            "num_lines": num_lines,
+            "case_indices": case_indices,
+            "mesh_type": mesh_type,
+            "perturb_wiggle": perturb_wiggle,
+            "perturb_seed": perturb_seed,
+            "perturb_fix_boundary": perturb_fix_boundary,
+            "perturb_max_tries": perturb_max_tries,
+            "perturb_type": perturb_type,
+            "plic_fallback": plic_fallback,
+            "corner_behavior_profile": corner_behavior_profile,
+            "random_seed": RANDOM_SEED,
+        },
+    )
+    fallback_metrics_path = os.path.join(
+        output_dirs["metrics"], "unresolved_plic_fallbacks.csv"
+    )
+    fallback_fieldnames = [
+        "case_index",
+        "setting",
+        "merge_id",
+        "policy",
+        "facet_name",
+        "num_vertices",
+    ]
+    with open(fallback_metrics_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fallback_fieldnames)
+        writer.writeheader()
 
     # Initialize metrics files with headers
     with open(os.path.join(output_dirs["metrics"], "hausdorff.txt"), "w") as f:
@@ -300,17 +343,17 @@ def main(
     facet_gaps = []
 
     for i, angle in enumerate(angles):
+        # Calculate line endpoints
+        x1, y1 = rng.uniform(50, 51), rng.uniform(50, 51)
+        x2 = x1 + 0.2  # Small x displacement
+        y2 = y1 + np.tan(angle) * (x2 - x1)
+
         if case_index_set is not None and i not in case_index_set:
             continue
         print(f"Processing line {i+1}/{num_lines}")
 
         # Re-initialize mesh
         m = MergeMesh(opoints, threshold)
-
-        # Calculate line endpoints
-        x1, y1 = rng.uniform(50, 51), rng.uniform(50, 51)
-        x2 = x1 + 0.2  # Small x displacement
-        y2 = y1 + np.tan(angle) * (x2 - x1)
 
         # Initialize line fractions
         fractions = initializeLine(m, [x1, y1], [x2, y2])
@@ -331,15 +374,35 @@ def main(
             i,
             output_dirs,
             algo_kwargs={
-                "fit_1neighbor": True
+                "fit_1neighbor": True,
+                "plic_fallback": plic_fallback,
+                "corner_behavior_profile": corner_behavior_profile,
             },  # Fit 1-neighbor to handle boundary cells
         )
+        fallback_records = getattr(m, "plic_fallback_records", [])
+        if fallback_records:
+            with open(fallback_metrics_path, "a", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=fallback_fieldnames)
+                for record in fallback_records:
+                    writer.writerow({"case_index": i, **record})
 
         # ---------- Save true facets to VTK ----------
         true_facets = create_true_facets_line(x1, y1, x2, y2)
         writeFacets(
             true_facets,
             os.path.join(output_dirs["vtk_true"], f"true_line{i}.vtp"),
+        )
+        append_case_geometry(
+            output_dirs,
+            i,
+            {
+                "geometry_type": "line",
+                "angle": angle,
+                "p_left": [x1, y1],
+                "p_right": [x2, y2],
+                "truth_vtp": f"vtk/true/true_line{i}.vtp",
+                "truth_metadata": f"vtk/true/true_line{i}.facet_metadata.json",
+            },
         )
 
         # Calculate Hausdorff distance
@@ -394,6 +457,15 @@ def main(
         with open(os.path.join(output_dirs["metrics"], "facet_gap.txt"), "a") as f:
             f.write(f"line_{i+1}_angle_{angle:.4f}_gap_{avg_gap:.6e}\n")
         facet_gaps.append(avg_gap)
+        append_case_metrics(
+            output_dirs,
+            i,
+            {
+                "hausdorff": avg_hausdorff / cnt_hausdorff,
+                "facet_gap": avg_gap,
+            },
+            getattr(m, "reconstruction_diagnostic_summary", None),
+        )
 
     return hausdorff_distances, facet_gaps
 
@@ -515,6 +587,19 @@ if __name__ == "__main__":
         default=None,
     )
     parser.add_argument(
+        "--plic_fallback",
+        type=str,
+        choices=["Youngs", "ELVIRA", "LVIRA"],
+        default="LVIRA",
+        help="PLIC fallback for unresolved merged cells with a 3x3 stencil",
+    )
+    parser.add_argument(
+        "--corner_behavior_profile",
+        choices=sorted(MergeMesh.corner_behavior_profiles),
+        default=MergeMesh.default_corner_behavior_profile,
+        help="merged-cell orientation/corner behavior profile",
+    )
+    parser.add_argument(
         "--sweep", action="store_true", help="run parameter sweep", default=False
     )
     parser.add_argument(
@@ -556,4 +641,6 @@ if __name__ == "__main__":
             perturb_fix_boundary=args.perturb_fix_boundary,
             perturb_max_tries=args.perturb_max_tries,
             perturb_type=args.perturb_type,
+            plic_fallback=args.plic_fallback,
+            corner_behavior_profile=args.corner_behavior_profile,
         )

@@ -1,6 +1,6 @@
 # Static Shape Reconstruction Experiments
 
-This directory contains experiments for evaluating interface reconstruction algorithms on static shapes (lines, squares, circles, and ellipses). Each experiment tests different reconstruction algorithms across various resolutions and measures reconstruction quality using appropriate metrics for each shape type.
+This directory contains experiments for evaluating interface reconstruction algorithms on static shapes (lines, squares, circles, ellipses, and Zalesak's disk). Each experiment tests different reconstruction algorithms across various resolutions and measures reconstruction quality using appropriate metrics for each shape type.
 
 ## Experimental Setup
 
@@ -17,6 +17,35 @@ All experiments use a 100x100 Cartesian grid with varying resolutions. The shape
 - **Squares / Zalesak**: [0.50, 0.64, 1.00, 1.28, 1.50]
 
 ## Running the Experiments
+
+### Current Paper-Facing Rerun
+
+Use the dedicated launcher for the affected paper rows. It fixes the method set,
+LVIRA fallback, rescue profile, and canonical perturbation spectrum; the Python
+runner selects the appropriate resolution list for each experiment.
+
+```bash
+# Validate the 300-run plan without starting reconstruction.
+DRY_RUN=1 ./experiments/static/run_paper_affected_sweep.sh
+
+# Run with five concurrent subprocesses and Slack summary notifications.
+./experiments/static/run_paper_affected_sweep.sh
+
+# Optional: choose a run id or disable notifications.
+RUN_ID=my_run NOTIFY=0 ./experiments/static/run_paper_affected_sweep.sh
+```
+
+Each release contains the aggregate plotting CSV, all-method summary panels,
+per-run logs, a sweep manifest/failure ledger, and consolidated case, cell,
+merge-event, fallback-event, geometry, and run-manifest diagnostics.
+
+The paper-facing corner-method default is
+`--corner_behavior_profile pre_f8_corner --rescue_profile exact_linear_support_only`.
+It retains exact linear-support propagation while disabling the five inactive
+linear-corner cleanup passes and all curved loop/transition rescues. This is a
+validated production default; see
+`results/static/linear_rescue_cleanup_analysis_20260715/README.md` for evidence
+and use the other named profiles only for historical ablations.
 
 For the current local visualization workflow, including:
 
@@ -95,10 +124,8 @@ python3 -m experiments.static.ellipses --config static/ellipse --sweep
 python3 -m experiments.static.ellipses --config static/ellipse --facet_algo circular --save_name ellipse_mergecircle
 ```
 
-Each sweep will:
-1. Test all algorithms at each resolution
-2. Generate plots showing performance metrics
-3. Save results to text files for further analysis
+Each legacy per-shape sweep tests all configured algorithms, generates metric
+plots, and saves both structured diagnostics and compatibility text metrics.
 
 ## Line Reconstruction
 
@@ -119,11 +146,12 @@ The square reconstruction experiment tests the algorithms' ability to reconstruc
 - Generates a square with side length varying from 10 to 30
 - Places the square at a random center with random orientation in the test domain
 - Reconstructs the interface using each algorithm
-- Measures reconstruction quality using area error and edge alignment error
+- Measures reconstruction quality using Hausdorff distance, facet gap, and area error
 
 ### Metrics
-1. **Area Error**: Relative difference between reconstructed and true area (side_length²)
-2. **Edge Alignment Error**: Average distance between reconstructed facets and true edges
+1. **Hausdorff Distance**: Geometric discrepancy between true and reconstructed interfaces
+2. **Facet Gap**: Separation between neighboring reconstructed facets
+3. **Area Error**: Difference between reconstructed and target mixed-cell areas
 
 This experiment tests the algorithms' ability to handle sharp corners and piecewise linear interfaces, which are common in practical applications.
 
@@ -167,10 +195,10 @@ The Zalesak experiment tests reconstruction of a circle with a vertical slot (as
 
 ```bash
 # Run parameter sweep
-python3 -m experiments.static.zalesak --config static/circle --sweep --num_cases 15
+python3 -m experiments.static.zalesak --config static/zalesak --sweep --num_cases 15
 
 # Run single test
-python3 -m experiments.static.zalesak --config static/circle --facet_algo circular --save_name zalesak_mergecircle
+python3 -m experiments.static.zalesak --config static/zalesak --facet_algo circular --save_name zalesak_mergecircle
 
 # Plot only from saved results
 python -m experiments.static.zalesak --plot_only --results_file results/static/zalesak_reconstruction_results.txt

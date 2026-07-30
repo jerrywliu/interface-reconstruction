@@ -56,6 +56,7 @@ OUTPUTS:
 """
 
 import argparse
+import csv
 import os
 import numpy as np
 import math
@@ -77,6 +78,11 @@ from main.structs.facets.linear_facet import LinearFacet
 from util.config import read_yaml
 from util.io.setup import setupOutputDirs
 from util.reconstruction import runReconstruction
+from util.reconstruction_diagnostics import (
+    append_case_geometry,
+    append_case_metrics,
+    write_run_manifest,
+)
 from util.initialize.mesh_factory import make_points_from_config, apply_mesh_overrides
 from util.initialize.areas import initializeEllipse
 from util.plotting.plt_utils import plotAreas, plotPartialAreas
@@ -240,6 +246,8 @@ def main(
     perturb_max_tries=None,
     perturb_type=None,
     do_c0=None,
+    plic_fallback="LVIRA",
+    corner_behavior_profile=MergeMesh.default_corner_behavior_profile,
     **kwargs,
 ):
     # Read config
@@ -258,6 +266,42 @@ def main(
 
     # Setup output directories
     output_dirs = setupOutputDirs(save_name, clean_existing=True)
+    write_run_manifest(
+        output_dirs,
+        "ellipses",
+        {
+            "config": config_setting,
+            "resolution": resolution,
+            "facet_algo": facet_algo,
+            "do_c0": do_c0,
+            "num_ellipses": num_ellipses,
+            "major_axis": 30.0,
+            "case_indices": case_indices,
+            "mesh_type": mesh_type,
+            "perturb_wiggle": perturb_wiggle,
+            "perturb_seed": perturb_seed,
+            "perturb_fix_boundary": perturb_fix_boundary,
+            "perturb_max_tries": perturb_max_tries,
+            "perturb_type": perturb_type,
+            "plic_fallback": plic_fallback,
+            "corner_behavior_profile": corner_behavior_profile,
+            "random_seed": RANDOM_SEED,
+        },
+    )
+    fallback_metrics_path = os.path.join(
+        output_dirs["metrics"], "unresolved_plic_fallbacks.csv"
+    )
+    fallback_fieldnames = [
+        "case_index",
+        "setting",
+        "merge_id",
+        "policy",
+        "facet_name",
+        "num_vertices",
+    ]
+    with open(fallback_metrics_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fallback_fieldnames)
+        writer.writeheader()
 
     # Generate ellipses with different aspect ratios
     aspect_ratios = np.linspace(1.5, 3.0, num_ellipses)  # Major axis / minor axis
@@ -294,19 +338,19 @@ def main(
     curvature_proxy_errors = []
 
     for i, aspect_ratio in enumerate(aspect_ratios):
-        if case_index_set is not None and i not in case_index_set:
-            continue
-        print(f"Processing ellipse {i+1}/{num_ellipses}")
-
-        # Re-initialize mesh
-        m = MergeMesh(opoints, threshold)
-
         # Random center in [50,50] to [51,51] square
         center = [rng.uniform(50, 51), rng.uniform(50, 51)]
         # Random angle between 0 and pi/2
         theta = rng.uniform(0, math.pi / 2)
         # Calculate minor axis based on aspect ratio
         minor_axis = major_axis / aspect_ratio
+
+        if case_index_set is not None and i not in case_index_set:
+            continue
+        print(f"Processing ellipse {i+1}/{num_ellipses}")
+
+        # Re-initialize mesh
+        m = MergeMesh(opoints, threshold)
 
         # Initialize ellipse fractions
         fractions = initializeEllipse(m, major_axis, minor_axis, theta, center)
@@ -326,8 +370,30 @@ def main(
             do_c0,
             i,
             output_dirs,
-            algo_kwargs={},
+            algo_kwargs={
+                "plic_fallback": plic_fallback,
+                "corner_behavior_profile": corner_behavior_profile,
+            },
         )
+        append_case_geometry(
+            output_dirs,
+            i,
+            {
+                "geometry_type": "ellipse",
+                "center": center,
+                "major_axis": major_axis,
+                "minor_axis": minor_axis,
+                "aspect_ratio": aspect_ratio,
+                "theta": theta,
+                "truth_representation": "analytic_rotated_ellipse",
+            },
+        )
+        fallback_records = getattr(m, "plic_fallback_records", [])
+        if fallback_records:
+            with open(fallback_metrics_path, "a", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=fallback_fieldnames)
+                for record in fallback_records:
+                    writer.writerow({"case_index": i, **record})
 
         # Calculate curvature error
         # For an ellipse, curvature varies along the boundary
@@ -440,6 +506,18 @@ def main(
             os.path.join(output_dirs["metrics"], "curvature_proxy_error.txt"), "a"
         ) as f:
             f.write(f"{curvature_proxy_error}\n")
+        append_case_metrics(
+            output_dirs,
+            i,
+            {
+                "curvature_error": avg_error,
+                "facet_gap": avg_gap,
+                "hausdorff": avg_hausdorff,
+                "tangent_error": tangent_error,
+                "curvature_proxy_error": curvature_proxy_error,
+            },
+            getattr(m, "reconstruction_diagnostic_summary", None),
+        )
 
         curvature_errors.append(avg_error)
         facet_gaps.append(avg_gap)
@@ -1074,6 +1152,19 @@ if __name__ == "__main__":
         default=None,
     )
     parser.add_argument(
+        "--plic_fallback",
+        type=str,
+        choices=["Youngs", "ELVIRA", "LVIRA"],
+        default="LVIRA",
+        help="PLIC fallback for unresolved merged cells with a 3x3 stencil",
+    )
+    parser.add_argument(
+        "--corner_behavior_profile",
+        choices=sorted(MergeMesh.corner_behavior_profiles),
+        default=MergeMesh.default_corner_behavior_profile,
+        help="merged-cell orientation/corner behavior profile",
+    )
+    parser.add_argument(
         "--sweep", action="store_true", help="run parameter sweep", default=False
     )
     parser.add_argument(
@@ -1140,4 +1231,6 @@ if __name__ == "__main__":
             perturb_max_tries=args.perturb_max_tries,
             perturb_type=args.perturb_type,
             do_c0=args.do_c0,
+            plic_fallback=args.plic_fallback,
+            corner_behavior_profile=args.corner_behavior_profile,
         )

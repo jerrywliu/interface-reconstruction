@@ -1,0 +1,145 @@
+{
+  "schema_version": 1,
+  "status": "candidate_not_frozen",
+  "launch_approved": false,
+  "figure_policy": {
+    "primary_source": "Promote reviewed July 2026 figures, superseded by newer submission-validation outputs where available.",
+    "historical_sources": "March and May 2026 paper assets are comparison baselines only.",
+    "promotion_gate": [
+      "all required validation checks pass",
+      "representative case and endpoint style are approved",
+      "figure is regenerated from saved results or a deterministic generator",
+      "vector PDF contains no raster image objects"
+    ]
+  },
+  "source": {
+    "target_commit": null,
+    "target_branch": "main",
+    "require_clean_worktree": true,
+    "commit_resolution": "The final launcher injects the clean HEAD into a frozen copy stored in the result bundle.",
+    "existing_july_candidate": {
+      "result_root": "results/static/static_paper_simplified_default_20260717_212413",
+      "source_commit": "d02dd4790496771f61ea7313e600c50e7b5098f6",
+      "source_dirty": true,
+      "source_snapshot_sha256": "4975ad99db05ac6d606de4f6f17f74242df78b993d4070a0e51c7ce0a5c1e7fd",
+      "scope": "300 affected-method runs and 7500 cases",
+      "role": "candidate and comparison source, not the final clean-commit freeze"
+    }
+  },
+  "numerics": {
+    "precision": "IEEE 754 binary64",
+    "mesh_fraction_threshold": 1e-10,
+    "optimization_threshold": 1e-10,
+    "linearity_threshold": 1e-6,
+    "c0_linear_tolerance": 1e-5,
+    "extreme_fraction_orientation_threshold": 0.005,
+    "three_neighbor_orientation_tolerance": 0.005,
+    "arc_fit_residual_threshold": 1e-5,
+    "arc_fit_timeout_seconds": 2.0,
+    "linear_corner_area_threshold": 0.0001,
+    "linear_corner_max_support_extrapolation": 4.0,
+    "linear_corner_max_cell_radius_ratio": 4.0,
+    "corner_sharpness_threshold": 0.01,
+    "curved_corner_curvature_threshold": 0.01,
+    "curved_corner_area_threshold": 0.01,
+    "corner_branch_support_area_threshold": 0.01
+  },
+  "production_method": {
+    "corner_behavior_profile": "pre_f8_corner",
+    "rescue_profile": "exact_linear_support_only",
+    "unresolved_orientation_fallback": "LVIRA",
+    "oriented_high_order_fit_failure": "local mass-matching line; LVIRA only if the local line cannot be formed",
+    "c0": "disabled for the primary sweep; optional postprocessing uses a conservation guard and retains the pre-C0 facet when an endpoint adjustment cannot be refit conservatively, so exact continuity is conditional",
+    "volume_constraint_scope": "each independent cell or merged-zone total; constituent base cells inside a merged zone are not independently constrained"
+  },
+  "metric_status": {
+    "hausdorff": "active",
+    "facet_gap": "active",
+    "tangent_error": "active",
+    "curvature_error": "diagnostic",
+    "area_error": "active after geometry-faithful line/signed-circle/two-branch-corner repair; July historical columns must be regenerated"
+  },
+  "independent_cell_ablation": {
+    "internal_method_key": "safe_circle",
+    "paper_label": "Ours (circular, independent cells)",
+    "comparison_label": "Ours (circular, topology + merging)",
+    "target_fallback_hierarchy": "LVIRA for unresolved orientation/support; local mass-matching line after an oriented arc-fit failure, then LVIRA if needed",
+    "status": "implemented; 250-case Zalesak w=0.1 validation completed with matched fallback hierarchy"
+  },
+  "benchmark_grid": {
+    "grid_size": 100.0,
+    "mesh_type": "perturbed Cartesian quadrilaterals",
+    "perturbation_type": "random",
+    "fix_boundary_nodes": true,
+    "seed": 0,
+    "trials_per_setting": 25,
+    "wiggles": [0.0, 0.05, 0.1, 0.2, 0.3],
+    "full_resolutions": [0.32, 0.5, 0.64, 1.0, 1.28, 1.5],
+    "short_resolutions": [0.5, 0.64, 1.0, 1.28, 1.5],
+    "record_exact_cases_in": "diagnostics/case_geometry.jsonl"
+  },
+  "benchmarks": {
+    "lines": {
+      "driver": "experiments.static.lines",
+      "config": "config/static/line.yaml",
+      "resolutions": "full_resolutions",
+      "methods": ["Youngs", "ELVIRA", "LVIRA", "safe_linear", "linear"],
+      "planned_runs": 150
+    },
+    "circles": {
+      "driver": "experiments.static.circles",
+      "config": "config/static/circle.yaml",
+      "radius": 10.0,
+      "resolutions": "full_resolutions",
+      "methods": ["Youngs", "ELVIRA", "LVIRA", "safe_linear", "linear", "safe_circle", "circular"],
+      "planned_runs": 210
+    },
+    "ellipses": {
+      "driver": "experiments.static.ellipses",
+      "config": "config/static/ellipse.yaml",
+      "resolutions": "full_resolutions",
+      "methods": ["Youngs", "ELVIRA", "LVIRA", "safe_linear", "linear", "safe_circle", "circular"],
+      "planned_runs": 210
+    },
+    "squares": {
+      "driver": "experiments.static.squares",
+      "config": "config/static/square.yaml",
+      "resolutions": "short_resolutions",
+      "methods": ["Youngs", "ELVIRA", "LVIRA", "safe_linear", "linear", "linear+corner", "safe_circle", "circular"],
+      "planned_runs": 200
+    },
+    "zalesak": {
+      "driver": "experiments.static.zalesak",
+      "config": "config/static/zalesak.yaml",
+      "radius": 15.0,
+      "slot_width": 5.0,
+      "slot_top_relative_to_center": 10.0,
+      "resolutions": "short_resolutions",
+      "methods": ["Youngs", "ELVIRA", "LVIRA", "safe_linear", "linear", "safe_circle", "circular", "circular+corner"],
+      "planned_runs": 200
+    }
+  },
+  "planned_totals": {
+    "runs": 970,
+    "cases": 24250,
+    "max_workers": 5
+  },
+  "required_diagnostics": [
+    "run manifests and source snapshot",
+    "case geometry",
+    "case-indexed metrics",
+    "cell-indexed metrics",
+    "merge and facet provenance",
+    "unresolved PLIC fallbacks",
+    "solver failures"
+  ],
+  "submission_validations": [
+    "global and merged-zone conservation for the primary pre-C0 output",
+    "optional C0 postprocessing validated with conservative rejection of infeasible endpoint adjustments; continuity is conditional",
+    "constituent base-cell residual audit in merged zones",
+    "resolved-path coverage and empirical shared-vertex conflict incidence; exact topological consistency is not claimed",
+    "ellipse empirical convergence orders",
+    "independent-cell versus topology-and-merging circular ablation",
+    "one diagnosed high-perturbation Zalesak failure"
+  ]
+}

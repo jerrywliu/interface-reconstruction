@@ -64,6 +64,29 @@ def test_check_corner_facet_rejects_large_extrapolation():
     assert not poly.hasFacet()
 
 
+def test_legacy_corner_acceptance_allows_large_extrapolation():
+    points = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
+    poly = NeighboredPolygon(points)
+    poly.use_linear_corner_locality_guard = False
+    poly.require_both_linear_corner_branches = False
+
+    left_support = [[-1.0, 0.5], [0.0, 0.5]]
+    right_support = [[5.0, -1.0], [5.0, 0.0]]
+    poly.setFraction(
+        getPolyCornerArea(points, left_support[1], [5.0, 0.5], right_support[1])
+        / abs(getArea(points))
+    )
+    poly.checkCornerFacet(
+        left_support[0],
+        left_support[1],
+        right_support[0],
+        right_support[1],
+    )
+
+    assert poly.hasFacet()
+    assert isinstance(poly.getFacet(), CornerFacet)
+
+
 def test_corner_branch_propagation_seeds_unset_neighbors():
     host = NeighboredPolygon([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])
     branch_left = NeighboredPolygon(

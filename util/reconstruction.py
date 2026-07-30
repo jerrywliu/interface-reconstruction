@@ -4,6 +4,7 @@ from main.structs.meshes.merge_mesh import MergeMesh
 
 from util.plotting.plt_utils import plotAreas, plotPartialAreas
 from util.plotting.vtk_utils import writePartialCells, writeFacets
+from util.reconstruction_diagnostics import write_reconstruction_diagnostics
 
 
 def runReconstruction(
@@ -38,6 +39,7 @@ def runReconstruction(
     plotPartialAreas(m, os.path.join(output_dirs["plt_partial"], f"{iter}.png"))
 
     if facet_algo in no_merge_algos:
+        m._provenance_stage = facet_algo
         reconstructed_facets, reconstructed_polys = _run_no_merge(
             m, facet_algo, iter, output_dirs, algo_kwargs
         )
@@ -53,6 +55,7 @@ def runReconstruction(
         reconstructed_facets,
         os.path.join(output_dirs["vtk_reconstructed_facets"], f"{iter}.vtp"),
     )
+    write_reconstruction_diagnostics(m, iter, output_dirs)
 
     if return_polys:
         return reconstructed_facets, reconstructed_polys
@@ -83,7 +86,12 @@ def _run_no_merge(m: MergeMesh, facet_algo, iter, output_dirs, algo_kwargs={}):
         }
         m.runSafeLinear(**safe_linear_kwargs)
     elif facet_algo == "safe_circle":
-        m.runSafeCircle()
+        m.runSafeCircle(
+            plic_fallback=algo_kwargs.get("plic_fallback", "LVIRA"),
+            arc_failure_fallback=algo_kwargs.get(
+                "arc_failure_fallback", "local_linear"
+            ),
+        )
     elif facet_algo == "safe_linear_corner":
         _ = m.findSafeOrientations()  # basic orientation finding
         m.runSafeLinearCorner()
@@ -101,6 +109,11 @@ def _run_with_merge(
     """
     algo_kwargs = algo_kwargs or {}
 
+    m.configure_corner_behavior(
+        algo_kwargs.get(
+            "corner_behavior_profile", MergeMesh.default_corner_behavior_profile
+        )
+    )
     m.merge1Neighbors()
     merge_ids = m.findOrientations()
 
@@ -114,7 +127,7 @@ def _run_with_merge(
         setting=facet_algo,
         plic_fallback=algo_kwargs.get("plic_fallback", "LVIRA"),
         rescue_profile=algo_kwargs.get(
-            "rescue_profile", "no_curved_corner_rescues"
+            "rescue_profile", MergeMesh.default_rescue_profile
         ),
     )
     reconstructed_facets = [p.getFacet() for p in merged_polys]

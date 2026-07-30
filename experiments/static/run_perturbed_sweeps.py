@@ -7,16 +7,38 @@ Writes a CSV with per-run metrics and (optionally) sends aggregate plots to Slac
 
 import argparse
 import csv
+import hashlib
+import json
 import math
 import os
+import re
 import subprocess
 import sys
-from datetime import datetime
+import tarfile
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 
+import matplotlib as mpl
 import numpy as np
 
+from experiments.static.sweep_diagnostics import (
+    DiagnosticBundleError,
+    archive_run_bundle,
+    consolidate_run_diagnostics,
+    prepare_diagnostic_bundle,
+)
+from main.structs.meshes.merge_mesh import MergeMesh
 from util.io.slack import load_slack_env, send_results_to_slack
+
+
+mpl.rcParams.update(
+    {
+        "pdf.fonttype": 42,
+        "ps.fonttype": 42,
+        "svg.fonttype": "none",
+    }
+)
 
 
 STATIC_GRID_SIZE = 100.0
@@ -56,8 +78,8 @@ DISPLAY_LABELS = {
     "linear": "Ours (linear)",
     "linear+C0": "Ours (linear, C0)",
     "linear+corner": "Ours (linear+corner)",
-    "safe_circle": "Ours (safe circular)",
-    "circular": "Ours (circular)",
+    "safe_circle": "Ours (circular, independent cells)",
+    "circular": "Ours (circular, topology + merging)",
     "circular+C0": "Ours (circular, C0)",
     "circular+corner": "Ours (circular+corner)",
     "circular+corner+C0": "Ours (circular+corner, C0)",
@@ -88,6 +110,13 @@ METRIC_LABELS = {
 
 PERTURBATION_AXIS_LABEL = "Perturbation magnitude"
 RESOLUTION_AXIS_LABEL = "Cells per side, N"
+
+
+def _save_figure(fig, out_path):
+    out_path = Path(out_path)
+    fig.savefig(out_path, dpi=300, bbox_inches="tight")
+    if out_path.suffix.lower() != ".pdf":
+        fig.savefig(out_path.with_suffix(".pdf"), bbox_inches="tight")
 
 
 EXPERIMENTS = [
@@ -270,8 +299,59 @@ def _parse_labeled_values(path):
     return values
 
 
+def _collect_case_metrics(exp_name, metrics_dir):
+    metric_names = {
+        "circles": (
+            "curvature_error",
+            "facet_gap",
+            "hausdorff",
+            "tangent_error",
+            "curvature_proxy_error",
+        ),
+        "ellipses": (
+            "curvature_error",
+            "facet_gap",
+            "hausdorff",
+            "tangent_error",
+            "curvature_proxy_error",
+        ),
+        "lines": ("hausdorff", "facet_gap"),
+        "squares": ("area_error", "facet_gap", "hausdorff"),
+        "zalesak": ("area_error", "facet_gap", "hausdorff"),
+    }.get(exp_name, ())
+    path = Path(metrics_dir) / "case_metrics.csv"
+    if not metric_names or not path.is_file():
+        return {}
+
+    values = {metric: [] for metric in metric_names}
+    row_count = 0
+    with path.open("r", newline="", encoding="utf-8") as stream:
+        for row in csv.DictReader(stream):
+            row_count += 1
+            for metric in metric_names:
+                raw_value = row.get(metric, "")
+                if raw_value in (None, ""):
+                    continue
+                try:
+                    values[metric].append(float(raw_value))
+                except ValueError:
+                    continue
+
+    if row_count == 0:
+        return {}
+
+    metrics = {}
+    for metric, metric_values in values.items():
+        metrics.update(_metric_stats(metric, metric_values))
+    return metrics
+
+
 def _collect_metrics(exp_name, save_name):
     metrics_dir = Path("plots") / save_name / "metrics"
+    case_metrics = _collect_case_metrics(exp_name, metrics_dir)
+    if case_metrics:
+        return case_metrics
+
     if exp_name in ["circles", "ellipses"]:
         curvature = _parse_numeric_values(metrics_dir / "curvature_error.txt")
         gaps = _parse_numeric_values(metrics_dir / "facet_gap.txt")
@@ -280,6 +360,8 @@ def _collect_metrics(exp_name, save_name):
         curvature_proxy = _parse_numeric_values(
             metrics_dir / "curvature_proxy_error.txt"
         )
+        if not any((curvature, gaps, hausdorff, tangent, curvature_proxy)):
+            return {}
         metrics = {}
         metrics.update(_metric_stats("curvature_error", curvature))
         metrics.update(_metric_stats("facet_gap", gaps))
@@ -290,6 +372,8 @@ def _collect_metrics(exp_name, save_name):
     if exp_name == "lines":
         hausdorff = _parse_labeled_values(metrics_dir / "hausdorff.txt")
         gaps = _parse_labeled_values(metrics_dir / "facet_gap.txt")
+        if not hausdorff and not gaps:
+            return {}
         metrics = {}
         metrics.update(_metric_stats("hausdorff", hausdorff))
         metrics.update(_metric_stats("facet_gap", gaps))
@@ -298,6 +382,8 @@ def _collect_metrics(exp_name, save_name):
         area = _parse_numeric_values(metrics_dir / "area_error.txt")
         gaps = _parse_numeric_values(metrics_dir / "facet_gap.txt")
         hausdorff = _parse_numeric_values(metrics_dir / "hausdorff.txt")
+        if not area and not gaps and not hausdorff:
+            return {}
         metrics = {}
         metrics.update(_metric_stats("area_error", area))
         metrics.update(_metric_stats("facet_gap", gaps))
@@ -307,6 +393,8 @@ def _collect_metrics(exp_name, save_name):
         area = _parse_numeric_values(metrics_dir / "area_error.txt")
         gaps = _parse_numeric_values(metrics_dir / "facet_gap.txt")
         hausdorff = _parse_numeric_values(metrics_dir / "hausdorff.txt")
+        if not area and not gaps and not hausdorff:
+            return {}
         metrics = {}
         metrics.update(_metric_stats("area_error", area))
         metrics.update(_metric_stats("facet_gap", gaps))
@@ -503,7 +591,7 @@ def _plot_metric_vs_wiggle(exp, algo, metric, res_map, out_dir):
     out_dir.mkdir(parents=True, exist_ok=True)
     filename = f"{exp}_{_algo_tag(algo)}_{metric}.png"
     out_path = out_dir / filename
-    plt.savefig(out_path, dpi=300, bbox_inches="tight")
+    _save_figure(plt.gcf(), out_path)
     plt.close()
     return str(out_path)
 
@@ -734,7 +822,7 @@ def _generate_experiment_method_summary_plots(data, exp_name, metric_candidates,
         fig.tight_layout()
 
         out_path = out_dir / f"{exp_name}_all_methods_{metric}.png"
-        fig.savefig(out_path, dpi=300, bbox_inches="tight")
+        _save_figure(fig, out_path)
         plt.close(fig)
         plots.append(str(out_path))
 
@@ -764,7 +852,7 @@ def _generate_experiment_method_summary_plots(data, exp_name, metric_candidates,
         fig.tight_layout(rect=[0, 0, 1, 0.95])
 
         combined_path = out_dir / f"{exp_name}_all_methods_combined.png"
-        fig.savefig(combined_path, dpi=300, bbox_inches="tight")
+        _save_figure(fig, combined_path)
         plt.close(fig)
         plots.append(str(combined_path))
 
@@ -916,7 +1004,7 @@ def _generate_two_metric_axes_grid_plot(
 
     output_name = out_filename or f"{exp_name}_all_methods_2x2.png"
     out_path = out_dir / output_name
-    fig.savefig(out_path, dpi=300, bbox_inches="tight")
+    _save_figure(fig, out_path)
     plt.close(fig)
     return [str(out_path)]
 
@@ -978,7 +1066,7 @@ def _generate_circle_method_axes_grid_plot(data, out_dir):
             ax.legend(fontsize=10, frameon=True)
             fig.tight_layout()
             out_path = out_dir / f"circles_all_methods_{metric}_vs_perturbation.png"
-            fig.savefig(out_path, dpi=300, bbox_inches="tight")
+            _save_figure(fig, out_path)
             plt.close(fig)
             plots.append(str(out_path))
 
@@ -1001,7 +1089,7 @@ def _generate_circle_method_axes_grid_plot(data, out_dir):
             ax.legend(fontsize=10, frameon=True)
             fig.tight_layout()
             out_path = out_dir / f"circles_all_methods_{metric}_vs_resolution.png"
-            fig.savefig(out_path, dpi=300, bbox_inches="tight")
+            _save_figure(fig, out_path)
             plt.close(fig)
             plots.append(str(out_path))
 
@@ -1089,7 +1177,7 @@ def _generate_circle_method_axes_grid_plot(data, out_dir):
     fig.tight_layout(rect=[0, 0.03, 1, 0.97])
 
     grid_path = out_dir / "circles_all_methods_5x2_axes.png"
-    fig.savefig(grid_path, dpi=300, bbox_inches="tight")
+    _save_figure(fig, grid_path)
     plt.close(fig)
     plots.append(str(grid_path))
     return plots
@@ -1152,7 +1240,7 @@ def _generate_ellipse_method_axes_grid_plot(data, out_dir):
             ax.legend(fontsize=10, frameon=True)
             fig.tight_layout()
             out_path = out_dir / f"ellipses_all_methods_{metric}_vs_perturbation.png"
-            fig.savefig(out_path, dpi=300, bbox_inches="tight")
+            _save_figure(fig, out_path)
             plt.close(fig)
             plots.append(str(out_path))
 
@@ -1175,7 +1263,7 @@ def _generate_ellipse_method_axes_grid_plot(data, out_dir):
             ax.legend(fontsize=10, frameon=True)
             fig.tight_layout()
             out_path = out_dir / f"ellipses_all_methods_{metric}_vs_resolution.png"
-            fig.savefig(out_path, dpi=300, bbox_inches="tight")
+            _save_figure(fig, out_path)
             plt.close(fig)
             plots.append(str(out_path))
 
@@ -1263,7 +1351,7 @@ def _generate_ellipse_method_axes_grid_plot(data, out_dir):
     fig.tight_layout(rect=[0, 0.03, 1, 0.97])
 
     grid_path = out_dir / "ellipses_all_methods_5x2_axes.png"
-    fig.savefig(grid_path, dpi=300, bbox_inches="tight")
+    _save_figure(fig, grid_path)
     plt.close(fig)
     plots.append(str(grid_path))
     return plots
@@ -1404,6 +1492,230 @@ def _notify_stage_summary(csv_path, out_dir, exp_name):
     return False
 
 
+def _build_run_spec(
+    exp, algo, resolution, wiggle, seed, num_value, args, corner_behavior_profile
+):
+    save_name = _make_save_name(exp["name"], algo, resolution, wiggle, seed)
+    if (
+        exp["name"] in {"squares", "zalesak"}
+        or corner_behavior_profile != MergeMesh.default_corner_behavior_profile
+    ):
+        save_name = f"{save_name}_corner_{corner_behavior_profile}"
+    if exp["name"] == "zalesak" and args.rescue_profile != "full":
+        save_name = f"{save_name}_{args.rescue_profile}"
+    run_namespace = getattr(args, "run_namespace", None)
+    if run_namespace:
+        save_name = f"{run_namespace}_{save_name}"
+
+    cmd = [
+        sys.executable,
+        "-m",
+        exp["module"],
+        "--config",
+        exp["config"],
+        "--resolution",
+        str(resolution),
+        "--facet_algo",
+        algo,
+        "--save_name",
+        save_name,
+        "--mesh_type",
+        "perturbed_quads",
+        "--perturb_wiggle",
+        str(wiggle),
+        "--perturb_seed",
+        str(seed),
+        "--perturb_fix_boundary",
+        "1",
+    ]
+    if num_value is not None:
+        cmd += [exp["num_arg"], str(num_value)]
+    if args.plic_fallback is not None:
+        cmd += ["--plic_fallback", args.plic_fallback]
+    if exp["name"] == "zalesak":
+        cmd += ["--rescue_profile", args.rescue_profile]
+    cmd += ["--corner_behavior_profile", corner_behavior_profile]
+
+    return {
+        "experiment": exp["name"],
+        "algo": algo,
+        "resolution": resolution,
+        "wiggle": wiggle,
+        "seed": seed,
+        "corner_behavior_profile": corner_behavior_profile,
+        "case_count": num_value,
+        "save_name": save_name,
+        "cmd": cmd,
+    }
+
+
+def _execute_run_spec(spec, log_dir):
+    log_path = Path(log_dir) / f"{spec['save_name']}.log"
+    try:
+        code = _run_subprocess(spec["cmd"], log_path)
+        return {"code": code, "log_path": str(log_path), "error": ""}
+    except OSError as exc:
+        return {"code": "", "log_path": str(log_path), "error": str(exc)}
+
+
+def _failure_record(spec, reason, code="", log_path=""):
+    return {
+        "experiment": spec["experiment"],
+        "algo": spec["algo"],
+        "resolution": spec["resolution"],
+        "wiggle": spec["wiggle"],
+        "seed": spec["seed"],
+        "save_name": spec["save_name"],
+        "reason": reason,
+        "code": code,
+        "log_path": log_path,
+    }
+
+
+def _write_failure_csv(path, failures):
+    fieldnames = [
+        "experiment",
+        "algo",
+        "resolution",
+        "wiggle",
+        "seed",
+        "save_name",
+        "reason",
+        "code",
+        "log_path",
+    ]
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(failures)
+
+
+def _git_output(args, binary=False):
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            check=True,
+            capture_output=True,
+            text=not binary,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return b"" if binary else ""
+    return result.stdout
+
+
+def _capture_source_snapshot(output_dir):
+    """Preserve the exact tracked and untracked source used by a sweep."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    snapshot_path = output_dir / "source_snapshot.tar.gz"
+    state_path = output_dir / "source_state.json"
+
+    raw_paths = _git_output(
+        ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+        binary=True,
+    )
+    excluded_roots = {".git", "logs", "output", "plots", "results", "tmp"}
+    source_paths = []
+    for raw_path in raw_paths.split(b"\0"):
+        if not raw_path:
+            continue
+        relative_path = Path(raw_path.decode("utf-8"))
+        if relative_path.parts[0] in excluded_roots:
+            continue
+        if "__pycache__" in relative_path.parts or relative_path.suffix in {
+            ".pyc",
+            ".log",
+        }:
+            continue
+        if relative_path.name == ".DS_Store" or not relative_path.is_file():
+            continue
+        source_paths.append(relative_path)
+
+    with tarfile.open(snapshot_path, "w:gz") as archive:
+        for relative_path in sorted(source_paths):
+            archive.add(relative_path, arcname=relative_path.as_posix())
+
+    digest = hashlib.sha256(snapshot_path.read_bytes()).hexdigest()
+    status = []
+    for line in _git_output(["status", "--short"]).splitlines():
+        status_path = line[3:].split(" -> ")[-1]
+        if Path(status_path).parts[0] in excluded_roots:
+            continue
+        status.append(line)
+    state = {
+        "source_commit": _git_output(["rev-parse", "HEAD"]).strip(),
+        "source_branch": _git_output(["branch", "--show-current"]).strip(),
+        "source_dirty": bool(status),
+        "source_status": status,
+        "snapshot_path": str(snapshot_path.resolve()),
+        "snapshot_sha256": digest,
+        "snapshot_file_count": len(source_paths),
+        "excluded_roots": sorted(excluded_roots),
+    }
+    state_path.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
+    return state
+
+
+def _write_sweep_manifest(
+    path,
+    status,
+    args,
+    planned_runs,
+    planned_cases,
+    successful_runs,
+    failures,
+    out_csv,
+    diagnostics_dir,
+    summary_dir,
+    log_dir,
+):
+    manifest = {
+        "schema_version": 1,
+        "status": status,
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "command": " ".join(sys.argv),
+        "parameters": {
+            "only": args.only,
+            "algos": args.algos,
+            "resolutions": args.resolutions,
+            "wiggles": args.wiggles,
+            "seeds": args.seeds,
+            "plic_fallback": args.plic_fallback,
+            "rescue_profile": args.rescue_profile,
+            "corner_behavior_profile": args.corner_behavior_profile,
+            "corner_behavior_profiles": args.corner_behavior_profiles,
+            "run_namespace": args.run_namespace,
+            "raw_bundle_dir": args.raw_bundle_dir,
+            "max_workers": args.max_workers,
+        },
+        "planned_run_count": planned_runs,
+        "planned_case_count": planned_cases,
+        "successful_run_count": successful_runs,
+        "failure_count": len(failures),
+        "failures": failures,
+        "artifacts": {
+            "aggregate_metrics": str(Path(out_csv).resolve()),
+            "diagnostics": str(Path(diagnostics_dir).resolve()),
+            "summary_plots": str(Path(summary_dir).resolve()),
+            "logs": str(Path(log_dir).resolve()),
+            "raw_run_bundles": (
+                str(Path(args.raw_bundle_dir).resolve())
+                if args.raw_bundle_dir
+                else ""
+            ),
+            "source_state": str((Path(diagnostics_dir) / "source_state.json").resolve()),
+            "source_snapshot": str(
+                (Path(diagnostics_dir) / "source_snapshot.tar.gz").resolve()
+            ),
+        },
+    }
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run perturbed-quad sweeps for static experiments.")
     parser.add_argument("--circles", type=int, default=25, help="num circles")
@@ -1451,18 +1763,22 @@ def main():
     parser.add_argument(
         "--rescue_profile",
         type=str,
-        choices=[
-            "full",
-            "no_corner_rescues",
-            "no_linear_corner_rescues",
-            "no_curved_corner_rescues",
-            "no_repeated_corner_rescues",
-            "no_repeated_tiny_corner_rescues",
-            "no_repeated_corner_component_rescues",
-            "candidate_keep_12346_drop_9",
-        ],
-        default="no_curved_corner_rescues",
+        choices=sorted(MergeMesh.rescue_profiles),
+        default=MergeMesh.default_rescue_profile,
         help="Zalesak merged-reconstruction rescue profile",
+    )
+    parser.add_argument(
+        "--corner_behavior_profile",
+        type=str,
+        choices=sorted(MergeMesh.corner_behavior_profiles),
+        default=MergeMesh.default_corner_behavior_profile,
+        help="ablation profile for f8 corner-orientation and propagation behavior",
+    )
+    parser.add_argument(
+        "--corner_behavior_profiles",
+        type=str,
+        default=None,
+        help="comma-separated corner behavior profiles (overrides singular profile)",
     )
     parser.add_argument(
         "--aggregate_samples",
@@ -1470,7 +1786,20 @@ def main():
         default=0,
         help="number of sample cases in aggregate image (0 to disable)",
     )
-    parser.add_argument("--notify", action="store_true", help="send aggregates to Slack")
+    notify_group = parser.add_mutually_exclusive_group()
+    notify_group.add_argument(
+        "--notify",
+        dest="notify",
+        action="store_true",
+        default=None,
+        help="send aggregates to Slack",
+    )
+    notify_group.add_argument(
+        "--no-notify",
+        dest="notify",
+        action="store_false",
+        help="disable Slack notifications even when SLACK_NOTIFY is set",
+    )
     parser.add_argument("--dry_run", action="store_true", help="skip execution")
     parser.add_argument(
         "--log_dir",
@@ -1491,6 +1820,30 @@ def main():
         help="directory for generated summary plots (default: results/static/perturbed_plots)",
     )
     parser.add_argument(
+        "--diagnostics_dir",
+        type=str,
+        default=None,
+        help="directory for consolidated run/case/cell/event diagnostics",
+    )
+    parser.add_argument(
+        "--run_namespace",
+        type=str,
+        default=None,
+        help="optional collision-proof prefix added to every per-run save name",
+    )
+    parser.add_argument(
+        "--raw_bundle_dir",
+        type=str,
+        default=None,
+        help="copy completed raw run bundles here before consolidation",
+    )
+    parser.add_argument(
+        "--max_workers",
+        type=int,
+        default=1,
+        help="maximum number of experiment subprocesses to run concurrently",
+    )
+    parser.add_argument(
         "--plot_from_csv",
         type=str,
         default=None,
@@ -1505,7 +1858,11 @@ def main():
     args = parser.parse_args()
 
     load_slack_env()
-    notify = args.notify or os.getenv("SLACK_NOTIFY", "").lower() in {"1", "true", "yes"}
+    notify = (
+        args.notify
+        if args.notify is not None
+        else os.getenv("SLACK_NOTIFY", "").lower() in {"1", "true", "yes"}
+    )
     summary_dir = Path(
         args.summary_dir
         or os.path.join("results", "static", "perturbed_plots")
@@ -1533,26 +1890,144 @@ def main():
     seeds = _parse_list(args.seeds, int) or DEFAULT_SEEDS
     only_experiments = set(_parse_str_list(args.only))
     selected_algos = set(_parse_str_list(args.algos))
+    corner_behavior_profiles = (
+        _parse_str_list(args.corner_behavior_profiles)
+        or [args.corner_behavior_profile]
+    )
+
+    valid_experiments = {exp["name"] for exp in EXPERIMENTS}
+    unknown_experiments = sorted(only_experiments - valid_experiments)
+    if unknown_experiments:
+        parser.error(f"unknown experiments: {','.join(unknown_experiments)}")
+    valid_algos = {
+        algo.lower() for exp in EXPERIMENTS for algo in exp["algorithms"]
+    }
+    unknown_algos = sorted(selected_algos - valid_algos)
+    if unknown_algos:
+        parser.error(f"unknown algorithms: {','.join(unknown_algos)}")
+    if args.max_workers < 1:
+        parser.error("--max_workers must be at least 1")
+    if args.run_namespace and not re.fullmatch(
+        r"[A-Za-z0-9][A-Za-z0-9._-]*", args.run_namespace
+    ):
+        parser.error(
+            "--run_namespace must contain only letters, digits, '.', '_', or '-'"
+        )
+    unknown_corner_profiles = sorted(
+        set(corner_behavior_profiles) - set(MergeMesh.corner_behavior_profiles)
+    )
+    if unknown_corner_profiles:
+        parser.error(
+            f"unknown corner behavior profiles: {','.join(unknown_corner_profiles)}"
+        )
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_dir = args.log_dir or os.path.join("logs", "perturbed_sweeps", stamp)
-    Path(log_dir).mkdir(parents=True, exist_ok=True)
-
     out_csv = args.out_csv or os.path.join(
         "results", "static", f"perturbed_sweep_{stamp}.csv"
     )
+    diagnostics_dir = Path(
+        args.diagnostics_dir or Path(out_csv).parent / "diagnostics"
+    )
+    sweep_manifest_path = Path(out_csv).parent / "sweep_manifest.json"
+    failures_path = Path(out_csv).parent / "failures.csv"
+    release_root = Path(out_csv).parent.resolve()
+    raw_bundle_dir = Path(args.raw_bundle_dir).resolve() if args.raw_bundle_dir else None
+    if raw_bundle_dir is not None:
+        try:
+            raw_bundle_dir.relative_to(release_root)
+        except ValueError:
+            parser.error("--raw_bundle_dir must be inside the aggregate result root")
+
+    specs_by_exp = []
+    for exp in EXPERIMENTS:
+        if only_experiments and exp["name"] not in only_experiments:
+            continue
+        exp_algos = _filter_algos(exp["algorithms"], selected_algos)
+        if not exp_algos:
+            continue
+        if resolutions_override:
+            exp_resolutions = resolutions_override
+        elif exp["name"] in {"squares", "zalesak"}:
+            exp_resolutions = DEFAULT_RESOLUTIONS_SHORT
+        else:
+            exp_resolutions = DEFAULT_RESOLUTIONS
+
+        specs = []
+        num_value = getattr(args, exp["name"], None)
+        for resolution in exp_resolutions:
+            for wiggle in wiggles:
+                for seed in seeds:
+                    for algo in exp_algos:
+                        for corner_behavior_profile in corner_behavior_profiles:
+                            specs.append(
+                                _build_run_spec(
+                                    exp,
+                                    algo,
+                                    resolution,
+                                    wiggle,
+                                    seed,
+                                    num_value,
+                                    args,
+                                    corner_behavior_profile,
+                                )
+                            )
+        specs_by_exp.append((exp["name"], specs))
+
+    planned_runs = sum(len(specs) for _, specs in specs_by_exp)
+    planned_cases = sum(
+        spec["case_count"] for _, specs in specs_by_exp for spec in specs
+    )
+    if planned_runs == 0:
+        parser.error("the selected experiments and algorithms produce no runs")
+
+    if args.dry_run:
+        print(f"Planned runs: {planned_runs}")
+        print(f"Planned cases: {planned_cases}")
+        for exp_name, specs in specs_by_exp:
+            print(f"- {exp_name}: {len(specs)}")
+        print(f"Workers: {args.max_workers}")
+        print(f"Aggregate CSV: {Path(out_csv).resolve()}")
+        print(f"Diagnostics: {diagnostics_dir.resolve()}")
+        print(f"Summary plots: {summary_dir}")
+        print(f"Logs: {Path(log_dir).resolve()}")
+        if args.run_namespace:
+            print(f"Run namespace: {args.run_namespace}")
+        if raw_bundle_dir is not None:
+            print(f"Raw run bundles: {raw_bundle_dir}")
+        return
+
+    Path(log_dir).mkdir(parents=True, exist_ok=True)
     Path(out_csv).parent.mkdir(parents=True, exist_ok=True)
+    prepare_diagnostic_bundle(diagnostics_dir)
+    source_state = _capture_source_snapshot(diagnostics_dir)
 
     failures = []
+    successful_runs = 0
     stage_notified = set()
 
-    with open(out_csv, "w", newline="") as csvfile:
+    _write_sweep_manifest(
+        sweep_manifest_path,
+        "running",
+        args,
+        planned_runs,
+        planned_cases,
+        successful_runs,
+        failures,
+        out_csv,
+        diagnostics_dir,
+        summary_dir,
+        log_dir,
+    )
+
+    with open(out_csv, "w", newline="", encoding="utf-8") as csvfile:
         fieldnames = [
             "experiment",
             "algo",
             "resolution",
             "wiggle",
             "seed",
+            "corner_behavior_profile",
             "metric_key",
             "metric_value",
             "save_name",
@@ -1564,130 +2039,173 @@ def main():
             print(f"Collecting existing perturbed sweep metrics at {datetime.now().isoformat()}")
         else:
             print(f"Perturbed sweeps started at {datetime.now().isoformat()}")
+        print(f"Planned runs: {planned_runs}")
+        print(f"Workers: {args.max_workers}")
         print(f"Logging to {log_dir}")
         print(f"Writing CSV to {out_csv}")
+        print(f"Consolidating diagnostics to {diagnostics_dir}")
+        print(
+            f"Source snapshot: {source_state['snapshot_file_count']} files, "
+            f"dirty={source_state['source_dirty']}"
+        )
 
-        if args.dry_run:
-            return
-
-        for exp in EXPERIMENTS:
-            if only_experiments and exp["name"] not in only_experiments:
-                continue
-            exp_algos = _filter_algos(exp["algorithms"], selected_algos)
-            if not exp_algos:
-                continue
-            num_value = getattr(args, exp["name"], None)
-            if resolutions_override:
-                exp_resolutions = resolutions_override
-            elif exp["name"] in {"squares", "zalesak"}:
-                exp_resolutions = DEFAULT_RESOLUTIONS_SHORT
+        for exp_name, specs in specs_by_exp:
+            if args.collect_existing:
+                execution_results = [
+                    {"code": 0, "log_path": "", "error": ""} for _ in specs
+                ]
             else:
-                exp_resolutions = DEFAULT_RESOLUTIONS
+                with ThreadPoolExecutor(max_workers=args.max_workers) as executor:
+                    execution_results = list(
+                        executor.map(
+                            lambda spec: _execute_run_spec(spec, log_dir),
+                            specs,
+                        )
+                    )
 
-            for resolution in exp_resolutions:
-                for wiggle in wiggles:
-                    for seed in seeds:
-                        for algo in exp_algos:
-                            save_name = _make_save_name(
-                                exp["name"], algo, resolution, wiggle, seed
-                            )
-                            if (
-                                exp["name"] == "zalesak"
-                                and args.rescue_profile != "full"
-                            ):
-                                save_name = f"{save_name}_{args.rescue_profile}"
-                            cmd = [
-                                sys.executable,
-                                "-m",
-                                exp["module"],
-                                "--config",
-                                exp["config"],
-                                "--resolution",
-                                str(resolution),
-                                "--facet_algo",
-                                algo,
-                                "--save_name",
-                                save_name,
-                                "--mesh_type",
-                                "perturbed_quads",
-                                "--perturb_wiggle",
-                                str(wiggle),
-                                "--perturb_seed",
-                                str(seed),
-                                "--perturb_fix_boundary",
-                                "1",
-                            ]
-                            if num_value is not None:
-                                cmd += [exp["num_arg"], str(num_value)]
-                            if args.plic_fallback is not None:
-                                cmd += ["--plic_fallback", args.plic_fallback]
-                            if exp["name"] == "zalesak":
-                                cmd += ["--rescue_profile", args.rescue_profile]
+            for spec, execution in zip(specs, execution_results):
+                if execution["error"]:
+                    failure = _failure_record(
+                        spec,
+                        f"could not launch subprocess: {execution['error']}",
+                        log_path=execution["log_path"],
+                    )
+                    failures.append(failure)
+                    print(f"[ERROR] {spec['save_name']}: {failure['reason']}")
+                    continue
+                if execution["code"] != 0:
+                    failure = _failure_record(
+                        spec,
+                        "experiment subprocess failed",
+                        code=execution["code"],
+                        log_path=execution["log_path"],
+                    )
+                    failures.append(failure)
+                    print(
+                        f"[ERROR] {spec['save_name']} failed "
+                        f"(code {execution['code']}; log {execution['log_path']})"
+                    )
+                    continue
 
-                            if args.collect_existing:
-                                metrics = _collect_metrics(exp["name"], save_name)
-                                if not metrics:
-                                    print(
-                                        f"[SKIP] Missing existing metrics for {exp['name']} {algo} r={resolution} w={wiggle} s={seed}"
-                                    )
-                                    continue
-                            else:
-                                log_path = Path(log_dir) / f"{save_name}.log"
-                                code = _run_subprocess(cmd, log_path)
-                                if code != 0:
-                                    failures.append(
-                                        {
-                                            "experiment": exp["name"],
-                                            "algo": algo,
-                                            "resolution": resolution,
-                                            "wiggle": wiggle,
-                                            "seed": seed,
-                                            "code": code,
-                                        }
-                                    )
-                                    print(
-                                        f"[ERROR] {exp['name']} {algo} r={resolution} w={wiggle} s={seed} failed (code {code})"
-                                    )
-                                    continue
+                source_run_dir = Path("plots") / spec["save_name"]
+                metrics = _collect_metrics(spec["experiment"], spec["save_name"])
+                if not metrics:
+                    failure = _failure_record(
+                        spec,
+                        "run completed without aggregate metrics",
+                        log_path=execution["log_path"],
+                    )
+                    failures.append(failure)
+                    print(f"[ERROR] {spec['save_name']}: {failure['reason']}")
+                    continue
 
-                                metrics = _collect_metrics(exp["name"], save_name)
-                            for key, value in metrics.items():
-                                writer.writerow(
-                                    {
-                                        "experiment": exp["name"],
-                                        "algo": algo,
-                                        "resolution": resolution,
-                                        "wiggle": wiggle,
-                                        "seed": seed,
-                                        "metric_key": key,
-                                        "metric_value": value,
-                                        "save_name": save_name,
-                                    }
-                                )
+                try:
+                    diagnostic_run_dir = source_run_dir
+                    if raw_bundle_dir is not None:
+                        diagnostic_run_dir = archive_run_bundle(
+                            source_run_dir,
+                            raw_bundle_dir,
+                            save_name=spec["save_name"],
+                        )
+                    diagnostic_counts = consolidate_run_diagnostics(
+                        diagnostic_run_dir,
+                        diagnostics_dir,
+                        spec,
+                        inventory_root=(
+                            release_root if raw_bundle_dir is not None else None
+                        ),
+                    )
+                except (DiagnosticBundleError, OSError, csv.Error, KeyError) as exc:
+                    failure = _failure_record(
+                        spec,
+                        f"diagnostic consolidation failed: {exc}",
+                        log_path=execution["log_path"],
+                    )
+                    failures.append(failure)
+                    print(f"[ERROR] {spec['save_name']}: {failure['reason']}")
+                    continue
 
-                            if notify:
-                                agg_path, indices = _build_aggregate_plot(
-                                    save_name, sample_count=args.aggregate_samples
-                                )
-                                if agg_path:
-                                    _send_results_to_slack_logged(
-                                        f"{exp['name']} {algo} r={resolution} w={wiggle} s={seed}: aggregate samples {indices}",
-                                        [agg_path],
-                                    )
+                for key, value in metrics.items():
+                    writer.writerow(
+                        {
+                            "experiment": spec["experiment"],
+                            "algo": spec["algo"],
+                            "resolution": spec["resolution"],
+                            "wiggle": spec["wiggle"],
+                            "seed": spec["seed"],
+                            "corner_behavior_profile": spec[
+                                "corner_behavior_profile"
+                            ],
+                            "metric_key": key,
+                            "metric_value": value,
+                            "save_name": spec["save_name"],
+                        }
+                    )
+                csvfile.flush()
+                successful_runs += 1
+                print(
+                    f"[OK] {spec['save_name']} "
+                    f"({diagnostic_counts['case_metrics_rows']} cases, "
+                    f"{diagnostic_counts['cell_metrics_rows']} cells)"
+                )
+
+                if notify:
+                    agg_path, indices = _build_aggregate_plot(
+                        spec["save_name"], sample_count=args.aggregate_samples
+                    )
+                    if agg_path:
+                        _send_results_to_slack_logged(
+                            f"{spec['experiment']} {spec['algo']} "
+                            f"r={spec['resolution']} w={spec['wiggle']} "
+                            f"s={spec['seed']}: aggregate samples {indices}",
+                            [agg_path],
+                        )
 
             csvfile.flush()
             if notify:
-                if _notify_stage_summary(out_csv, summary_dir, exp["name"]):
-                    stage_notified.add(exp["name"])
+                if _notify_stage_summary(out_csv, summary_dir, exp_name):
+                    stage_notified.add(exp_name)
+
+            _write_sweep_manifest(
+                sweep_manifest_path,
+                "running",
+                args,
+                planned_runs,
+                planned_cases,
+                successful_runs,
+                failures,
+                out_csv,
+                diagnostics_dir,
+                summary_dir,
+                log_dir,
+            )
 
     print("\n=== Perturbed sweep summary ===")
+    print(f"Successful runs: {successful_runs}/{planned_runs}")
     print(f"Failures: {len(failures)}")
     for failure in failures:
         print(
-            f"- {failure['experiment']} / {failure['algo']} / r={failure['resolution']} / w={failure['wiggle']} / s={failure['seed']} (code {failure['code']})"
+            f"- {failure['experiment']} / {failure['algo']} / "
+            f"r={failure['resolution']} / w={failure['wiggle']} / "
+            f"s={failure['seed']}: {failure['reason']}"
         )
 
+    _write_failure_csv(failures_path, failures)
     plots_by_exp = _generate_summary_plots(out_csv, summary_dir)
+    final_status = "failed" if failures else "completed"
+    _write_sweep_manifest(
+        sweep_manifest_path,
+        final_status,
+        args,
+        planned_runs,
+        planned_cases,
+        successful_runs,
+        failures,
+        out_csv,
+        diagnostics_dir,
+        summary_dir,
+        log_dir,
+    )
 
     if notify:
         for exp, plot_paths in plots_by_exp.items():
@@ -1700,10 +2218,19 @@ def main():
                     f"Perturbed sweep all-method summaries: {exp}",
                     resolved_paths,
                 )
-        _send_results_to_slack_logged(
-            f"Perturbed sweep complete. CSV: {out_csv}",
-            [str(Path(out_csv).resolve())],
-        )
+        if failures:
+            _send_results_to_slack_logged(
+                f"Perturbed sweep failed with {len(failures)} run errors.",
+                [str(failures_path.resolve()), str(Path(out_csv).resolve())],
+            )
+        else:
+            _send_results_to_slack_logged(
+                f"Perturbed sweep complete. CSV: {out_csv}",
+                [str(Path(out_csv).resolve())],
+            )
+
+    if failures:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

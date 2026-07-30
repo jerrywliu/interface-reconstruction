@@ -45,6 +45,10 @@ class NeighboredPolygon(BasePolygon):
         self.facet_type = None
         self.left_neighbor = None
         self.right_neighbor = None
+        self.use_linear_corner_locality_guard = True
+        self.require_both_linear_corner_branches = True
+        self.use_corner_branch_propagation = True
+        self.plic_fallback_policy = "LVIRA"
 
         # TODO List of unoriented neighbors, maybe useful later?
         self.unoriented_neighbors = []
@@ -118,7 +122,8 @@ class NeighboredPolygon(BasePolygon):
                 )
             except RuntimeError as error:
                 print(
-                    f"fitCircularFacet fallback to ELVIRA after getLinearFacet failure: {error}"
+                    "fitCircularFacet fallback to "
+                    f"{self.plic_fallback_policy} after getLinearFacet failure: {error}"
                 )
                 self._set_default_plic_fallback()
                 return
@@ -217,7 +222,8 @@ class NeighboredPolygon(BasePolygon):
                 )
             except RuntimeError as error:
                 print(
-                    f"fitLinearFacet fallback to ELVIRA after getLinearFacet failure: {error}"
+                    "fitLinearFacet fallback to "
+                    f"{self.plic_fallback_policy} after getLinearFacet failure: {error}"
                 )
                 self._set_default_plic_fallback()
                 return
@@ -268,9 +274,12 @@ class NeighboredPolygon(BasePolygon):
         else:
             print("Not enough neighbors: failed to make linear facet")
 
-    def _set_default_plic_fallback(self):
+    def _set_default_plic_fallback(self, policy=None):
+        policy = self._normalize_plic_fallback(
+            policy or self.plic_fallback_policy
+        )
         if self.has3x3Stencil():
-            self.setFacet(self.runLVIRA(ret=True))
+            self.setFacet(self._run_plic_fallback(policy))
             return
 
         left_centroid = getCentroid(self.left_neighbor.points)
@@ -433,7 +442,9 @@ class NeighboredPolygon(BasePolygon):
         corner_point, _, _ = lineIntersect(l1, l2, p1, p2)
         if corner_point is None:
             return None, None
-        if not self._is_local_linear_corner(l1, l2, p1, p2, corner_point):
+        if self.use_linear_corner_locality_guard and not self._is_local_linear_corner(
+            l1, l2, p1, p2, corner_point
+        ):
             return None, None
 
         corner = [l2, corner_point, p2]
@@ -447,9 +458,12 @@ class NeighboredPolygon(BasePolygon):
 
         intersects1 = getPolyLineIntersects(self.points, corner[0], corner[1])
         intersects2 = getPolyLineIntersects(self.points, corner[1], corner[2])
+        if self.require_both_linear_corner_branches:
+            branches_intersect = len(intersects1) > 0 and len(intersects2) > 0
+        else:
+            branches_intersect = len(intersects1) > 0 or len(intersects2) > 0
         if not (
-            len(intersects1) > 0
-            and len(intersects2) > 0
+            branches_intersect
             and abs(lineAngleSine(l1, l2, p1, p2))
             > NeighboredPolygon.corner_sharpness_threshold
         ):
@@ -465,7 +479,8 @@ class NeighboredPolygon(BasePolygon):
         if corner_facet is None:
             return
         self.setFacet(corner_facet)
-        self.propagateCornerBranchFacets()
+        if self.use_corner_branch_propagation:
+            self.propagateCornerBranchFacets()
         # print("checkCornerFacet formed corner:")
         # print(self)
         # print("Target area fraction: {}".format(self.getFraction()))

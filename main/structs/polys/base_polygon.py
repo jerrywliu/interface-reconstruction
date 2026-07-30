@@ -57,6 +57,11 @@ class BasePolygon:
         # Adjacent polygons
         self.adjacent_polys = []
 
+        # Optional callback used by MergeMesh to retain facet-construction provenance.
+        self._facet_assignment_callback = None
+        self.last_safe_circle_fallback = None
+        self.last_c0_fit_diagnostic = None
+
     # TODO set fraction to 0 or 1 if within threshold?
     def setArea(self, area):
         self.fraction = area / self.max_area
@@ -117,7 +122,10 @@ class BasePolygon:
             )
 
     def setFacet(self, facet):
+        previous_facet = self.facet
         self.facet = facet
+        if self._facet_assignment_callback is not None:
+            self._facet_assignment_callback(self, previous_facet, facet)
 
     def clearFacet(self):
         self.facet = None
@@ -457,6 +465,48 @@ class BasePolygon:
         else:
             self.setFacet(lvira_facet)
 
+    @staticmethod
+    def _normalize_plic_fallback(policy):
+        if policy is None:
+            return None
+        policies = {
+            "youngs": "Youngs",
+            "elvira": "ELVIRA",
+            "lvira": "LVIRA",
+        }
+        policy_key = str(policy).lower()
+        if policy_key not in policies:
+            raise ValueError(
+                f"Unknown plic_fallback={policy!r}; expected Youngs, ELVIRA, or LVIRA"
+            )
+        return policies[policy_key]
+
+    def _run_plic_fallback(self, policy):
+        policy = self._normalize_plic_fallback(policy)
+        if policy == "Youngs":
+            return self.runYoungs(ret=True)
+        if policy == "ELVIRA":
+            return self.runELVIRA(ret=True)
+        if policy == "LVIRA":
+            return self.runLVIRA(ret=True)
+        return None
+
+    def _fit_mass_matching_line(self, seed_left, seed_right):
+        distance = getDistance(seed_left, seed_right)
+        if distance <= 0:
+            raise RuntimeError("Degenerate support line")
+        normal = [
+            (-seed_right[1] + seed_left[1]) / distance,
+            (seed_right[0] - seed_left[0]) / distance,
+        ]
+        line_left, line_right = getLinearFacetFromNormal(
+            self.points,
+            self.getFraction(),
+            normal,
+            BasePolygon.optimization_threshold,
+        )
+        return LinearFacet(line_left, line_right, name="default_linear")
+
     def runSafeLinear(
         self,
         ret=False,
@@ -564,168 +614,249 @@ class BasePolygon:
     def runSafeCircle(
         self,
         ret=False,
-        default_to_youngs=False,
-        default_to_elvira=True,
+        plic_fallback="LVIRA",
+        arc_failure_fallback="local_linear",
+        default_to_youngs=None,
+        default_to_elvira=None,
+        return_info=False,
     ):
         assert self.has3x3Stencil()
+        if default_to_youngs is True:
+            plic_fallback = "Youngs"
+        elif default_to_elvira is True:
+            plic_fallback = "ELVIRA"
+        elif default_to_youngs is False and default_to_elvira is False:
+            plic_fallback = None
+        plic_fallback = self._normalize_plic_fallback(plic_fallback)
+
+        arc_failure_fallback = str(arc_failure_fallback or "none").lower()
+        if arc_failure_fallback not in {"local_linear", "plic", "none"}:
+            raise ValueError(
+                "Unknown arc_failure_fallback={!r}; expected local_linear, plic, or none".format(
+                    arc_failure_fallback
+                )
+            )
+
+        def finish(facet, fallback_record=None):
+            self.last_safe_circle_fallback = fallback_record
+            if ret:
+                if return_info:
+                    return facet, fallback_record
+                return facet
+            if facet is not None:
+                self.setFacet(facet)
+            if return_info:
+                return fallback_record
+            return None
+
+        def plic_result(reason):
+            facet = self._run_plic_fallback(plic_fallback)
+            return finish(
+                facet,
+                {
+                    "event_kind": "plic_fallback" if facet is not None else "missing_fallback",
+                    "reason": reason,
+                    "policy": plic_fallback or "",
+                },
+            )
+
+        def arc_failure_result(seed_left, seed_right, reason):
+            if arc_failure_fallback == "local_linear":
+                try:
+                    facet = self._fit_mass_matching_line(seed_left, seed_right)
+                    return finish(
+                        facet,
+                        {
+                            "event_kind": "local_linear_fallback",
+                            "reason": reason,
+                            "policy": "local_linear",
+                        },
+                    )
+                except Exception:
+                    return plic_result(f"{reason}_local_linear_failed")
+            if arc_failure_fallback == "plic":
+                return plic_result(reason)
+            return finish(
+                None,
+                {
+                    "event_kind": "missing_fallback",
+                    "reason": reason,
+                    "policy": "",
+                },
+            )
+
         orientation = self.findSafeOrientation(fit_1neighbor=False)
         if orientation is None:
-            # Default to PLIC
-            if default_to_youngs:
-                facet = self.runYoungs(ret=True)
-            elif default_to_elvira:
-                facet = self.runELVIRA(ret=True)
-            else:
-                facet = None
-        else:
-            left_neighbor: BasePolygon = orientation[0]
-            right_neighbor: BasePolygon = orientation[1]
-            try:
-                l1, l2 = getLinearFacet(
-                    left_neighbor.points,
-                    right_neighbor.points,
-                    left_neighbor.getFraction(),
-                    right_neighbor.getFraction(),
-                    BasePolygon.optimization_threshold,
-                )
-            except RuntimeError as error:
-                print(f"runSafeCircle fallback to PLIC after getLinearFacet failure: {error}")
-                if default_to_youngs:
-                    facet = self.runYoungs(ret=True)
-                elif default_to_elvira:
-                    facet = self.runELVIRA(ret=True)
-                else:
-                    facet = None
-                if ret:
-                    return facet
-                else:
-                    self.setFacet(facet)
-                    return
-            if (
-                abs(
-                    self.getFraction()
-                    - getPolyLineArea(self.points, l1, l2) / self.getArea()
-                )
-                < BasePolygon.linearity_threshold
-                and (
-                    getPolyLineArea(self.points, l1, l2) / self.getArea()
-                    > BasePolygon.optimization_threshold
-                )
-                and (
-                    getPolyLineArea(self.points, l1, l2) / self.getArea()
-                    < 1 - BasePolygon.optimization_threshold
-                )
-            ):
-                # Linear
-                intersects = getPolyLineIntersects(self.points, l1, l2)
-                facet = LinearFacet(intersects[0], intersects[-1])
-            else:
-                try:
-                    arccenter, arcradius, arcintersects = self._run_arc_fit_with_timeout(
-                        left_neighbor.points,
-                        self.points,
-                        right_neighbor.points,
-                        left_neighbor.getFraction(),
-                        self.getFraction(),
-                        right_neighbor.getFraction(),
-                        BasePolygon.optimization_threshold,
-                    )
-                    if arccenter is None or arcradius is None or arcintersects is None:
-                        arccenter, arcradius, arcintersects = (
-                            self._try_arc_fit_root_fallbacks(
-                                (
-                                    left_neighbor.points,
-                                    self.points,
-                                    right_neighbor.points,
-                                    left_neighbor.getFraction(),
-                                    self.getFraction(),
-                                    right_neighbor.getFraction(),
-                                    BasePolygon.optimization_threshold,
-                                )
-                            )
-                        )
-                    if arccenter is None or arcradius is None or arcintersects is None:
-                        if default_to_youngs:
-                            facet = self.runYoungs(ret=True)
-                        elif default_to_elvira:
-                            facet = self.runELVIRA(ret=True)
-                        else:
-                            facet = None
-                    else:
-                        # Arc
-                        facet = ArcFacet(
-                            arccenter, arcradius, arcintersects[0], arcintersects[-1]
-                        )
-                except LinearFacetShortcut as shortcut:
-                    facet = LinearFacet(shortcut.pLeft, shortcut.pRight)
-                except (RuntimeError, TimeoutError) as error:
-                    arccenter, arcradius, arcintersects = (
-                        self._try_arc_fit_root_fallbacks(
-                            (
-                                left_neighbor.points,
-                                self.points,
-                                right_neighbor.points,
-                                left_neighbor.getFraction(),
-                                self.getFraction(),
-                                right_neighbor.getFraction(),
-                                BasePolygon.optimization_threshold,
-                            )
-                        )
-                    )
-                    if arccenter is not None and arcradius is not None and arcintersects is not None:
-                        facet = ArcFacet(arccenter, arcradius, arcintersects[0], arcintersects[-1])
-                    else:
-                        print(
-                            f"runSafeCircle fallback to PLIC after getArcFacet failure: {error}"
-                        )
-                        if default_to_youngs:
-                            facet = self.runYoungs(ret=True)
-                        elif default_to_elvira:
-                            facet = self.runELVIRA(ret=True)
-                        else:
-                            facet = None
-                except Exception as error:
-                    print(
-                        f"runSafeCircle fallback to PLIC after unexpected getArcFacet failure: {error}"
-                    )
-                    if default_to_youngs:
-                        facet = self.runYoungs(ret=True)
-                    elif default_to_elvira:
-                        facet = self.runELVIRA(ret=True)
-                    else:
-                        facet = None
+            return plic_result("unresolved_orientation")
 
-        if ret:
-            return facet
-        else:
-            self.setFacet(facet)
+        left_neighbor: BasePolygon = orientation[0]
+        right_neighbor: BasePolygon = orientation[1]
+        try:
+            l1, l2 = getLinearFacet(
+                left_neighbor.points,
+                right_neighbor.points,
+                left_neighbor.getFraction(),
+                right_neighbor.getFraction(),
+                BasePolygon.optimization_threshold,
+            )
+        except RuntimeError as error:
+            print(f"runSafeCircle fallback to PLIC after getLinearFacet failure: {error}")
+            return plic_result("support_line_fit_failed")
 
-    # Given two endpoints of facet and area fraction, find unique curvature satisfying those constraints
+        line_area_fraction = getPolyLineArea(self.points, l1, l2) / self.getArea()
+        if (
+            abs(self.getFraction() - line_area_fraction)
+            < BasePolygon.linearity_threshold
+            and line_area_fraction > BasePolygon.optimization_threshold
+            and line_area_fraction < 1 - BasePolygon.optimization_threshold
+        ):
+            intersects = getPolyLineIntersects(self.points, l1, l2)
+            return finish(LinearFacet(intersects[0], intersects[-1]))
+
+        arc_args = (
+            left_neighbor.points,
+            self.points,
+            right_neighbor.points,
+            left_neighbor.getFraction(),
+            self.getFraction(),
+            right_neighbor.getFraction(),
+            BasePolygon.optimization_threshold,
+        )
+        try:
+            arccenter, arcradius, arcintersects = self._run_arc_fit_with_timeout(
+                *arc_args
+            )
+            if arccenter is None or arcradius is None or arcintersects is None:
+                arccenter, arcradius, arcintersects = self._try_arc_fit_root_fallbacks(
+                    arc_args
+                )
+        except LinearFacetShortcut as shortcut:
+            return finish(LinearFacet(shortcut.pLeft, shortcut.pRight))
+        except (RuntimeError, TimeoutError) as error:
+            arccenter, arcradius, arcintersects = self._try_arc_fit_root_fallbacks(
+                arc_args
+            )
+            if arccenter is None or arcradius is None or arcintersects is None:
+                print(
+                    f"runSafeCircle local-line fallback after getArcFacet failure: {error}"
+                )
+                return arc_failure_result(l1, l2, "arc_fit_failed")
+        except Exception as error:
+            print(
+                f"runSafeCircle local-line fallback after unexpected getArcFacet failure: {error}"
+            )
+            return arc_failure_result(l1, l2, "unexpected_arc_fit_failed")
+
+        if arccenter is None or arcradius is None or arcintersects is None:
+            return arc_failure_result(l1, l2, "arc_fit_failed")
+        return finish(
+            ArcFacet(arccenter, arcradius, arcintersects[0], arcintersects[-1])
+        )
+
+    def _facet_phase_area(self, facet):
+        if isinstance(facet, LinearFacet):
+            return getPolyLineArea(self.points, facet.pLeft, facet.pRight)
+        if isinstance(facet, ArcFacet):
+            return getCircleIntersectArea(
+                facet.center, facet.radius, self.points
+            )[0]
+        raise TypeError(f"Unsupported C0 facet type: {type(facet).__name__}")
+
+    # Given two endpoints of facet and area fraction, find a conservative curvature.
     def fitCurvature(
         self, pLeft, pRight, fraction_tolerance=fraction_tolerance, ret=False
     ):
-        d = getDistance(pLeft, pRight)
-        lineArea = getPolyLineArea(self.points, pLeft, pRight)
-        # If line area is close to target area, return linear facet
-        if (
-            abs(self.getArea() - lineArea) / self.getMaxArea()
-            < BasePolygon.C0_linear_tolerance
-        ):
-            facet = LinearFacet(pLeft, pRight)
-        # Otherwise, need to fit curvature
-        else:
-            radius = matchArcArea(
-                d, self.getArea() - lineArea, fraction_tolerance * self.getMaxArea()
-            )
-            if radius == float("inf") or radius == -float("inf"):
+        target_area = self.getArea()
+        area_tolerance = fraction_tolerance * self.getMaxArea()
+        try:
+            original_error = abs(self._facet_phase_area(self.getFacet()) - target_area)
+        except Exception:
+            original_error = 0.0
+        allowed_error = original_error + area_tolerance
+
+        try:
+            d = getDistance(pLeft, pRight)
+            lineArea = getPolyLineArea(self.points, pLeft, pRight)
+            if (
+                abs(target_area - lineArea) / self.getMaxArea()
+                < BasePolygon.C0_linear_tolerance
+            ):
                 facet = LinearFacet(pLeft, pRight)
             else:
-                center = getCenter(pLeft, pRight, radius)
-                facet = ArcFacet(center, radius, pLeft, pRight)
-        if ret:
-            return facet
+                radius = matchArcArea(
+                    d, target_area - lineArea, area_tolerance
+                )
+                if radius == float("inf") or radius == -float("inf"):
+                    facet = LinearFacet(pLeft, pRight)
+                else:
+                    center = getCenter(pLeft, pRight, radius)
+                    facet = ArcFacet(center, radius, pLeft, pRight)
+        except Exception as error:
+            self.last_c0_fit_diagnostic = {
+                "selected_branch": "rejected_exception",
+                "rejection_reason": type(error).__name__,
+                "rejection_message": str(error),
+                "target_area": target_area,
+                "original_error": original_error,
+                "candidate_error": float("inf"),
+                "alternate_error": float("inf"),
+                "selected_error": float("inf"),
+                "allowed_error": allowed_error,
+            }
+            return None
+
+        try:
+            candidate_error = abs(self._facet_phase_area(facet) - target_area)
+        except Exception:
+            candidate_error = float("inf")
+
+        alternate = None
+        alternate_error = float("inf")
+        if isinstance(facet, ArcFacet) and candidate_error > allowed_error:
+            alternate_radius = -facet.radius
+            try:
+                alternate = ArcFacet(
+                    getCenter(pLeft, pRight, alternate_radius),
+                    alternate_radius,
+                    pLeft,
+                    pRight,
+                )
+                alternate_error = abs(
+                    self._facet_phase_area(alternate) - target_area
+                )
+            except Exception:
+                alternate = None
+                alternate_error = float("inf")
+
+        if candidate_error <= allowed_error:
+            selected_facet = facet
+            selected_error = candidate_error
+            selected_branch = "analytic"
+        elif alternate is not None and alternate_error <= allowed_error:
+            selected_facet = alternate
+            selected_error = alternate_error
+            selected_branch = "opposite_signed_curvature"
         else:
-            self.setFacet(facet)
+            selected_facet = None
+            selected_error = min(candidate_error, alternate_error)
+            selected_branch = "rejected"
+
+        self.last_c0_fit_diagnostic = {
+            "selected_branch": selected_branch,
+            "target_area": target_area,
+            "original_error": original_error,
+            "candidate_error": candidate_error,
+            "alternate_error": alternate_error,
+            "selected_error": selected_error,
+            "allowed_error": allowed_error,
+            "rejection_reason": (
+                "area_residual" if selected_branch == "rejected" else ""
+            ),
+        }
+        if ret:
+            return selected_facet
+        if selected_facet is not None:
+            self.setFacet(selected_facet)
 
     # Given two endpoints of facet and slopes (both pointing from endpoint toward corner), form unique linear corner and #TODO
     def checkCorner(self, pLeft, pRight, slopeLeft, slopeRight):

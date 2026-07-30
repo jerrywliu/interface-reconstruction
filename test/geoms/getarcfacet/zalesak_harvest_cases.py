@@ -441,6 +441,7 @@ TEST_CASES = [
         a2=0.6194683508512564,
         a3=0.1539548191336915,
         epsilon=1e-10,
+        expected_result='fail',
         description='status=failed, instant failure, time=0.0050s, source=circular, merge_id=63',
         source_suite="zalesak_harvest",
         metadata={'experiment': 'zalesak', 'algo': 'circular', 'resolution': 0.64, 'wiggle': 0.0, 'seed': 0, 'save_name': 'perturb_sweep_zalesak_circular_r0p64_w0p0_s0', 'case_index': 0, 'call_source': 'circular', 'merge_id': 63, 'merge_coords': [[33, 38]]},

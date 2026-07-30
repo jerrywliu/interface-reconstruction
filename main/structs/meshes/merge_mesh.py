@@ -36,9 +36,59 @@ This class is used for the algorithms that merge cells:
 
 class MergeMesh(BaseMesh):
 
+    default_corner_behavior_profile = "pre_f8_corner"
+    default_rescue_profile = "exact_linear_support_only"
+
+    rescue_profiles = {
+        "full",
+        "no_corner_rescues",
+        "no_linear_corner_rescues",
+        "no_curved_corner_rescues",
+        "no_repeated_corner_rescues",
+        "no_repeated_tiny_corner_rescues",
+        "no_repeated_corner_component_rescues",
+        "candidate_keep_12346_drop_9",
+        "exact_linear_support_only",
+    }
+
+    corner_behavior_profiles = {
+        "current": (True, True, True, True),
+        "no_orientation_hint": (False, True, True, True),
+        "no_locality_guard": (True, False, True, True),
+        "legacy_branch_intersection": (True, True, False, True),
+        "legacy_corner_acceptance": (True, False, False, True),
+        "no_corner_branch_propagation": (True, True, True, False),
+        "no_hint_legacy_acceptance": (False, False, False, True),
+        "no_hint_no_branch_propagation": (False, True, True, False),
+        "legacy_acceptance_no_branch_propagation": (True, False, False, False),
+        "pre_f8_with_locality_guard": (False, True, False, False),
+        "pre_f8_with_both_branch_requirement": (False, False, True, False),
+        "pre_f8_corner": (False, False, False, False),
+        "pre_f8_corner_late_hint": (False, False, False, False),
+        "pre_f8_corner_greedy_retry": (False, False, False, False),
+        "pre_f8_corner_greedy_continue": (False, False, False, False),
+        "pre_f8_corner_late_hint_retry": (False, False, False, False),
+    }
+    late_orientation_hint_profiles = {
+        "pre_f8_corner_late_hint",
+        "pre_f8_corner_late_hint_retry",
+    }
+    greedy_orientation_retry_profiles = {
+        "pre_f8_corner_greedy_retry",
+        "pre_f8_corner_late_hint_retry",
+    }
+    greedy_orientation_continue_profiles = {
+        "pre_f8_corner_greedy_continue",
+    }
+
     def __init__(self, points, threshold, areas=None):
         super().__init__(points, threshold, areas)
         self.plic_fallback_records = []
+        self.safe_circle_fallback_records = []
+        self.facet_provenance_events = []
+        self._provenance_event_order = 0
+        self._provenance_stage = "initial"
+        self._provenance_override = None
         # Let self.polys be a list of NeighboredPolygon objects
         self.polys: list[list[NeighboredPolygon]] = [
             [None] * (len(points[0]) - 1) for _ in range(len(points) - 1)
@@ -85,6 +135,148 @@ class MergeMesh(BaseMesh):
 
         # Dict of NeighboredPolygon objects, index matches self.merge_ids_to_coords
         self.merged_polys = dict()
+        self.configure_corner_behavior(self.default_corner_behavior_profile)
+
+    def configure_corner_behavior(self, profile=None):
+        profile = str(profile or self.default_corner_behavior_profile).lower()
+        if profile not in self.corner_behavior_profiles:
+            raise ValueError(
+                f"Unknown corner_behavior_profile={profile!r}; expected one of "
+                f"{sorted(self.corner_behavior_profiles)}"
+            )
+
+        (
+            self.use_three_neighbor_orientation_hint,
+            self.use_linear_corner_locality_guard,
+            self.require_both_linear_corner_branches,
+            self.use_corner_branch_propagation,
+        ) = self.corner_behavior_profiles[profile]
+        self.use_late_three_neighbor_orientation_hint = (
+            profile in self.late_orientation_hint_profiles
+        )
+        self.retry_greedy_orientations = (
+            profile in self.greedy_orientation_retry_profiles
+        )
+        self.continue_greedy_orientation_conflicts = (
+            profile in self.greedy_orientation_continue_profiles
+        )
+        self.corner_behavior_profile = profile
+
+        polys = [poly for column in self.polys for poly in column]
+        polys.extend(self.merged_polys.values())
+        for poly in polys:
+            poly.use_linear_corner_locality_guard = self.use_linear_corner_locality_guard
+            poly.require_both_linear_corner_branches = (
+                self.require_both_linear_corner_branches
+            )
+            poly.use_corner_branch_propagation = self.use_corner_branch_propagation
+
+    @staticmethod
+    def _facet_provenance_class(facet):
+        if facet is None:
+            return "missing"
+        if isinstance(facet, CornerFacet):
+            if isinstance(facet.facetLeft, LinearFacet) and isinstance(
+                facet.facetRight, LinearFacet
+            ):
+                return "linear_corner"
+            if isinstance(facet.facetLeft, ArcFacet) or isinstance(
+                facet.facetRight, ArcFacet
+            ):
+                return "curved_corner"
+            return "corner"
+        if isinstance(facet, ArcFacet):
+            return "circular"
+        if isinstance(facet, LinearFacet):
+            return "linear"
+        return type(facet).__name__
+
+    @classmethod
+    def _facet_provenance_name(cls, facet):
+        if facet is None:
+            return ""
+        return str(getattr(facet, "name", "") or "")
+
+    def _attach_facet_provenance(self, poly, merge_id):
+        poly._merge_id = merge_id
+        poly._facet_assignment_callback = self._record_facet_assignment
+
+    def _record_facet_assignment(self, poly, previous_facet, facet):
+        merge_id = getattr(poly, "_merge_id", None)
+        override = self._provenance_override or {}
+        override_record = override.get(merge_id)
+        if isinstance(override_record, dict):
+            event_kind = override_record.get("event_kind", "facet_assignment")
+            fallback_policy = override_record.get("policy", "")
+            fallback_reason = override_record.get("reason", "")
+        elif override_record is not None:
+            event_kind = override_record[0]
+            fallback_policy = override_record[1]
+            fallback_reason = ""
+        else:
+            event_kind = "facet_assignment"
+            fallback_policy = ""
+            fallback_reason = ""
+        self._provenance_event_order += 1
+        self.facet_provenance_events.append(
+            {
+                "event_order": self._provenance_event_order,
+                "merge_id": merge_id,
+                "stage": self._provenance_stage,
+                "event_kind": event_kind,
+                "fallback_policy": fallback_policy,
+                "fallback_reason": fallback_reason,
+                "previous_facet_class": self._facet_provenance_class(previous_facet),
+                "previous_facet_name": self._facet_provenance_name(previous_facet),
+                "facet_class": self._facet_provenance_class(facet),
+                "facet_name": self._facet_provenance_name(facet),
+            }
+        )
+
+    def _record_stage_snapshots(self, stage, merge_ids):
+        self._provenance_stage = stage
+        for merge_id in tuple(merge_ids):
+            poly = self.merged_polys.get(merge_id)
+            if poly is None:
+                continue
+            self._provenance_event_order += 1
+            facet = poly.getFacet()
+            self.facet_provenance_events.append(
+                {
+                    "event_order": self._provenance_event_order,
+                    "merge_id": merge_id,
+                    "stage": stage,
+                    "event_kind": "stage_snapshot",
+                    "fallback_policy": "",
+                    "fallback_reason": "",
+                    "previous_facet_class": "",
+                    "previous_facet_name": "",
+                    "facet_class": self._facet_provenance_class(facet),
+                    "facet_name": self._facet_provenance_name(facet),
+                }
+            )
+
+    def _rewrite_latest_facet_provenance(
+        self, merge_id, event_kind, policy, reason
+    ):
+        for event in reversed(self.facet_provenance_events):
+            if event.get("merge_id") != merge_id:
+                continue
+            event["event_kind"] = event_kind
+            event["fallback_policy"] = policy
+            event["fallback_reason"] = reason
+            return
+
+    def _append_plic_fallback_record(self, setting, merge_id, poly, facet, policy):
+        self.plic_fallback_records.append(
+            {
+                "setting": setting,
+                "merge_id": merge_id,
+                "policy": policy,
+                "facet_name": getattr(facet, "name", ""),
+                "num_vertices": len(poly.points),
+            }
+        )
 
     def _fit_deadend_facet(self, merge_id, prefer_safe_circle=False):
         merged_poly: NeighboredPolygon = self.merged_polys[merge_id]
@@ -951,6 +1143,11 @@ class MergeMesh(BaseMesh):
                 )
 
         ret_poly = NeighboredPolygon(merge_points)
+        ret_poly.use_linear_corner_locality_guard = self.use_linear_corner_locality_guard
+        ret_poly.require_both_linear_corner_branches = (
+            self.require_both_linear_corner_branches
+        )
+        ret_poly.use_corner_branch_propagation = self.use_corner_branch_propagation
         total_area = sum(
             list(map(lambda x: self.polys[x[0]][x[1]].getArea(), merge_coords_list))
         )
@@ -992,6 +1189,9 @@ class MergeMesh(BaseMesh):
                     merge_coords = self._get_merge_coords(merge_id).copy()
                     self.merged_polys[merge_id]: NeighboredPolygon = (
                         self._helper_createMergedPolys(merge_coords)
+                    )
+                    self._attach_facet_provenance(
+                        self.merged_polys[merge_id], merge_id
                     )
 
     # Runs youngs on all mixed cells. Run setFractions and createMergedPolys before.
@@ -1041,8 +1241,16 @@ class MergeMesh(BaseMesh):
                     )
                     self.merged_polys[self._get_merge_id(x, y)].setFacet(mixed_facet)
 
-    # Runs circles on all mixed cells (default to Youngs). Run setFractions and createMergedPolys before.
-    def runSafeCircle(self):
+    # Runs independent-cell circular reconstruction. Run setFractions and createMergedPolys before.
+    def runSafeCircle(
+        self, plic_fallback="LVIRA", arc_failure_fallback="local_linear"
+    ):
+        self.plic_fallback_records = []
+        self.safe_circle_fallback_records = []
+        self.facet_provenance_events = []
+        self._provenance_event_order = 0
+        self._provenance_stage = "safe_circle"
+        self._provenance_override = None
         for x in range(len(self.polys)):
             for y in range(len(self.polys[0])):
                 if self.polys[x][y].isMixed():
@@ -1056,8 +1264,39 @@ class MergeMesh(BaseMesh):
                         merge_id=merge_id,
                         merge_coords=merge_coords,
                     ):
-                        mixed_facet = mixed_poly.runSafeCircle(ret=True)
-                    self.merged_polys[merge_id].setFacet(mixed_facet)
+                        mixed_facet, fallback_record = mixed_poly.runSafeCircle(
+                            ret=True,
+                            plic_fallback=plic_fallback,
+                            arc_failure_fallback=arc_failure_fallback,
+                            return_info=True,
+                        )
+
+                    merged_poly = self.merged_polys[merge_id]
+                    previous_override = self._provenance_override
+                    if fallback_record is not None:
+                        record = {
+                            "setting": "safe_circle",
+                            "merge_id": merge_id,
+                            "policy": fallback_record.get("policy", ""),
+                            "reason": fallback_record.get("reason", ""),
+                            "event_kind": fallback_record.get("event_kind", ""),
+                            "facet_name": getattr(mixed_facet, "name", ""),
+                            "num_vertices": len(merged_poly.points),
+                        }
+                        self.safe_circle_fallback_records.append(record)
+                        self._provenance_override = {merge_id: fallback_record}
+                        if fallback_record.get("event_kind") == "plic_fallback":
+                            self._append_plic_fallback_record(
+                                "safe_circle",
+                                merge_id,
+                                merged_poly,
+                                mixed_facet,
+                                fallback_record.get("policy", ""),
+                            )
+                    try:
+                        merged_poly.setFacet(mixed_facet)
+                    finally:
+                        self._provenance_override = previous_override
 
     # 1. Runs linear on all mixed cells
     # 2. Tries linear corners on all mixed cells
@@ -1471,6 +1710,8 @@ class MergeMesh(BaseMesh):
                     process_queue.append(merge_id)
 
         def try_base_orientation_hint(merge_id_with_neighbors):
+            if not self.use_three_neighbor_orientation_hint:
+                return False
             if (
                 merge_id_with_neighbors.has_left()
                 or merge_id_with_neighbors.has_right()
@@ -1798,7 +2039,8 @@ class MergeMesh(BaseMesh):
                                     )
                                     process_queue.append(merge_id)
                                     iters_without_progress += 1
-                                    break
+                                    if not self.continue_greedy_orientation_conflicts:
+                                        break
                                 [l_x, l_y] = [
                                     x + dirs[(nonneighbor_dirs[full_index] + 1) % 4][0],
                                     y + dirs[(nonneighbor_dirs[full_index] + 1) % 4][1],
@@ -1923,6 +2165,7 @@ class MergeMesh(BaseMesh):
 
                     # TODO does this throw off the algorithm somehow because we're appending to merge_id_to_obj only? (Some invariant where merge_id_to_obj has to have same length as something else?)
                     self.merged_polys[self.next_merge_id] = merged_poly
+                    self._attach_facet_provenance(merged_poly, self.next_merge_id)
                     self.coords_to_merge_id[merge_coords[0]][
                         merge_coords[1]
                     ] = self.next_merge_id
@@ -1955,6 +2198,10 @@ class MergeMesh(BaseMesh):
     """
 
     def findOrientations(self):
+
+        self.orientation_hint_records = []
+        self.orientation_retry_records = []
+        self.orientation_retry_passes = 0
 
         class MergeIdWithNeighbors:
 
@@ -2057,7 +2304,11 @@ class MergeMesh(BaseMesh):
                     merge_id_to_obj[merge_id] = merge_id_with_neighbors
                     process_queue.append(merge_id)
 
-        def try_base_orientation_hint(merge_id_with_neighbors):
+        def try_base_orientation_hint(merge_id_with_neighbors, phase="early"):
+            if phase == "early" and not self.use_three_neighbor_orientation_hint:
+                return False
+            if phase == "late" and not self.use_late_three_neighbor_orientation_hint:
+                return False
             if (
                 merge_id_with_neighbors.has_left()
                 or merge_id_with_neighbors.has_right()
@@ -2100,6 +2351,15 @@ class MergeMesh(BaseMesh):
 
             merge_id_with_neighbors.set_left(left_id)
             merge_id_with_neighbors.set_right(right_id)
+            self.orientation_hint_records.append(
+                {
+                    "phase": phase,
+                    "merge_id": merge_id_with_neighbors.get_merge_id(),
+                    "cell": [x, y],
+                    "left_merge_id": left_id,
+                    "right_merge_id": right_id,
+                }
+            )
             return True
 
         # Add new MergeIdWithNeighbors object to merge_id_to_obj which corresponds to merging merge_id with neighbor_id
@@ -2459,6 +2719,39 @@ class MergeMesh(BaseMesh):
                 continue
 
         doGreedyOrientations()
+
+        if self.use_late_three_neighbor_orientation_hint:
+            hint_count_before = len(self.orientation_hint_records)
+            for merge_id in process_queue.copy():
+                try_base_orientation_hint(
+                    merge_id_to_obj[merge_id], phase="late"
+                )
+            if len(self.orientation_hint_records) > hint_count_before:
+                doGreedyOrientations()
+
+        if self.retry_greedy_orientations:
+            degree_counts = {0: 0, 1: 0, 2: 0, 3: 0}
+            unoriented = 0
+            half_oriented = 0
+            for merge_id in process_queue:
+                obj = merge_id_to_obj[merge_id]
+                degree_counts[min(len(obj.get_neighbor_ids()), 3)] += 1
+                assigned_sides = int(obj.has_left()) + int(obj.has_right())
+                unoriented += assigned_sides == 0
+                half_oriented += assigned_sides == 1
+            self.orientation_retry_records.append(
+                {
+                    "queue_size": len(process_queue),
+                    "degree_0": degree_counts[0],
+                    "degree_1": degree_counts[1],
+                    "degree_2": degree_counts[2],
+                    "degree_3plus": degree_counts[3],
+                    "unoriented": unoriented,
+                    "half_oriented": half_oriented,
+                }
+            )
+            self.orientation_retry_passes += 1
+            doGreedyOrientations()
 
         # Cases at this point:
         # 1 neighbor candidate:
@@ -2749,6 +3042,7 @@ class MergeMesh(BaseMesh):
 
                     # TODO does this throw off the algorithm somehow because we're appending to merge_id_to_obj only? (Some invariant where merge_id_to_obj has to have same length as something else?)
                     self.merged_polys[self.next_merge_id] = merged_poly
+                    self._attach_facet_provenance(merged_poly, self.next_merge_id)
                     self.coords_to_merge_id[merge_coords[0]][
                         merge_coords[1]
                     ] = self.next_merge_id
@@ -2832,15 +3126,20 @@ class MergeMesh(BaseMesh):
         else:
             facet = merged_poly.runLVIRA(ret=True)
 
-        merged_poly.setFacet(facet)
-        self.plic_fallback_records.append(
-            {
-                "setting": setting,
-                "merge_id": merge_id,
+        previous_override = self._provenance_override
+        self._provenance_override = {
+            merge_id: {
+                "event_kind": "plic_fallback",
                 "policy": policy,
-                "facet_name": getattr(facet, "name", ""),
-                "num_vertices": len(merged_poly.points),
-            }
+                "reason": "unresolved_orientation",
+            },
+        }
+        try:
+            merged_poly.setFacet(facet)
+        finally:
+            self._provenance_override = previous_override
+        self._append_plic_fallback_record(
+            setting, merge_id, merged_poly, facet, policy
         )
 
     # TODO why are we popping the merge ids that fail?
@@ -2849,27 +3148,27 @@ class MergeMesh(BaseMesh):
         merge_ids,
         setting="circular",
         plic_fallback="LVIRA",
-        rescue_profile="no_curved_corner_rescues",
+        rescue_profile="exact_linear_support_only",
         stage_callback=None,
     ):
         self.plic_fallback_records = []
-        rescue_profile = str(
-            rescue_profile or "no_curved_corner_rescues"
-        ).lower()
-        valid_rescue_profiles = {
-            "full",
-            "no_corner_rescues",
-            "no_linear_corner_rescues",
-            "no_curved_corner_rescues",
-            "no_repeated_corner_rescues",
-            "no_repeated_tiny_corner_rescues",
-            "no_repeated_corner_component_rescues",
-            "candidate_keep_12346_drop_9",
-        }
-        if rescue_profile not in valid_rescue_profiles:
+        self.safe_circle_fallback_records = []
+        self.facet_provenance_events = []
+        self._provenance_event_order = 0
+        self._provenance_stage = setting
+        self._provenance_override = None
+        normalized_plic_fallback = BasePolygon._normalize_plic_fallback(
+            plic_fallback or "LVIRA"
+        )
+        for merge_id in merge_ids:
+            self.merged_polys[merge_id].plic_fallback_policy = (
+                normalized_plic_fallback
+            )
+        rescue_profile = str(rescue_profile or self.default_rescue_profile).lower()
+        if rescue_profile not in self.rescue_profiles:
             raise ValueError(
                 f"Unknown rescue_profile={rescue_profile!r}; "
-                f"expected one of {sorted(valid_rescue_profiles)}"
+                f"expected one of {sorted(self.rescue_profiles)}"
             )
         use_linear_corner_rescues = rescue_profile not in {
             "no_corner_rescues",
@@ -2879,17 +3178,20 @@ class MergeMesh(BaseMesh):
             "no_corner_rescues",
             "no_curved_corner_rescues",
             "candidate_keep_12346_drop_9",
+            "exact_linear_support_only",
         }
         use_repeated_corner_rescues = rescue_profile not in {
             "no_corner_rescues",
             "no_linear_corner_rescues",
             "no_repeated_corner_rescues",
+            "exact_linear_support_only",
         }
         use_repeated_tiny_corner_rescues = rescue_profile not in {
             "no_corner_rescues",
             "no_linear_corner_rescues",
             "no_repeated_corner_rescues",
             "no_repeated_tiny_corner_rescues",
+            "exact_linear_support_only",
         }
         use_repeated_corner_component_rescues = rescue_profile not in {
             "no_corner_rescues",
@@ -2897,13 +3199,17 @@ class MergeMesh(BaseMesh):
             "no_repeated_corner_rescues",
             "no_repeated_corner_component_rescues",
             "candidate_keep_12346_drop_9",
+            "exact_linear_support_only",
         }
+        use_only_exact_linear_support = rescue_profile == "exact_linear_support_only"
 
         def emit_stage(stage):
+            self._record_stage_snapshots(stage, merge_ids)
             if stage_callback is not None:
                 stage_callback(stage, self, tuple(merge_ids))
 
         if setting == "linear":
+            self._provenance_stage = "linear"
             i = 0
             while i < len(merge_ids):
                 merge_id = merge_ids[i]
@@ -2922,6 +3228,7 @@ class MergeMesh(BaseMesh):
                 i += 1
 
         elif setting == "circular":
+            self._provenance_stage = "circular"
             i = 0
             while i < len(merge_ids):
                 merge_id = merge_ids[i]
@@ -2937,10 +3244,60 @@ class MergeMesh(BaseMesh):
                             merge_coords=self._get_merge_coords(merge_id),
                         ):
                             merged_poly.fitCircularFacet(root_guess=root_guess)
+                        if (
+                            merged_poly.hasFacet()
+                            and getattr(merged_poly.getFacet(), "name", "")
+                            in {"Youngs", "ELVIRA", "LVIRA"}
+                        ):
+                            policy = merged_poly.getFacet().name
+                            self._rewrite_latest_facet_provenance(
+                                merge_id,
+                                "plic_fallback",
+                                policy,
+                                "support_line_fit_failed",
+                            )
+                            self._append_plic_fallback_record(
+                                setting,
+                                merge_id,
+                                merged_poly,
+                                merged_poly.getFacet(),
+                                policy,
+                            )
                         # If circular facet fitter failed, default to linear
                         if not (merged_poly.hasFacet()):
-                            merged_poly.fitLinearFacet()
-                            merged_poly.getFacet().name = "default_linear"
+                            previous_override = self._provenance_override
+                            self._provenance_override = {
+                                merge_id: {
+                                    "event_kind": "local_linear_fallback",
+                                    "policy": "local_linear",
+                                    "reason": "arc_fit_failed",
+                                }
+                            }
+                            try:
+                                merged_poly.fitLinearFacet()
+                            finally:
+                                self._provenance_override = previous_override
+                            if (
+                                merged_poly.hasFacet()
+                                and getattr(merged_poly.getFacet(), "name", "")
+                                in {"Youngs", "ELVIRA", "LVIRA"}
+                            ):
+                                policy = merged_poly.getFacet().name
+                                self._rewrite_latest_facet_provenance(
+                                    merge_id,
+                                    "plic_fallback",
+                                    policy,
+                                    "arc_fit_failed_local_linear_failed",
+                                )
+                                self._append_plic_fallback_record(
+                                    setting,
+                                    merge_id,
+                                    merged_poly,
+                                    merged_poly.getFacet(),
+                                    policy,
+                                )
+                            elif merged_poly.hasFacet():
+                                merged_poly.getFacet().name = "default_linear"
                 elif merged_poly.has3x3Stencil():
                     self._run_unresolved_plic_fallback(
                         merged_poly, merge_id, setting, plic_fallback
@@ -2952,6 +3309,7 @@ class MergeMesh(BaseMesh):
                 i += 1
 
         elif setting == "linear+corner":
+            self._provenance_stage = "linear"
             # First, try fitting linear facets
             for i in range(len(merge_ids)):
                 merged_poly: NeighboredPolygon = self.merged_polys[merge_ids[i]]
@@ -3031,6 +3389,7 @@ class MergeMesh(BaseMesh):
                         pass
 
             # # For anything left, fit a linear facet again #TODO save computation of linear facet and set it here
+            self._provenance_stage = "final_fallback"
             i = 0
             while i < len(merge_ids):
                 merge_id = merge_ids[i]
@@ -3052,6 +3411,7 @@ class MergeMesh(BaseMesh):
                 i += 1
 
         elif setting == "circular+corner":
+            self._provenance_stage = "linear"
             # First, try fitting linear facets
             for i in range(len(merge_ids)):
                 merged_poly: NeighboredPolygon = self.merged_polys[merge_ids[i]]
@@ -3066,6 +3426,7 @@ class MergeMesh(BaseMesh):
             emit_stage("linear")
 
             print("Using corners")
+            self._provenance_stage = "linear_corners"
             # For the ones not fit properly, try a corner
             for i in range(len(merge_ids)):
                 merge_id = merge_ids[i]
@@ -3138,6 +3499,7 @@ class MergeMesh(BaseMesh):
             emit_stage("linear_corners")
 
             # Try fitting circular facets
+            self._provenance_stage = "circular"
             i = 0
             while i < len(merge_ids):
                 merge_id = merge_ids[i]
@@ -3157,6 +3519,7 @@ class MergeMesh(BaseMesh):
             emit_stage("circular")
 
             print("Using circular corners")
+            self._provenance_stage = "curved_corners"
             # For the ones not fit properly, try a corner
             for i in range(len(merge_ids)):
                 merge_id = merge_ids[i]
@@ -3367,6 +3730,7 @@ class MergeMesh(BaseMesh):
                             )
 
                     if use_curved_corner_rescues and not curved_corner_applied:
+                        self._provenance_stage = "curved_corner_loop_rescue"
                         rescue_assignments = self._try_local_curved_corner_loop_rescue(
                             merged_poly
                         )
@@ -3376,6 +3740,7 @@ class MergeMesh(BaseMesh):
                             curved_corner_applied = True
 
                     if use_curved_corner_rescues and not curved_corner_applied:
+                        self._provenance_stage = "curved_corner_transition_rescue"
                         rescue_assignments = (
                             self._try_local_curved_corner_transition_rescue(
                                 merged_poly
@@ -3386,15 +3751,19 @@ class MergeMesh(BaseMesh):
                                 rescue_poly.setFacet(rescue_facet)
 
             if use_linear_corner_rescues:
+                self._provenance_stage = "linear_corner_rescues"
                 # Rebuild straight geometry into nearby weak cells using exact support lines
                 # or accepted corner-branch normals before falling all the way to linear.
-                self._rescue_corner_arc_corner_triplets(merge_ids)
+                if not use_only_exact_linear_support:
+                    self._rescue_corner_arc_corner_triplets(merge_ids)
                 if use_repeated_corner_rescues and use_repeated_tiny_corner_rescues:
                     self._rescue_repeated_tiny_corner_triplets(merge_ids)
                 self._propagate_exact_linear_supports(merge_ids)
-                self._rescue_corner_linear_bridge_cells(merge_ids)
+                if not use_only_exact_linear_support:
+                    self._rescue_corner_linear_bridge_cells(merge_ids)
 
             # For anything left, fit a linear facet
+            self._provenance_stage = "final_fallback"
             i = 0
             while i < len(merge_ids):
                 merge_id = merge_ids[i]
@@ -3413,6 +3782,7 @@ class MergeMesh(BaseMesh):
                 i += 1
 
             if use_linear_corner_rescues:
+                self._provenance_stage = "post_fallback_rescues"
                 # After the fallback pass, some outer support cells have settled into
                 # reliable line facets. Revisit repeated curved-corner triplets now
                 # that those linear supports are available.
@@ -3421,7 +3791,8 @@ class MergeMesh(BaseMesh):
                     and use_repeated_corner_component_rescues
                 ):
                     self._rescue_repeated_corner_components_as_linear_corners(merge_ids)
-                self._rescue_linear_corner_owner_intruder_arcs(merge_ids)
+                if not use_only_exact_linear_support:
+                    self._rescue_linear_corner_owner_intruder_arcs(merge_ids)
 
             emit_stage("final")
 
@@ -3442,6 +3813,9 @@ class MergeMesh(BaseMesh):
                 and poly.hasFacet()
                 and poly.facet.name not in fixed_endpoint_facetnames
             )
+
+        if hasattr(self, "_provenance_stage"):
+            self._provenance_stage = "c0"
 
         # List of C0 facets matching order of merged_polys, None if merged_poly's facet is not to be C0 adjusted
         C0_facets = []
@@ -3469,11 +3843,45 @@ class MergeMesh(BaseMesh):
             else:
                 C0_facets.append(None)
 
-        # Replace each facet with its C0 adjusted version
+        # Replace each facet with its C0 adjusted version.
         for i, _ in enumerate(merged_polys):
             merged_poly: NeighboredPolygon = merged_polys[i]
+            merge_id = getattr(merged_poly, "_merge_id", None)
+            diagnostic = getattr(merged_poly, "last_c0_fit_diagnostic", None) or {}
             if C0_facets[i] is not None:
-                merged_poly.setFacet(C0_facets[i])
-            # print(merged_poly.facet)
+                previous_override = getattr(self, "_provenance_override", None)
+                if merge_id is not None and hasattr(self, "_provenance_override"):
+                    self._provenance_override = {
+                        merge_id: {
+                            "event_kind": "c0_adjustment",
+                            "policy": diagnostic.get("selected_branch", ""),
+                            "reason": "conservative_refit_accepted",
+                        }
+                    }
+                try:
+                    merged_poly.setFacet(C0_facets[i])
+                finally:
+                    if hasattr(self, "_provenance_override"):
+                        self._provenance_override = previous_override
+            elif (
+                merge_id is not None
+                and diagnostic.get("selected_branch", "").startswith("rejected")
+                and hasattr(self, "_record_facet_assignment")
+            ):
+                previous_override = self._provenance_override
+                self._provenance_override = {
+                    merge_id: {
+                        "event_kind": "c0_rejection",
+                        "policy": diagnostic.get("selected_branch", ""),
+                        "reason": diagnostic.get("rejection_reason", "area_residual"),
+                    }
+                }
+                try:
+                    original_facet = merged_poly.getFacet()
+                    self._record_facet_assignment(
+                        merged_poly, original_facet, original_facet
+                    )
+                finally:
+                    self._provenance_override = previous_override
 
         return merged_polys

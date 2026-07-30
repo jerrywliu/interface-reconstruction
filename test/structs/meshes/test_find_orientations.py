@@ -19,6 +19,64 @@ from util.config import read_yaml
 from util.initialize.mesh_factory import apply_mesh_overrides, make_points_from_config
 
 
+def test_corner_behavior_profiles_configure_mesh_and_polygons():
+    points = [
+        [[0.0, 0.0], [0.0, 1.0]],
+        [[1.0, 0.0], [1.0, 1.0]],
+    ]
+    mesh = MergeMesh(points, 1e-12)
+    poly = mesh.polys[0][0]
+
+    assert mesh.corner_behavior_profile == "pre_f8_corner"
+    assert not mesh.use_three_neighbor_orientation_hint
+    assert not mesh.use_late_three_neighbor_orientation_hint
+    assert not mesh.retry_greedy_orientations
+    assert not mesh.continue_greedy_orientation_conflicts
+    assert not poly.use_linear_corner_locality_guard
+    assert not poly.require_both_linear_corner_branches
+    assert not poly.use_corner_branch_propagation
+
+    mesh.configure_corner_behavior("current")
+    assert mesh.use_three_neighbor_orientation_hint
+    assert not mesh.use_late_three_neighbor_orientation_hint
+    assert not mesh.retry_greedy_orientations
+    assert not mesh.continue_greedy_orientation_conflicts
+    assert poly.use_linear_corner_locality_guard
+    assert poly.require_both_linear_corner_branches
+    assert poly.use_corner_branch_propagation
+
+    mesh.configure_corner_behavior("pre_f8_corner_late_hint")
+    assert not mesh.use_three_neighbor_orientation_hint
+    assert mesh.use_late_three_neighbor_orientation_hint
+    assert not poly.use_linear_corner_locality_guard
+    assert not poly.require_both_linear_corner_branches
+    assert not poly.use_corner_branch_propagation
+
+    mesh.configure_corner_behavior("pre_f8_corner_greedy_retry")
+    assert not mesh.use_three_neighbor_orientation_hint
+    assert not mesh.use_late_three_neighbor_orientation_hint
+    assert mesh.retry_greedy_orientations
+    assert not mesh.continue_greedy_orientation_conflicts
+    assert not poly.use_linear_corner_locality_guard
+    assert not poly.require_both_linear_corner_branches
+    assert not poly.use_corner_branch_propagation
+
+    mesh.configure_corner_behavior("pre_f8_corner_greedy_continue")
+    assert not mesh.use_three_neighbor_orientation_hint
+    assert not mesh.use_late_three_neighbor_orientation_hint
+    assert not mesh.retry_greedy_orientations
+    assert mesh.continue_greedy_orientation_conflicts
+    assert not poly.use_linear_corner_locality_guard
+    assert not poly.require_both_linear_corner_branches
+    assert not poly.use_corner_branch_propagation
+
+    mesh.configure_corner_behavior("pre_f8_corner_late_hint_retry")
+    assert not mesh.use_three_neighbor_orientation_hint
+    assert mesh.use_late_three_neighbor_orientation_hint
+    assert mesh.retry_greedy_orientations
+    assert not mesh.continue_greedy_orientation_conflicts
+
+
 def test_find_orientations_handles_extreme_three_neighbor_shoulder_cell():
     config = read_yaml("config/static/zalesak.yaml")
     mesh_cfg = apply_mesh_overrides(
@@ -38,6 +96,7 @@ def test_find_orientations_handles_extreme_three_neighbor_shoulder_cell():
         theta = rng.uniform(0, math.pi / 2)
 
     m = MergeMesh(opoints, threshold)
+    m.configure_corner_behavior("current")
     fractions = initialize_zalesak(
         m, center, 15.0, 5.0, y_top_rel=10.0, theta=theta
     )

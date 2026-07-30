@@ -37,7 +37,7 @@ CASE_SUITES = {
 TEST_CASES = CASE_SUITES["all"]
 
 
-def test_get_arc_facet_convergence(test_case, capfd=None):
+def _check_get_arc_facet_convergence(test_case, capfd=None):
     """
     Test that getArcFacet converges (or fails gracefully) for each test case.
     """
@@ -50,9 +50,10 @@ def test_get_arc_facet_convergence(test_case, capfd=None):
         f"Description: {test_case.description}"
     )
 
-    assert result["error"] is None or result["error"].startswith(
-        "Function returned None"
-    ), f"Test case {test_case.name} raised an exception: {result['error']}"
+    if test_case.expected_result != "fail":
+        assert result["error"] is None or result["error"].startswith(
+            "Function returned None"
+        ), f"Test case {test_case.name} raised an exception: {result['error']}"
 
     if test_case.expected_result == "converge":
         assert result[
@@ -132,7 +133,7 @@ if pytest:
         "test_case", TEST_CASES, ids=[test_case.name for test_case in TEST_CASES]
     )
     def test_get_arc_facet_convergence_pytest(test_case, capfd):
-        return test_get_arc_facet_convergence(test_case, capfd)
+        return _check_get_arc_facet_convergence(test_case, capfd)
 
 
 def test_single_case_debug():

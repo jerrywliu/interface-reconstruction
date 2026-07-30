@@ -10,23 +10,30 @@ from main.geoms.geoms import (
     getArea,
     getDistance,
     getPolyIntersectArea,
-    getPolyLineArea,
     pointInPoly,
 )
 from main.geoms.circular_facet import getCircleIntersectArea, getCircleLineIntersects
-from main.geoms.corner_facet import getPolyCurvedCornerArea
 
 from util.config import read_yaml
 from util.io.setup import setupOutputDirs
 from util.reconstruction import runReconstruction
+from util.reconstruction_diagnostics import (
+    append_case_geometry,
+    append_case_metrics,
+    write_run_manifest,
+)
 from util.initialize.mesh_factory import make_points_from_config, apply_mesh_overrides
 from util.metrics.metrics import calculate_facet_gaps, hausdorff_interface
+from util.metrics.area_metrics import (
+    AreaMetricError,
+    facet_area_in_polygon,
+    require_complete_facet_pairs,
+)
 from util.plotting.plt_utils import plotAreas, plotPartialAreas
 from util.plotting.vtk_utils import writeMesh
 from util.write_facets import writeFacets
 from util.logging.get_arc_facet_logger import arc_facet_log_context
 from main.structs.facets.circular_facet import ArcFacet
-from main.structs.facets.corner_facet import CornerFacet
 from main.structs.facets.linear_facet import LinearFacet
 from experiments.static.case_selection import parse_case_indices
 
@@ -127,30 +134,24 @@ def build_true_reference_zalesak(center, radius, slot_rect, theta=0.0):
     }
 
 
-def _reconstructed_facet_area(poly, facet, target_area=None):
-    if isinstance(facet, CornerFacet):
-        area = getPolyCurvedCornerArea(
-            poly,
-            facet.pLeft,
-            facet.corner,
-            facet.pRight,
-            facet.radiusLeft,
-            facet.radiusRight,
-        )
-    elif isinstance(facet, ArcFacet):
-        area = facet.getPolyIntersectArea(poly)
-    else:
-        area = getPolyLineArea(poly, facet.pLeft, facet.pRight)
-
-    poly_area = abs(getArea(poly))
-    area = min(max(area, 0.0), poly_area)
-    if target_area is None:
-        return area
-
-    complement = poly_area - area
-    if abs(complement - target_area) < abs(area - target_area):
-        return complement
-    return area
+def reconstructed_mixed_area(polygons, facets, *, case_index):
+    """Evaluate every reconstructed mixed-cell facet or fail the case."""
+    context = f"zalesak case {case_index} area metric"
+    pairs = require_complete_facet_pairs(polygons, facets, context=context)
+    total = 0.0
+    for facet_index, (poly, facet) in enumerate(pairs):
+        try:
+            with arc_facet_log_context(
+                metric_stage="area_error",
+                facet_index=facet_index,
+            ):
+                total += facet_area_in_polygon(poly.points, facet)
+        except Exception as exc:
+            raise AreaMetricError(
+                f"{context}: failed to evaluate reconstructed facet "
+                f"{facet_index}: {exc}"
+            ) from exc
+    return total
 
 
 def zalesak_removed_area(radius: float, slot_width: float, y_top_rel: float) -> float:
@@ -253,7 +254,9 @@ def main(
     return_case_records=False,
     do_c0=None,
     plic_fallback="LVIRA",
-    rescue_profile="no_curved_corner_rescues",
+    arc_failure_fallback="local_linear",
+    rescue_profile=MergeMesh.default_rescue_profile,
+    corner_behavior_profile=MergeMesh.default_corner_behavior_profile,
     **kwargs,
 ):
     # Read config
@@ -272,6 +275,32 @@ def main(
 
     # Setup output directories
     output_dirs = setupOutputDirs(save_name, clean_existing=True)
+    write_run_manifest(
+        output_dirs,
+        "zalesak",
+        {
+            "config": config_setting,
+            "resolution": resolution,
+            "facet_algo": facet_algo,
+            "do_c0": do_c0,
+            "num_cases": num_cases,
+            "radius": radius,
+            "slot_width": slot_width,
+            "slot_top_rel": slot_top_rel,
+            "case_indices": case_indices,
+            "mesh_type": mesh_type,
+            "perturb_wiggle": perturb_wiggle,
+            "perturb_seed": perturb_seed,
+            "perturb_fix_boundary": perturb_fix_boundary,
+            "perturb_max_tries": perturb_max_tries,
+            "perturb_type": perturb_type,
+            "plic_fallback": plic_fallback,
+            "arc_failure_fallback": arc_failure_fallback,
+            "rescue_profile": rescue_profile,
+            "corner_behavior_profile": corner_behavior_profile,
+            "random_seed": RANDOM_SEED,
+        },
+    )
     fallback_metrics_path = os.path.join(
         output_dirs["metrics"], "unresolved_plic_fallbacks.csv"
     )
@@ -371,7 +400,9 @@ def main(
                 output_dirs,
                 algo_kwargs={
                     "plic_fallback": plic_fallback,
+                    "arc_failure_fallback": arc_failure_fallback,
                     "rescue_profile": rescue_profile,
+                    "corner_behavior_profile": corner_behavior_profile,
                 },
                 return_polys=True,
             )
@@ -413,6 +444,21 @@ def main(
                 true_facets,
                 os.path.join(output_dirs["vtk_true"], f"true_zalesak{i}.vtp"),
             )
+            append_case_geometry(
+                output_dirs,
+                i,
+                {
+                    "geometry_type": "zalesak",
+                    "center": center,
+                    "radius": radius,
+                    "slot_width": slot_width,
+                    "slot_top_rel": slot_top_rel,
+                    "theta": theta,
+                    "slot_vertices": rect,
+                    "truth_vtp": f"vtk/true/true_zalesak{i}.vtp",
+                    "truth_metadata": f"vtk/true/true_zalesak{i}.facet_metadata.json",
+                },
+            )
 
             # Area error vs analytical area
             reconstructed_total_area = 0.0
@@ -421,21 +467,9 @@ def main(
                     if poly.getFraction() >= 1 - threshold:
                         reconstructed_total_area += poly.getMaxArea()
 
-            for facet_index, (poly, facet) in enumerate(
-                zip(reconstructed_polys, reconstructed_facets)
-            ):
-                try:
-                    with arc_facet_log_context(
-                        metric_stage="area_error",
-                        facet_index=facet_index,
-                    ):
-                        reconstructed_total_area += _reconstructed_facet_area(
-                            poly.points,
-                            facet,
-                            target_area=poly.getFraction() * poly.getMaxArea(),
-                        )
-                except Exception:
-                    continue
+            reconstructed_total_area += reconstructed_mixed_area(
+                reconstructed_polys, reconstructed_facets, case_index=i
+            )
 
             area_error = abs(reconstructed_total_area - true_area) / max(true_area, 1e-12)
             print(f"Area error for case {i+1}: {area_error:.3e}")
@@ -453,6 +487,16 @@ def main(
                 f.write(f"{avg_gap}\n")
             with open(os.path.join(output_dirs["metrics"], "hausdorff.txt"), "a") as f:
                 f.write(f"{hausdorff_distance}\n")
+            append_case_metrics(
+                output_dirs,
+                i,
+                {
+                    "area_error": area_error,
+                    "facet_gap": avg_gap,
+                    "hausdorff": hausdorff_distance,
+                },
+                getattr(m, "reconstruction_diagnostic_summary", None),
+            )
 
             area_errors.append(area_error)
             facet_gaps.append(avg_gap)
@@ -721,20 +765,25 @@ if __name__ == "__main__":
         help="PLIC fallback for unresolved merged cells with a 3x3 stencil",
     )
     parser.add_argument(
+        "--arc_failure_fallback",
+        type=str,
+        choices=["local_linear", "plic", "none"],
+        default="local_linear",
+        help="fallback after an oriented independent-cell arc fit fails",
+    )
+    parser.add_argument(
         "--rescue_profile",
         type=str,
-        choices=[
-            "full",
-            "no_corner_rescues",
-            "no_linear_corner_rescues",
-            "no_curved_corner_rescues",
-            "no_repeated_corner_rescues",
-            "no_repeated_tiny_corner_rescues",
-            "no_repeated_corner_component_rescues",
-            "candidate_keep_12346_drop_9",
-        ],
-        default="no_curved_corner_rescues",
+        choices=sorted(MergeMesh.rescue_profiles),
+        default=MergeMesh.default_rescue_profile,
         help="corner rescue profile for merged reconstruction",
+    )
+    parser.add_argument(
+        "--corner_behavior_profile",
+        type=str,
+        choices=sorted(MergeMesh.corner_behavior_profiles),
+        default=MergeMesh.default_corner_behavior_profile,
+        help="ablation profile for f8 corner-orientation and propagation behavior",
     )
 
     args = parser.parse_args()
@@ -774,5 +823,7 @@ if __name__ == "__main__":
             case_indices=args.case_indices,
             do_c0=args.do_c0,
             plic_fallback=args.plic_fallback,
+            arc_failure_fallback=args.arc_failure_fallback,
             rescue_profile=args.rescue_profile,
+            corner_behavior_profile=args.corner_behavior_profile,
         )

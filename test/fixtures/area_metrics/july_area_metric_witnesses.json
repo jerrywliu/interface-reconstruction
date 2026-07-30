@@ -1,0 +1,51 @@
+{
+  "source": "2026-07-17 simplified-default paper sweep",
+  "source_commit": "d02dd4790496771f61ea7313e600c50e7b5098f6",
+  "witnesses": [
+    {
+      "benchmark": "squares",
+      "case_index": 2,
+      "cell_id": "22,27",
+      "legacy_case_area_error": 0.4248801614170409,
+      "polygon": [[44.0, 54.0], [46.0, 54.0], [46.0, 56.0], [44.0, 56.0]],
+      "target_area": 3.0718830302917013,
+      "legacy_local_area": 0.017940707117986676,
+      "facet_geometry": {
+        "class": "linear_corner",
+        "name": "corner",
+        "p_left": [47.135962753935175, 56.0],
+        "corner": [43.8795314884471, 55.33568230583016],
+        "p_right": [44.56001653399442, 52.0],
+        "left_branch": {
+          "class": "linear",
+          "name": "linear",
+          "p_left": [47.135962753935175, 56.0],
+          "p_right": [43.8795314884471, 55.33568230583016]
+        },
+        "right_branch": {
+          "class": "linear",
+          "name": "linear",
+          "p_left": [43.8795314884471, 55.33568230583016],
+          "p_right": [44.56001653399442, 52.0]
+        }
+      }
+    },
+    {
+      "benchmark": "zalesak",
+      "case_index": 1,
+      "cell_id": "30,31",
+      "legacy_case_area_error": 0.03686448117317993,
+      "polygon": [[60.0, 62.0], [62.0, 62.0], [62.0, 64.0], [60.0, 64.0]],
+      "target_area": 0.13541316023404892,
+      "legacy_local_area_before_clamp": 4.002232075266151,
+      "facet_geometry": {
+        "class": "circular",
+        "name": "arc",
+        "center": [50.83921263649846, 50.587143115483336],
+        "radius": 14.999999913660435,
+        "p_left": [60.573004042900884, 62.0],
+        "p_right": [60.0, 62.46485216607569]
+      }
+    }
+  ]
+}

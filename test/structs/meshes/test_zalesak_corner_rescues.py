@@ -29,22 +29,30 @@ class _DummyPoly:
         return self._facet
 
 
-def _run_cases(case_indices):
+def _run_cases(case_indices, use_algorithm_defaults=False, **overrides):
+    settings = {"resolution": 1.5, "perturb_wiggle": 0.3}
+    if not use_algorithm_defaults:
+        settings.update(
+            {
+                "rescue_profile": "no_curved_corner_rescues",
+                "corner_behavior_profile": "current",
+            }
+        )
+    settings.update(overrides)
     sink = io.StringIO()
     with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
         _, _, _, case_records = zalesak.main(
             config_setting="static/zalesak",
             save_name="test_zalesak_corner_rescues",
             num_cases=max(case_indices) + 1,
-            resolution=1.5,
             facet_algo="circular+corner",
-            perturb_wiggle=0.3,
             perturb_seed=0,
             case_indices=case_indices,
             return_case_records=True,
             write_outputs=False,
             make_plots=False,
             metrics_output_dir=None,
+            **settings,
         )
     return {record["case_index"]: record for record in case_records}
 
@@ -55,6 +63,17 @@ def test_case12_intruder_arc_is_rescued_without_regressing_case3():
     assert case_records[3]["hausdorff"] < 1e-6
     assert case_records[12]["hausdorff"] < 2e-2
     assert case_records[12]["facet_gap"] < 5e-3
+
+
+def test_exact_linear_support_only_recovers_pre_f8_case7():
+    case_records = _run_cases(
+        [7],
+        use_algorithm_defaults=True,
+        resolution=1.28,
+        perturb_wiggle=0.3,
+    )
+
+    assert case_records[7]["hausdorff"] < 1e-6
 
 
 def test_collect_same_corner_component_breaks_two_cycle():

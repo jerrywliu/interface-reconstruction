@@ -1,19 +1,30 @@
 import argparse
+import csv
 import os
 import numpy as np
 import math
 import matplotlib.pyplot as plt
 
 from main.structs.meshes.merge_mesh import MergeMesh
-from main.geoms.geoms import getArea, getPolyLineArea, getPolyIntersectArea
+from main.geoms.geoms import getArea, getPolyIntersectArea
 from main.structs.facets.linear_facet import LinearFacet
 
 from util.config import read_yaml
 from util.io.setup import setupOutputDirs
 from util.reconstruction import runReconstruction
+from util.reconstruction_diagnostics import (
+    append_case_geometry,
+    append_case_metrics,
+    write_run_manifest,
+)
 from util.initialize.mesh_factory import make_points_from_config, apply_mesh_overrides
 from util.initialize.areas import initializePoly
 from util.metrics.metrics import calculate_facet_gaps, hausdorff_interface
+from util.metrics.area_metrics import (
+    AreaMetricError,
+    facet_area_in_polygon,
+    require_complete_facet_pairs,
+)
 from util.plotting.plt_utils import plotAreas, plotPartialAreas
 from util.plotting.vtk_utils import writeMesh
 from util.write_facets import writeFacets
@@ -32,6 +43,22 @@ def true_area_from_polygon_over_mesh(m, polygon):
             continue
         for inter in intersects:
             total += abs(getArea(inter))
+    return total
+
+
+def reconstructed_mixed_area(polygons, facets, *, case_index):
+    """Evaluate every reconstructed mixed-cell facet or fail the case."""
+    context = f"squares case {case_index} area metric"
+    pairs = require_complete_facet_pairs(polygons, facets, context=context)
+    total = 0.0
+    for facet_index, (poly, facet) in enumerate(pairs):
+        try:
+            total += facet_area_in_polygon(poly.points, facet)
+        except Exception as exc:
+            raise AreaMetricError(
+                f"{context}: failed to evaluate reconstructed facet "
+                f"{facet_index}: {exc}"
+            ) from exc
     return total
 
 
@@ -123,6 +150,8 @@ def main(
     perturb_fix_boundary=None,
     perturb_max_tries=None,
     perturb_type=None,
+    plic_fallback="LVIRA",
+    corner_behavior_profile=MergeMesh.default_corner_behavior_profile,
     **kwargs,
 ):
     # Read config
@@ -141,6 +170,41 @@ def main(
 
     # Setup output directories
     output_dirs = setupOutputDirs(save_name, clean_existing=True)
+    write_run_manifest(
+        output_dirs,
+        "squares",
+        {
+            "config": config_setting,
+            "resolution": resolution,
+            "facet_algo": facet_algo,
+            "do_c0": do_c0,
+            "num_squares": num_squares,
+            "case_indices": case_indices,
+            "mesh_type": mesh_type,
+            "perturb_wiggle": perturb_wiggle,
+            "perturb_seed": perturb_seed,
+            "perturb_fix_boundary": perturb_fix_boundary,
+            "perturb_max_tries": perturb_max_tries,
+            "perturb_type": perturb_type,
+            "plic_fallback": plic_fallback,
+            "corner_behavior_profile": corner_behavior_profile,
+            "random_seed": RANDOM_SEED,
+        },
+    )
+    fallback_metrics_path = os.path.join(
+        output_dirs["metrics"], "unresolved_plic_fallbacks.csv"
+    )
+    fallback_fieldnames = [
+        "case_index",
+        "setting",
+        "merge_id",
+        "policy",
+        "facet_name",
+        "num_vertices",
+    ]
+    with open(fallback_metrics_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fallback_fieldnames)
+        writer.writeheader()
 
     # Generate squares with different sizes
     side_lengths = np.linspace(10, 30, num_squares)  # Vary side length from 10 to 30
@@ -174,17 +238,17 @@ def main(
     hausdorff_distances = []
 
     for i, side_length in enumerate(side_lengths):
+        # Random center in [50,50] to [51,51] square
+        center = [rng.uniform(50, 51), rng.uniform(50, 51)]
+        # Random angle between 0 and pi/2
+        theta = rng.uniform(0, math.pi / 2)
+
         if case_index_set is not None and i not in case_index_set:
             continue
         print(f"Processing square {i+1}/{num_squares}")
 
         # Re-initialize mesh
         m = MergeMesh(opoints, threshold)
-
-        # Random center in [50,50] to [51,51] square
-        center = [rng.uniform(50, 51), rng.uniform(50, 51)]
-        # Random angle between 0 and pi/2
-        theta = rng.uniform(0, math.pi / 2)
 
         # Create square vertices
         half_side = side_length / 2
@@ -223,8 +287,17 @@ def main(
             do_c0,
             i,
             output_dirs,
-            algo_kwargs={},
+            algo_kwargs={
+                "plic_fallback": plic_fallback,
+                "corner_behavior_profile": corner_behavior_profile,
+            },
         )
+        fallback_records = getattr(m, "plic_fallback_records", [])
+        if fallback_records:
+            with open(fallback_metrics_path, "a", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=fallback_fieldnames)
+                for record in fallback_records:
+                    writer.writerow({"case_index": i, **record})
 
         # ---------- Save true facets to VTK ----------
         true_facets = create_true_facets_square(rotated_square)
@@ -232,25 +305,29 @@ def main(
             true_facets,
             os.path.join(output_dirs["vtk_true"], f"true_square{i}.vtp"),
         )
+        append_case_geometry(
+            output_dirs,
+            i,
+            {
+                "geometry_type": "square",
+                "center": center,
+                "side_length": side_length,
+                "theta": theta,
+                "vertices": rotated_square,
+                "truth_vtp": f"vtk/true/true_square{i}.vtp",
+                "truth_metadata": f"vtk/true/true_square{i}.facet_metadata.json",
+            },
+        )
 
         # ---------- Ground-truth area over the mesh (polygon ∩ cells) ----------
         true_total_area = true_area_from_polygon_over_mesh(m, rotated_square)
 
         # ---------- Reconstructed total area: mixed (via facet) + full (via exact ∩) ----------
-        reconstructed_total_area = 0.0
-        mixed_ids = set()
-
-        for poly, reconstructed_facet in zip(
-            m.merged_polys.values(), reconstructed_facets
-        ):
-            try:
-                reconstructed_total_area += getPolyLineArea(
-                    poly.points, reconstructed_facet.pLeft, reconstructed_facet.pRight
-                )
-                mixed_ids.add(id(poly))
-            except Exception:
-                # facet might be None for some algos/corner cases
-                continue
+        reconstructed_polys = list(m.merged_polys.values())
+        reconstructed_total_area = reconstructed_mixed_area(
+            reconstructed_polys, reconstructed_facets, case_index=i
+        )
+        mixed_ids = {id(poly) for poly in reconstructed_polys}
 
         # Add area for cells without a facet (fully inside, or otherwise no mixed boundary)
         for poly in m.merged_polys.values():
@@ -282,6 +359,16 @@ def main(
             f.write(f"{avg_gap}\n")
         with open(os.path.join(output_dirs["metrics"], "hausdorff.txt"), "a") as f:
             f.write(f"{hausdorff_distance}\n")
+        append_case_metrics(
+            output_dirs,
+            i,
+            {
+                "area_error": area_error,
+                "facet_gap": avg_gap,
+                "hausdorff": hausdorff_distance,
+            },
+            getattr(m, "reconstruction_diagnostic_summary", None),
+        )
 
         area_errors.append(area_error)
         facet_gaps.append(avg_gap)
@@ -499,6 +586,20 @@ if __name__ == "__main__":
         default=None,
     )
     parser.add_argument(
+        "--plic_fallback",
+        type=str,
+        choices=["Youngs", "ELVIRA", "LVIRA"],
+        default="LVIRA",
+        help="PLIC fallback for unresolved merged cells with a 3x3 stencil",
+    )
+    parser.add_argument(
+        "--corner_behavior_profile",
+        type=str,
+        choices=sorted(MergeMesh.corner_behavior_profiles),
+        default=MergeMesh.default_corner_behavior_profile,
+        help="ablation profile for f8 corner-orientation and propagation behavior",
+    )
+    parser.add_argument(
         "--sweep", action="store_true", help="run parameter sweep", default=False
     )
     parser.add_argument(
@@ -573,4 +674,6 @@ if __name__ == "__main__":
             perturb_fix_boundary=args.perturb_fix_boundary,
             perturb_max_tries=args.perturb_max_tries,
             perturb_type=args.perturb_type,
+            plic_fallback=args.plic_fallback,
+            corner_behavior_profile=args.corner_behavior_profile,
         )
