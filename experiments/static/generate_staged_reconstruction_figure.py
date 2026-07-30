@@ -11,10 +11,9 @@ from pathlib import Path
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.cm import ScalarMappable
-from matplotlib.colors import LinearSegmentedColormap, Normalize
-from matplotlib.patches import FancyArrowPatch, Patch, Polygon
 from matplotlib.collections import PatchCollection
+from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.patches import FancyArrowPatch, Patch, Polygon, Rectangle
 
 from experiments.static.zalesak import RANDOM_SEED, initialize_zalesak
 from main.structs.facets.circular_facet import ArcFacet
@@ -362,11 +361,25 @@ def draw_facets(ax, snapshot: dict) -> None:
 
 def add_fraction_key(ax, fraction_cmap) -> None:
     inset = ax.inset_axes([0.61, 0.055, 0.32, 0.027])
-    scalar = ScalarMappable(norm=Normalize(0, 1), cmap=fraction_cmap)
-    colorbar = plt.colorbar(scalar, cax=inset, orientation="horizontal")
-    colorbar.set_ticks([0, 0.5, 1])
-    colorbar.ax.tick_params(labelsize=6.5, length=1.6, pad=1)
-    colorbar.outline.set_linewidth(0.45)
+    bins = 64
+    for index in range(bins):
+        left = index / bins
+        inset.add_patch(
+            Rectangle(
+                (left, 0),
+                1 / bins,
+                1,
+                facecolor=fraction_cmap((index + 0.5) / bins),
+                edgecolor="none",
+            )
+        )
+    inset.set_xlim(0, 1)
+    inset.set_ylim(0, 1)
+    inset.set_xticks([0, 0.5, 1])
+    inset.set_yticks([])
+    inset.tick_params(axis="x", labelsize=6.5, length=1.6, pad=1)
+    for spine in inset.spines.values():
+        spine.set_linewidth(0.45)
     inset.text(
         -0.12,
         0.5,
@@ -389,6 +402,8 @@ def build_figure(
             "font.size": 9,
             "axes.titlesize": 10.5,
             "axes.titleweight": "normal",
+            "pdf.fonttype": 42,
+            "ps.fonttype": 42,
             "svg.fonttype": "none",
         }
     )
@@ -452,7 +467,7 @@ def build_figure(
     for suffix, kwargs in {
         ".svg": {},
         ".pdf": {},
-        ".png": {"dpi": 240},
+        ".png": {"dpi": 300},
     }.items():
         fig.savefig(output_base.with_suffix(suffix), bbox_inches="tight", **kwargs)
     plt.close(fig)

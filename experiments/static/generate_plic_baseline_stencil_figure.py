@@ -39,6 +39,8 @@ plt.rcParams.update(
         "text.usetex": True,
         "font.family": "serif",
         "text.latex.preamble": r"\usepackage{txfonts}",
+        "pdf.fonttype": 42,
+        "ps.fonttype": 42,
         "svg.fonttype": "none",
     }
 )
