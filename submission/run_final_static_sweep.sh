@@ -46,6 +46,9 @@ python submission/check_submission_freeze.py \
   --config "$resolved_config" \
   --allow-generated-path "$result_root"
 
+python submission/capture_environment.py \
+  --output "$result_root/environment.json"
+
 python -m experiments.static.run_perturbed_sweeps \
   --only lines,circles,ellipses,squares,zalesak \
   --wiggles 0.0,0.05,0.1,0.2,0.3 \

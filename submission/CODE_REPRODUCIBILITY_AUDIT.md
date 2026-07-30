@@ -4,7 +4,7 @@ Date: 2026-07-30
 
 Scope: submission packaging and reproducibility only
 
-Audited source: `3ce0ebc` (`codex/repro-audit-20260730` worktree)
+Initial audited source: `3ce0ebc` (`codex/repro-audit-20260730` worktree)
 
 This audit does not change reconstruction, static experiment drivers, sweep
 selection, plotting, or numerical behavior. It reviews the release surface that
@@ -34,7 +34,7 @@ bundle is called independently reproducible.
 | Deterministic cases | Good for the final sweep | The launcher fixes perturbation seed `0`; static drivers use benchmark-specific constant RNG seeds for case geometry and record both seeds in manifests. |
 | Configuration discovery | Adequate for the launcher | The resolved submission config is archived. Direct module/config entry points still assume the repository root as the working directory. |
 | Run manifests | Good | Per-run manifests record source commit/branch, command, numerical parameters, and relative artifact names. Sweep manifests record planned/successful counts and failures. |
-| Raw-bundle self-containment | Good with two gaps | Raw runs, consolidated diagnostics, source snapshot, logs, and resolved config live under one result root. The sweep manifest stores absolute artifact paths, and the release has no file-level checksum inventory. |
+| Raw-bundle self-containment | Good with two gaps | Scientific raw runs, consolidated diagnostics, source snapshot, logs, resolved config, and environment capture live under one result root. Disposable raster previews are omitted because figures replay from exact VTK/metadata. The sweep manifest stores absolute artifact paths, and the release has no file-level checksum inventory. |
 | Dependency capture | Needs action | `requirements.txt` is pinned, but no Python version, OS/architecture, BLAS/LAPACK, GEOS, FreeType, or full installed-package record is archived. |
 | Environment consistency | Needs action | The audited Python 3.9.13 environment differs from checked-in pins, including NumPy `1.24.4` vs `1.23.4`, SciPy `1.8.1` vs `1.9.2`, and Matplotlib `3.8.3` vs `3.6.1`. `pip check` also fails because of unrelated Torch packages. |
 | Test capture | Partial | The repository suite passes, but there is no CI workflow, pytest configuration, declared test dependency set, or tested Python/platform matrix. |
@@ -66,9 +66,8 @@ python submission/capture_environment.py \
   --output results/static/<final-release>/environment.json
 ```
 
-This command is intentionally not wired into the frozen launcher in this audit.
-Until a separate approved launcher edit is made, run it from the exact environment
-that executes the sweep and include `environment.json` in the final archive.
+The approved final launcher now runs this command before the sweep from the exact
+execution environment and stores `environment.json` in the release root.
 
 ## Determinism Findings
 
@@ -146,10 +145,13 @@ The submission audit should compare the three instead of trusting any one file.
 
 ## Result And Raw-Bundle Findings
 
-The release path is robust against accidental overwrite. Each completed run is
-copied into `raw_runs/<namespaced-save-name>/`, marked read-only, and then used to
-populate release-relative inventory rows. Required diagnostic files must exist and
-parse before the controller counts a run as successful.
+The release path is robust against accidental overwrite. Each completed run's exact
+mesh, facets, metrics, case geometry, and provenance are copied into
+`raw_runs/<namespaced-save-name>/`, marked read-only, and then used to populate
+release-relative inventory rows. Per-case raster previews are excluded. The
+temporary namespaced source run is removed only after the archived scientific file
+inventory matches and consolidation succeeds. Required diagnostic files must exist
+and parse before the controller counts a run as successful.
 
 Remaining archival risks:
 
@@ -209,7 +211,7 @@ The final release still needs these operational checks:
 
 ### P0 Before Declaring The Release Reproducible
 
-- Capture the actual sweep environment and include it in the release.
+- Verify the automatically captured sweep environment in the release.
 - Resolve or explicitly accept the requirements-versus-installed-version mismatch.
 - Use a clean environment whose relevant dependency graph passes `pip check`.
 - Audit final row counts, key uniqueness, missing/nonfinite values, failures, and raw
