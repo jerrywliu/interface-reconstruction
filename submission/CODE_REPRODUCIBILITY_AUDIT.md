@@ -183,8 +183,9 @@ source/generated-state classification, input fingerprints, and atomic JSON outpu
 The isolated pinned environment passed `193` tests with the live Slack integration
 skipped, passed `pip check`, completed three representative numerical smokes, and
 generated two vector-only deterministic figures. Exact evidence is in
-`submission/CLEAN_ENV_REPRODUCIBILITY_VALIDATION.md`; the integrated branch must
-still pass its expanded suite after all release tools are combined.
+`submission/CLEAN_ENV_REPRODUCIBILITY_VALIDATION.md`. The integrated branch also
+passes its expanded suite after all release tools are combined; that verification
+is recorded in the branch handoff and project run memory.
 
 The final release still needs these operational checks:
 
