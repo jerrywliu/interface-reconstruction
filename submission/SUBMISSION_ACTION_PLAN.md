@@ -19,7 +19,11 @@ The human-readable replacement sequence is `FIGURE_PROMOTION_PLAN.md`.
 - [x] Make final releases collision-proof and self-contained.
   - reject tracked/untracked source changes and existing namespaces
   - archive read-only raw bundles under the release root with relative inventory paths
-- [ ] Commit one clean source revision and flip `launch_approved` only after review.
+- [x] Commit the clean integrated source in reviewable checkpoints.
+  - `ed3b785`: production reconstruction, metrics, diagnostics, launcher, and tests
+  - `8b8f81c`: submission validation and figure-review tools
+  - post-commit full suite: `182 passed`; source-only audit: `SOURCE CLEAN`
+- [ ] Flip `launch_approved` only after author review.
 - [ ] Launch `bash submission/run_final_static_sweep.sh`.
 - [ ] Audit failures, missing facets, fallback rates, maxima, and case-level tails.
 - [ ] Archive the resolved config, source state, source snapshot, manifests, CSVs, and logs.

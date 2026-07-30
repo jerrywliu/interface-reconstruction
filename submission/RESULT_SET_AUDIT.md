@@ -47,10 +47,12 @@ The machine-readable target is `submission/submission_config.json`:
 - normalized independent-cell circular comparison with the same fallback hierarchy;
 - exact case geometry and case/cell/provenance diagnostics saved with the results.
 
-The final source commit remains intentionally blank until the validation patches are
-integrated, tests pass, and the working tree is committed cleanly. The final launcher
-records that clean `HEAD` in a resolved configuration inside the result bundle; this
-avoids the impossible requirement that a committed file contain its own commit hash.
+The validation patches are integrated at `ed3b785` and `8b8f81c`; the post-commit
+repository suite passes all `182` tests, and the source-only audit is clean. The
+configured target commit remains intentionally blank until launch
+approval. The final launcher records the approved clean `HEAD` in a resolved
+configuration inside the result bundle; this avoids the impossible requirement that
+a committed file contain its own commit hash.
 
 ## Promotion Gates
 
@@ -64,7 +66,7 @@ avoids the impossible requirement that a committed file contain its own commit h
    refit within tolerance, so the optional continuity result must be stated conditionally.
 2. Use the repaired geometry-faithful area metric; do not reuse historical square
    or Zalesak `area_error` columns in final tables or figures.
-3. Integrate the accepted implementation patches and freeze one clean code commit.
+3. Review the integrated implementation checkpoints and approve the final launch commit.
 4. Run the complete all-method sweep from that commit.
 5. Regenerate July-style main-text, representative, resolution, and all-method figures
    from the final saved results; regenerate C0 from the validated guarded implementation.
