@@ -18,10 +18,11 @@ a collision-proof namespace, saves exact case geometry and case/cell/merge/fallb
 diagnostics, snapshots the source, and copies every raw run into the release root.
 The deterministic case and mesh seeds are explicit.
 
-The remaining reproducibility risk is primarily environmental rather than
-algorithmic. The launcher captures the exact sweep environment, but the checked-in
-requirements do not match the validation environment and a clean-environment
-numerical acceptance run is still required. The release audit can generate and
+The remaining reproducibility risk is primarily platform breadth rather than
+algorithmic. The launcher captures the exact sweep environment, while the pinned
+public stack now has a clean macOS arm64 CPython 3.9 install, full-suite, numerical
+smoke, and vector-figure validation. The two stacks agree to the tested tolerances
+but are not claimed to be bitwise portable. The release audit can generate and
 verify a whole-release checksum manifest after the approved figure packet is added.
 
 ## Status By Area
@@ -34,8 +35,8 @@ verify a whole-release checksum manifest after the approved figure packet is add
 | Configuration discovery | Adequate for the launcher | The resolved submission config is archived. Direct module/config entry points still assume the repository root as the working directory. |
 | Run manifests | Good | Per-run manifests record source commit/branch, command, numerical parameters, and relative artifact names. Sweep manifests record planned/successful counts and failures. |
 | Raw-bundle self-containment | Good with one portability gap | Scientific raw runs, consolidated diagnostics, source snapshot, logs, resolved config, and environment capture live under one result root. Disposable raster previews are omitted because figures replay from exact VTK/metadata. The sweep manifest still stores some absolute artifact paths. |
-| Dependency capture | Good for the accepted run | `environment.json` records Python/platform details, installed packages, NumPy/SciPy builds, GEOS, FreeType, VTK, and requirements fingerprints. General public support still needs clean-environment acceptance. |
-| Environment consistency | Needs action | The audited Python 3.9.13 environment differs from checked-in pins, including NumPy `1.24.4` vs `1.23.4`, SciPy `1.8.1` vs `1.9.2`, and Matplotlib `3.8.3` vs `3.6.1`. `pip check` also fails because of unrelated Torch packages. |
+| Dependency capture | Good for the accepted run and public target | `environment.json` records the exact sweep stack. The frozen requirements independently install cleanly on macOS arm64 CPython 3.9 and pass `pip check`; see `submission/CLEAN_ENV_REPRODUCIBILITY_VALIDATION.md`. |
+| Environment consistency | Accepted with limited scope | The sweep stack differs from the public pins, but three paper-facing smokes showed no reconstruction-decision change and only negligible roundoff differences. Preserve both records and do not claim bitwise or cross-platform identity. |
 | Test capture | Good for the declared target | `requirements-test.txt` and a CPython 3.9 GitHub Actions workflow run the source audit and full suite. A broader Python/platform matrix is not claimed. |
 | Generated-file hygiene | Good | `.gitignore` excludes scratch roots and raster previews while keeping release CSV/JSON/PDF/VTK/manifests visible; `docs/GENERATED_FILES.md` records the policy. |
 | Stale scripts | Classified | `docs/ENTRY_POINTS.md` distinguishes canonical, supported research, and legacy/superseded paths without deleting replay code. |
@@ -103,16 +104,15 @@ environment file, container definition, or broad supported-platform declaration.
 The code is run in place through `python -m ...`, so installation metadata is not
 required for the current launcher.
 
-Recommended packaging follow-up after the result freeze:
+Packaging policy after the clean-environment validation:
 
-1. Decide whether the authoritative submission environment is the checked-in pin
-   set or the environment that produced the accepted final results.
-2. Validate that environment from a clean virtual environment and record the exact
-   Python version and platform.
-3. Consider a lock file or optional dependency groups only after the accepted
-   environment and numerical tolerance checks are recorded.
-4. Add one clean-environment numerical acceptance job. A broad platform matrix can
-   follow after submission.
+1. Treat the accepted sweep's captured environment as archival authority for the
+   submitted result set.
+2. Treat the checked-in pins as the public clean-install target validated on macOS
+   arm64 CPython 3.9.
+3. Consider a lock file or optional dependency groups only after submission.
+4. Repeat the compact acceptance suite on clean Linux before claiming broader
+   platform support.
 
 Do not update numerical library pins immediately before the sweep without rerunning
 the acceptance tests; that would be a scientific change even if the source code is
@@ -176,21 +176,22 @@ visible. `docs/GENERATED_FILES.md` records this policy. `docs/ENTRY_POINTS.md`
 classifies `run_old.py`, old initialization modules, historical camera-ready
 launchers, and optional research tooling without deleting paths needed for replay.
 
-## Tests And Verification Still Required
+## Completed And Remaining Verification
 
 The new environment utility has focused tests for requirements comparison, Git
 source/generated-state classification, input fingerprints, and atomic JSON output.
-The complete repository suite passes `186/186` tests with this audit patch applied;
-Python compilation and `git diff --check` also pass. The current environment does
-not provide the declared `black` executable, so formatter availability is itself
-part of the dependency-capture issue described above.
+The isolated pinned environment passed `193` tests with the live Slack integration
+skipped, passed `pip check`, completed three representative numerical smokes, and
+generated two vector-only deterministic figures. Exact evidence is in
+`submission/CLEAN_ENV_REPRODUCIBILITY_VALIDATION.md`; the integrated branch must
+still pass its expanded suite after all release tools are combined.
 
 The final release still needs these operational checks:
 
 1. Run the full repository suite from the exact sweep environment and archive the
    pytest summary.
-2. Run `python -m pip check`; either make it clean in the isolated environment or
-   document why every reported conflict is outside the submission dependency set.
+2. Preserve the clean pinned-environment report and document the unrelated
+   Torch/TorchSDE conflicts in the sweep workstation's captured environment.
 3. Run the source freeze checker immediately before launch.
 4. After the sweep, assert 970 successful runs, 24,250 unique case rows, zero missing
    required bundles, zero missing/nonfinite required metrics, and no unexpected
@@ -204,15 +205,14 @@ The final release still needs these operational checks:
 ### P0 Before Declaring The Release Reproducible
 
 - Verify the automatically captured sweep environment in the release.
-- Resolve or explicitly accept the requirements-versus-installed-version mismatch.
-- Use a clean environment whose relevant dependency graph passes `pip check`.
+- Preserve the explicit dual-environment policy and accepted tolerance evidence.
 - Audit final row counts, key uniqueness, missing/nonfinite values, failures, and raw
   bundle coverage.
 - Add and verify a checksum manifest for the complete final release.
 
 ### P1 Before Public Code Release
 
-- Complete clean-environment numerical acceptance before declaring broader
+- Repeat clean-environment numerical acceptance on Linux before declaring broader
   Python/platform support.
 - Make aggregate manifest paths release-relative.
 - Add a compact public reproduction command for every paper table/figure after the
