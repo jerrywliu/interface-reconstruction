@@ -4,12 +4,14 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import copy
 import csv
 import hashlib
 import json
 import math
 import os
+import shlex
 import statistics
 import tarfile
 import tempfile
@@ -102,6 +104,8 @@ RECONCILIATION_TABLES = (
 
 INTEGER_KEY_FIELDS = frozenset({"case_index", "event_order", "merge_id"})
 
+RESCUE_INHERITANCE_EXPERIMENTS = frozenset({"lines", "circles", "ellipses", "squares"})
+
 
 class ReleaseAuditInputError(ValueError):
     """Raised when a manifest operation receives an unsafe input path."""
@@ -123,9 +127,37 @@ class RunKey:
 
 
 @dataclass
+class RescueProfileInheritance:
+    value: str
+    eligible_experiments: frozenset[str]
+    driver_modules: dict[str, str] = field(default_factory=dict)
+    evidence: tuple[str, ...] = ()
+    proof_failures: tuple[str, ...] = ()
+    omitted_locations: dict[str, set[RunKey]] = field(
+        default_factory=lambda: defaultdict(set)
+    )
+    resolved_runs: dict[RunKey, str] = field(default_factory=dict)
+
+    @property
+    def proven(self) -> bool:
+        return not self.proof_failures
+
+    def permits(self, key: RunKey | None) -> bool:
+        return (
+            self.proven
+            and key is not None
+            and key.experiment in self.eligible_experiments
+        )
+
+    def note_omission(self, key: RunKey, location: str) -> None:
+        self.omitted_locations[location].add(key)
+
+
+@dataclass
 class AuditReport:
     release_root: Path
     errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
     total_errors: int = 0
     summaries: dict[str, int | str] = field(default_factory=dict)
 
@@ -137,6 +169,10 @@ class AuditReport:
         self.total_errors += 1
         if len(self.errors) < MAX_REPORTED_ERRORS:
             self.errors.append(message)
+
+    def add_warning(self, message: str) -> None:
+        if message not in self.warnings:
+            self.warnings.append(message)
 
     @property
     def suppressed_errors(self) -> int:
@@ -273,6 +309,343 @@ def _read_csv_rows(
         return [], []
 
 
+def _option_values(tokens: Sequence[str], option: str) -> list[str]:
+    values: list[str] = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token == option:
+            if index + 1 >= len(tokens) or tokens[index + 1].startswith("--"):
+                raise ReleaseAuditInputError(f"command option {option} has no value")
+            values.append(tokens[index + 1])
+            index += 2
+            continue
+        prefix = f"{option}="
+        if token.startswith(prefix):
+            values.append(token[len(prefix) :])
+        index += 1
+    return values
+
+
+def _command_tokens(command: object) -> list[str]:
+    if not isinstance(command, str) or not command.strip():
+        raise ReleaseAuditInputError("command is absent or empty")
+    try:
+        return shlex.split(command)
+    except ValueError as exc:
+        raise ReleaseAuditInputError(f"command cannot be parsed: {exc}") from exc
+
+
+def _command_option_values(command: object, option: str) -> list[str]:
+    return _option_values(_command_tokens(command), option)
+
+
+def _shell_option_values(script: bytes, option: str) -> list[str]:
+    try:
+        source = script.decode("utf-8")
+        lexer = shlex.shlex(source, posix=True)
+        lexer.whitespace_split = True
+        lexer.commenters = "#"
+        return _option_values(list(lexer), option)
+    except (UnicodeError, ValueError) as exc:
+        raise ReleaseAuditInputError(f"shell launcher cannot be parsed: {exc}") from exc
+
+
+def _command_invokes_driver(tokens: Sequence[str], driver_module: str) -> bool:
+    expected_path = driver_module.replace(".", "/") + ".py"
+    if "-m" in tokens:
+        module_index = tokens.index("-m") + 1
+        return module_index < len(tokens) and tokens[module_index] == driver_module
+    if not tokens:
+        return False
+    executable = tokens[0].replace("\\", "/")
+    return executable == expected_path or executable.endswith(f"/{expected_path}")
+
+
+def _snapshot_python_tree(
+    snapshot_members: Mapping[str, bytes],
+    relative: str,
+    failures: list[str],
+) -> ast.Module | None:
+    data = snapshot_members.get(relative)
+    if data is None:
+        failures.append(f"source snapshot lacks {relative}")
+        return None
+    try:
+        return ast.parse(data.decode("utf-8"), filename=relative)
+    except (UnicodeError, SyntaxError) as exc:
+        failures.append(f"cannot parse snapshotted {relative}: {exc}")
+        return None
+
+
+def _class_string_assignment(
+    tree: ast.Module, class_name: str, field_name: str
+) -> str | None:
+    for node in tree.body:
+        if not isinstance(node, ast.ClassDef) or node.name != class_name:
+            continue
+        for statement in node.body:
+            if not isinstance(statement, (ast.Assign, ast.AnnAssign)):
+                continue
+            targets = (
+                statement.targets
+                if isinstance(statement, ast.Assign)
+                else [statement.target]
+            )
+            value = statement.value
+            if (
+                any(
+                    isinstance(target, ast.Name) and target.id == field_name
+                    for target in targets
+                )
+                and isinstance(value, ast.Constant)
+                and isinstance(value.value, str)
+            ):
+                return value.value
+    return None
+
+
+def _method_string_default(
+    tree: ast.Module, class_name: str, method_name: str, argument_name: str
+) -> str | None:
+    for node in tree.body:
+        if not isinstance(node, ast.ClassDef) or node.name != class_name:
+            continue
+        for statement in node.body:
+            if not isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if statement.name != method_name:
+                continue
+            positional = [*statement.args.posonlyargs, *statement.args.args]
+            defaults = statement.args.defaults
+            default_by_name = (
+                {
+                    argument.arg: default
+                    for argument, default in zip(positional[-len(defaults) :], defaults)
+                }
+                if defaults
+                else {}
+            )
+            default = default_by_name.get(argument_name)
+            if isinstance(default, ast.Constant) and isinstance(default.value, str):
+                return default.value
+    return None
+
+
+def _is_rescue_default_lookup(node: ast.AST) -> bool:
+    if not isinstance(node, ast.Call) or len(node.args) != 2 or node.keywords:
+        return False
+    if not (
+        isinstance(node.func, ast.Attribute)
+        and node.func.attr == "get"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "algo_kwargs"
+    ):
+        return False
+    key, default = node.args
+    return (
+        isinstance(key, ast.Constant)
+        and key.value == "rescue_profile"
+        and isinstance(default, ast.Attribute)
+        and default.attr == "default_rescue_profile"
+        and isinstance(default.value, ast.Name)
+        and default.value.id == "MergeMesh"
+    )
+
+
+def _reconstruction_uses_rescue_default(tree: ast.Module) -> bool:
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if not (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr == "fitFacets"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "m"
+        ):
+            continue
+        for keyword in node.keywords:
+            if keyword.arg == "rescue_profile" and _is_rescue_default_lookup(
+                keyword.value
+            ):
+                return True
+    return False
+
+
+def _driver_omits_rescue_override(tree: ast.Module) -> bool:
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "runReconstruction"
+    ]
+    if not calls:
+        return False
+    for call in calls:
+        for keyword in call.keywords:
+            if keyword.arg is None:
+                return False
+            if keyword.arg != "algo_kwargs":
+                continue
+            if not isinstance(keyword.value, ast.Dict):
+                return False
+            for key in keyword.value.keys:
+                if not isinstance(key, ast.Constant) or not isinstance(key.value, str):
+                    return False
+                if key.value == "rescue_profile":
+                    return False
+    return True
+
+
+def _build_rescue_profile_inheritance(
+    config: Mapping[str, object],
+    controller_manifest: Mapping[str, object] | None,
+    snapshot_members: Mapping[str, bytes],
+) -> RescueProfileInheritance:
+    production = config.get("production_method")
+    expected = ""
+    if isinstance(production, dict):
+        expected = str(production.get("rescue_profile") or "")
+    failures: list[str] = []
+    if not expected:
+        failures.append("production rescue_profile is empty")
+
+    if not isinstance(controller_manifest, Mapping):
+        failures.append("sweep manifest is unavailable")
+    else:
+        parameters = controller_manifest.get("parameters")
+        if not isinstance(parameters, Mapping):
+            failures.append("sweep manifest parameters are unavailable")
+        elif parameters.get("rescue_profile") != expected:
+            failures.append(
+                "sweep manifest rescue_profile does not match the frozen config"
+            )
+        try:
+            controller_values = _command_option_values(
+                controller_manifest.get("command"), "--rescue_profile"
+            )
+        except ReleaseAuditInputError as exc:
+            failures.append(f"sweep command proof failed: {exc}")
+        else:
+            if controller_values != [expected]:
+                failures.append(
+                    "sweep command does not contain exactly one matching "
+                    "--rescue_profile value"
+                )
+
+    source_config_bytes = snapshot_members.get("submission/submission_config.json")
+    if source_config_bytes is None:
+        failures.append("source snapshot lacks submission/submission_config.json")
+    else:
+        try:
+            source_config = _strict_json_loads(
+                source_config_bytes.decode("utf-8"),
+                "source snapshot submission/submission_config.json",
+            )
+        except (UnicodeError, ReleaseAuditInputError) as exc:
+            failures.append(f"snapshotted submission config is invalid: {exc}")
+        else:
+            source_production = (
+                source_config.get("production_method")
+                if isinstance(source_config, dict)
+                else None
+            )
+            if (
+                not isinstance(source_production, dict)
+                or source_production.get("rescue_profile") != expected
+            ):
+                failures.append(
+                    "snapshotted submission config does not pin the rescue profile"
+                )
+
+    launcher = snapshot_members.get("submission/run_final_static_sweep.sh")
+    if launcher is None:
+        failures.append("source snapshot lacks submission/run_final_static_sweep.sh")
+    else:
+        try:
+            launcher_values = _shell_option_values(launcher, "--rescue_profile")
+        except ReleaseAuditInputError as exc:
+            failures.append(f"snapshotted final launcher is invalid: {exc}")
+        else:
+            if launcher_values != [expected]:
+                failures.append(
+                    "snapshotted final launcher does not contain exactly one "
+                    "matching --rescue_profile value"
+                )
+
+    merge_tree = _snapshot_python_tree(
+        snapshot_members, "main/structs/meshes/merge_mesh.py", failures
+    )
+    if merge_tree is not None:
+        if (
+            _class_string_assignment(merge_tree, "MergeMesh", "default_rescue_profile")
+            != expected
+        ):
+            failures.append("MergeMesh.default_rescue_profile is not the frozen value")
+        if (
+            _method_string_default(
+                merge_tree, "MergeMesh", "fitFacets", "rescue_profile"
+            )
+            != expected
+        ):
+            failures.append("MergeMesh.fitFacets does not default to the frozen value")
+
+    reconstruction_tree = _snapshot_python_tree(
+        snapshot_members, "util/reconstruction.py", failures
+    )
+    if reconstruction_tree is not None and not _reconstruction_uses_rescue_default(
+        reconstruction_tree
+    ):
+        failures.append(
+            "snapshotted reconstruction wrapper does not inherit "
+            "MergeMesh.default_rescue_profile"
+        )
+
+    benchmarks = config.get("benchmarks")
+    configured_inheritance_experiments: frozenset[str] = frozenset()
+    driver_modules: dict[str, str] = {}
+    if not isinstance(benchmarks, Mapping):
+        failures.append("resolved config benchmarks are unavailable")
+    else:
+        configured_inheritance_experiments = frozenset(
+            str(experiment).lower()
+            for experiment in benchmarks
+            if str(experiment).lower() in RESCUE_INHERITANCE_EXPERIMENTS
+        )
+        for experiment in sorted(configured_inheritance_experiments):
+            benchmark = benchmarks.get(experiment)
+            driver = benchmark.get("driver") if isinstance(benchmark, Mapping) else None
+            if not isinstance(driver, str) or not driver:
+                failures.append(f"benchmark driver is unavailable for {experiment}")
+                continue
+            driver_modules[experiment] = driver
+            driver_path = driver.replace(".", "/") + ".py"
+            driver_tree = _snapshot_python_tree(snapshot_members, driver_path, failures)
+            if driver_tree is not None and not _driver_omits_rescue_override(
+                driver_tree
+            ):
+                failures.append(
+                    f"snapshotted {experiment} driver does not unambiguously "
+                    "inherit the rescue default"
+                )
+
+    evidence = (
+        "frozen submission config and snapshotted source config",
+        "controller manifest parameters and exact command",
+        "clean source snapshot launcher and reconstruction defaults",
+        "snapshotted non-Zalesak drivers with no rescue override",
+        "per-run raw child command with no rescue override",
+    )
+    return RescueProfileInheritance(
+        value=expected,
+        eligible_experiments=configured_inheritance_experiments,
+        driver_modules=driver_modules,
+        evidence=evidence,
+        proof_failures=tuple(dict.fromkeys(failures)),
+    )
+
+
 def _production_context(
     production: Mapping[str, object], report: AuditReport
 ) -> dict[str, str]:
@@ -294,14 +667,37 @@ def _check_production_context(
     production_context: Mapping[str, str],
     label: str,
     report: AuditReport,
+    *,
+    key: RunKey | None = None,
+    inheritance: RescueProfileInheritance | None = None,
+    inheritance_location: str = "context",
 ) -> None:
     for field_name, expected in production_context.items():
         actual = row.get(field_name)
-        if actual != expected:
+        if actual == expected:
+            continue
+        if field_name == "rescue_profile" and actual in (None, ""):
+            if inheritance is not None and inheritance.permits(key):
+                assert key is not None
+                inheritance.note_omission(key, inheritance_location)
+                continue
+            if inheritance is None:
+                proof = "no inheritance proof was constructed"
+            elif (
+                key is not None
+                and key.experiment not in inheritance.eligible_experiments
+            ):
+                proof = f"{key.experiment} requires an explicit rescue profile"
+            else:
+                proof = "; ".join(inheritance.proof_failures) or "proof is incomplete"
             report.add_error(
-                f"{label} {field_name} differs from production: "
-                f"{actual!r} != {expected!r}"
+                f"{label} rescue_profile omission cannot be inherited: {proof}"
             )
+            continue
+        report.add_error(
+            f"{label} {field_name} differs from production: "
+            f"{actual!r} != {expected!r}"
+        )
 
 
 def _iter_jsonl(path: Path, report: AuditReport) -> Iterator[tuple[int, dict]]:
@@ -381,7 +777,9 @@ def _expected_grid(
                         seed,
                     )
                     if key in expected:
-                        report.add_error(f"duplicate configured run key: {key.display()}")
+                        report.add_error(
+                            f"duplicate configured run key: {key.display()}"
+                        )
                     expected.add(key)
     return expected, trials
 
@@ -432,7 +830,7 @@ def _check_source_provenance(
     root: Path,
     config: dict,
     report: AuditReport,
-) -> str:
+) -> tuple[str, dict[str, bytes]]:
     target_commit = str(config.get("source", {}).get("target_commit", ""))
     target_branch = str(config.get("source", {}).get("target_branch", ""))
     if config.get("status") != "frozen":
@@ -460,7 +858,9 @@ def _check_source_provenance(
                 report.add_error(f"could not hash source snapshot: {exc}")
             else:
                 if state.get("snapshot_sha256") != actual_digest:
-                    report.add_error("source snapshot SHA-256 does not match source_state")
+                    report.add_error(
+                        "source snapshot SHA-256 does not match source_state"
+                    )
 
     if environment:
         repository = environment.get("repository")
@@ -531,7 +931,9 @@ def _check_source_provenance(
             else:
                 expected_resolved = copy.deepcopy(original_config)
                 expected_resolved["status"] = "frozen"
-                expected_resolved.setdefault("source", {})["target_commit"] = target_commit
+                expected_resolved.setdefault("source", {})[
+                    "target_commit"
+                ] = target_commit
                 if expected_resolved != config:
                     report.add_error(
                         "resolved config differs from the snapshotted config beyond "
@@ -583,7 +985,7 @@ def _check_source_provenance(
                 report.add_error(
                     "environment lacks a fingerprint for submission/submission_config.json"
                 )
-    return target_commit
+    return target_commit, snapshot_members
 
 
 def _check_controller(
@@ -591,7 +993,7 @@ def _check_controller(
     required_runs: int,
     required_cases: int,
     report: AuditReport,
-) -> None:
+) -> dict | None:
     manifest = _load_json(root / "sweep_manifest.json", report)
     if manifest:
         expected_values = {
@@ -624,7 +1026,10 @@ def _check_controller(
         report,
     )
     if failure_rows:
-        report.add_error(f"failures.csv contains {len(failure_rows)} controller failures")
+        report.add_error(
+            f"failures.csv contains {len(failure_rows)} controller failures"
+        )
+    return manifest
 
 
 def _check_context_source(
@@ -647,6 +1052,7 @@ def _check_inventory(
     target_commit: str,
     target_branch: str,
     production_context: Mapping[str, str],
+    inheritance: RescueProfileInheritance,
     report: AuditReport,
 ) -> dict[RunKey, dict[str, str]]:
     path = root / "diagnostics" / "run_inventory.csv"
@@ -700,7 +1106,13 @@ def _check_inventory(
                 report.add_error(f"inventory raw bundle is missing: {bundle}")
         _check_context_source(row, target_commit, target_branch, label, report)
         _check_production_context(
-            row, production_context, f"inventory {key.display()}", report
+            row,
+            production_context,
+            f"inventory {key.display()}",
+            report,
+            key=key,
+            inheritance=inheritance,
+            inheritance_location="inventory",
         )
         for count_field in (
             "case_geometry_rows",
@@ -716,10 +1128,11 @@ def _check_inventory(
                 continue
             if count < 0:
                 report.add_error(f"{label} {count_field} is negative")
-            if count_field in {"case_geometry_rows", "case_metrics_rows"} and count != trials:
-                report.add_error(
-                    f"{label} {count_field} is {count}; expected {trials}"
-                )
+            if (
+                count_field in {"case_geometry_rows", "case_metrics_rows"}
+                and count != trials
+            ):
+                report.add_error(f"{label} {count_field} is {count}; expected {trials}")
 
     missing = expected_runs - set(inventory)
     for key in sorted(missing):
@@ -735,6 +1148,7 @@ def _check_consolidated_run_manifests(
     target_commit: str,
     target_branch: str,
     production_context: Mapping[str, str],
+    inheritance: RescueProfileInheritance,
     report: AuditReport,
 ) -> None:
     path = root / "diagnostics" / "run_manifests.jsonl"
@@ -758,13 +1172,18 @@ def _check_consolidated_run_manifests(
         save_names.add(save_name)
         inventory_row = inventory.get(key)
         if inventory_row and save_name != inventory_row.get("save_name"):
-            report.add_error(f"run manifest save_name disagrees with inventory: {key.display()}")
+            report.add_error(
+                f"run manifest save_name disagrees with inventory: {key.display()}"
+            )
         _check_context_source(row, target_commit, target_branch, label, report)
         _check_production_context(
             row,
             production_context,
             f"consolidated run manifest {key.display()}",
             report,
+            key=key,
+            inheritance=inheritance,
+            inheritance_location="consolidated run-manifest context",
         )
         manifest = row.get("manifest")
         if not isinstance(manifest, dict):
@@ -775,7 +1194,9 @@ def _check_consolidated_run_manifests(
         if manifest.get("source_branch") != target_branch:
             report.add_error(f"nested run manifest branch mismatch: {key.display()}")
         if str(manifest.get("experiment", "")).lower() != key.experiment:
-            report.add_error(f"nested run manifest experiment mismatch: {key.display()}")
+            report.add_error(
+                f"nested run manifest experiment mismatch: {key.display()}"
+            )
         parameters = manifest.get("parameters")
         if not isinstance(parameters, dict):
             report.add_error(f"nested run manifest parameters missing: {key.display()}")
@@ -785,6 +1206,9 @@ def _check_consolidated_run_manifests(
             production_context,
             f"nested run manifest parameters {key.display()}",
             report,
+            key=key,
+            inheritance=inheritance,
+            inheritance_location="nested run-manifest parameters",
         )
         try:
             nested_key = RunKey(
@@ -804,9 +1228,7 @@ def _check_consolidated_run_manifests(
         report.add_error(f"missing consolidated run manifest: {key.display()}")
 
 
-def _case_key(
-    row: Mapping[str, object], source: str
-) -> tuple[RunKey, int]:
+def _case_key(row: Mapping[str, object], source: str) -> tuple[RunKey, int]:
     key = _run_key(row, source)
     if row.get("case_index") in (None, ""):
         raise ReleaseAuditInputError(f"{source} has no case_index")
@@ -820,15 +1242,22 @@ def _check_case_metrics(
     target_commit: str,
     target_branch: str,
     production_context: Mapping[str, str],
+    inheritance: RescueProfileInheritance,
     report: AuditReport,
 ) -> dict[tuple[RunKey, str], list[float]]:
     path = root / "diagnostics" / "case_metrics.csv"
-    all_metrics = {metric for metrics in METRICS_BY_EXPERIMENT.values() for metric in metrics}
-    required = set(RUN_CONTEXT_FIELDS) | {
-        "case_index",
-        "num_mixed_cells",
-        "num_final_missing_cells",
-    } | all_metrics
+    all_metrics = {
+        metric for metrics in METRICS_BY_EXPERIMENT.values() for metric in metrics
+    }
+    required = (
+        set(RUN_CONTEXT_FIELDS)
+        | {
+            "case_index",
+            "num_mixed_cells",
+            "num_final_missing_cells",
+        }
+        | all_metrics
+    )
     _, rows = _read_csv_rows(path, required, report)
     seen: set[tuple[RunKey, int]] = set()
     values: dict[tuple[RunKey, str], list[float]] = defaultdict(list)
@@ -851,9 +1280,19 @@ def _check_case_metrics(
                 f"unexpected case key in case_metrics: {key.display()}/case={case_index}"
             )
         _check_context_source(row, target_commit, target_branch, label, report)
-        _check_production_context(row, production_context, label, report)
+        _check_production_context(
+            row,
+            production_context,
+            label,
+            report,
+            key=key,
+            inheritance=inheritance,
+            inheritance_location="consolidated case metrics",
+        )
         try:
-            mixed_cells = _parse_int(row.get("num_mixed_cells"), f"{label} num_mixed_cells")
+            mixed_cells = _parse_int(
+                row.get("num_mixed_cells"), f"{label} num_mixed_cells"
+            )
             missing_cells = _parse_int(
                 row.get("num_final_missing_cells"), f"{label} num_final_missing_cells"
             )
@@ -863,7 +1302,9 @@ def _check_case_metrics(
             if mixed_cells <= 0:
                 report.add_error(f"{label} has no mixed cells")
             if missing_cells != 0:
-                report.add_error(f"{label} reports {missing_cells} final missing facets")
+                report.add_error(
+                    f"{label} reports {missing_cells} final missing facets"
+                )
         for metric in METRICS_BY_EXPERIMENT.get(key.experiment, ()):
             try:
                 value = _finite_metric(row.get(metric), f"{label} {metric}")
@@ -878,9 +1319,7 @@ def _check_case_metrics(
         for case_index in range(trials)
     }
     for key, case_index in sorted(expected_cases - seen):
-        report.add_error(
-            f"missing case_metrics key: {key.display()}/case={case_index}"
-        )
+        report.add_error(f"missing case_metrics key: {key.display()}/case={case_index}")
     report.summaries["case_metric_rows"] = len(rows)
     return values
 
@@ -892,6 +1331,7 @@ def _check_case_geometry(
     target_commit: str,
     target_branch: str,
     production_context: Mapping[str, str],
+    inheritance: RescueProfileInheritance,
     report: AuditReport,
 ) -> None:
     path = root / "diagnostics" / "case_geometry.jsonl"
@@ -918,7 +1358,15 @@ def _check_case_geometry(
         if not row.get("geometry_type"):
             report.add_error(f"{label} has no geometry_type")
         _check_context_source(row, target_commit, target_branch, label, report)
-        _check_production_context(row, production_context, label, report)
+        _check_production_context(
+            row,
+            production_context,
+            label,
+            report,
+            key=key,
+            inheritance=inheritance,
+            inheritance_location="consolidated case geometry",
+        )
     expected_cases = {
         (run_key, case_index)
         for run_key in expected_runs
@@ -1004,7 +1452,9 @@ def _check_consolidated_table_counts(
         expected = 0
         for key, row in inventory.items():
             try:
-                expected += _parse_int(row.get(count_field), f"{key.display()} {count_field}")
+                expected += _parse_int(
+                    row.get(count_field), f"{key.display()} {count_field}"
+                )
             except ReleaseAuditInputError:
                 continue
         actual = _count_csv_rows(
@@ -1228,12 +1678,24 @@ def _check_consolidated_row_context(
     key: RunKey,
     inventory_row: Mapping[str, str],
     production_context: Mapping[str, str],
+    inheritance: RescueProfileInheritance,
     table_name: str,
     reported: set[tuple[RunKey, str, str]],
     report: AuditReport,
 ) -> None:
+    _check_production_context(
+        row,
+        production_context,
+        f"consolidated {table_name} context for {key.display()}",
+        report,
+        key=key,
+        inheritance=inheritance,
+        inheritance_location=f"consolidated {table_name} context",
+    )
     for field_name in RUN_CONTEXT_FIELDS:
-        expected = production_context.get(field_name, inventory_row.get(field_name, ""))
+        if field_name in production_context:
+            continue
+        expected = inventory_row.get(field_name, "")
         actual = row.get(field_name)
         if actual == expected:
             continue
@@ -1338,6 +1800,7 @@ def _reconcile_consolidated_table(
     expected_runs: set[RunKey],
     inventory: Mapping[RunKey, Mapping[str, str]],
     production_context: Mapping[str, str],
+    inheritance: RescueProfileInheritance,
     case_summaries: dict[tuple[RunKey, int], dict[str, int | float]],
     report: AuditReport,
 ) -> None:
@@ -1377,6 +1840,7 @@ def _reconcile_consolidated_table(
                 key,
                 inventory_row,
                 production_context,
+                inheritance,
                 table_name,
                 reported_context,
                 report,
@@ -1443,6 +1907,7 @@ def _reconcile_consolidated_tables(
     expected_runs: set[RunKey],
     inventory: Mapping[RunKey, Mapping[str, str]],
     production_context: Mapping[str, str],
+    inheritance: RescueProfileInheritance,
     report: AuditReport,
 ) -> None:
     case_summaries: dict[tuple[RunKey, int], dict[str, int | float]] = {}
@@ -1454,6 +1919,7 @@ def _reconcile_consolidated_tables(
             expected_runs,
             inventory,
             production_context,
+            inheritance,
             case_summaries,
             report,
         )
@@ -1481,10 +1947,14 @@ def _check_raw_case_rows(
             report.add_error(str(exc))
             continue
         if case_index in seen_metrics:
-            report.add_error(f"duplicate raw case metric index in {bundle}: {case_index}")
+            report.add_error(
+                f"duplicate raw case metric index in {bundle}: {case_index}"
+            )
         seen_metrics.add(case_index)
         if not 0 <= case_index < trials:
-            report.add_error(f"unexpected raw case metric index in {bundle}: {case_index}")
+            report.add_error(
+                f"unexpected raw case metric index in {bundle}: {case_index}"
+            )
         for metric in required_metrics:
             try:
                 _finite_metric(row.get(metric), f"{label} {metric}")
@@ -1515,10 +1985,14 @@ def _check_raw_case_rows(
             report.add_error(str(exc))
             continue
         if case_index in seen_geometry:
-            report.add_error(f"duplicate raw case geometry index in {bundle}: {case_index}")
+            report.add_error(
+                f"duplicate raw case geometry index in {bundle}: {case_index}"
+            )
         seen_geometry.add(case_index)
         if not 0 <= case_index < trials:
-            report.add_error(f"unexpected raw case geometry index in {bundle}: {case_index}")
+            report.add_error(
+                f"unexpected raw case geometry index in {bundle}: {case_index}"
+            )
     if seen_geometry != set(range(trials)):
         report.add_error(f"raw case_geometry coverage is incomplete in {bundle}")
     return len(metric_rows), len(geometry_rows), geometry_rows
@@ -1535,6 +2009,96 @@ def _require_nonempty_file(path: Path, label: str, report: AuditReport) -> None:
         report.add_error(f"could not inspect {label} {path}: {exc}")
 
 
+def _check_raw_rescue_profile_resolution(
+    manifest: Mapping[str, object],
+    key: RunKey,
+    inheritance: RescueProfileInheritance,
+    report: AuditReport,
+) -> None:
+    parameters = manifest.get("parameters")
+    actual = (
+        parameters.get("rescue_profile") if isinstance(parameters, Mapping) else None
+    )
+    try:
+        command_tokens = _command_tokens(manifest.get("command"))
+    except ReleaseAuditInputError as exc:
+        if actual in (None, ""):
+            report.add_error(
+                f"raw rescue_profile omission is unproven for {key.display()}: {exc}"
+            )
+        elif actual == inheritance.value:
+            inheritance.resolved_runs[key] = "explicit raw manifest parameter"
+        return
+    command_values = _option_values(command_tokens, "--rescue_profile")
+
+    if command_values and command_values != [inheritance.value]:
+        report.add_error(
+            f"raw child command rescue_profile conflicts with production for "
+            f"{key.display()}: {command_values!r} != {[inheritance.value]!r}"
+        )
+        return
+    if actual == inheritance.value:
+        inheritance.resolved_runs[key] = "explicit raw manifest parameter"
+        return
+    if actual not in (None, ""):
+        return
+    if not inheritance.permits(key):
+        return
+    driver_module = inheritance.driver_modules.get(key.experiment)
+    if not driver_module or not _command_invokes_driver(command_tokens, driver_module):
+        report.add_error(
+            f"raw rescue_profile omission is unproven for {key.display()}: "
+            f"child command does not invoke snapshotted driver {driver_module!r}"
+        )
+        return
+    if command_values:
+        inheritance.resolved_runs[key] = "matching explicit raw child command option"
+        return
+    inheritance.resolved_runs[key] = (
+        "snapshotted non-Zalesak driver and reconstruction default"
+    )
+
+
+def _finalize_rescue_profile_inheritance(
+    inheritance: RescueProfileInheritance, report: AuditReport
+) -> None:
+    omitted_runs: set[RunKey] = set()
+    for runs in inheritance.omitted_locations.values():
+        omitted_runs.update(runs)
+    unresolved = omitted_runs - set(inheritance.resolved_runs)
+    for key in sorted(unresolved):
+        report.add_error(
+            f"rescue_profile omission has no verified raw-run resolution: "
+            f"{key.display()}"
+        )
+    inherited_runs = {
+        key
+        for key, source in inheritance.resolved_runs.items()
+        if source
+        in {
+            "matching explicit raw child command option",
+            "snapshotted non-Zalesak driver and reconstruction default",
+        }
+        and key in omitted_runs
+    }
+    report.summaries["rescue_profile_inherited_runs"] = len(inherited_runs)
+    if not inherited_runs:
+        return
+    locations = ", ".join(
+        sorted(
+            location
+            for location, runs in inheritance.omitted_locations.items()
+            if runs & inherited_runs
+        )
+    )
+    evidence = "; ".join(inheritance.evidence)
+    report.add_warning(
+        f"Audited rescue_profile={inheritance.value!r} by inheritance for "
+        f"{len(inherited_runs)} non-Zalesak runs across {locations}. Evidence: "
+        f"{evidence}."
+    )
+
+
 def _check_raw_bundle(
     root: Path,
     bundle: Path,
@@ -1544,6 +2108,7 @@ def _check_raw_bundle(
     target_commit: str,
     target_branch: str,
     production_context: Mapping[str, str],
+    inheritance: RescueProfileInheritance,
     report: AuditReport,
 ) -> None:
     for path in bundle.rglob("*"):
@@ -1570,6 +2135,9 @@ def _check_raw_bundle(
                 production_context,
                 f"raw run manifest parameters {key.display()}",
                 report,
+                key=key,
+                inheritance=inheritance,
+                inheritance_location="raw run-manifest parameters",
             )
             try:
                 manifest_key = RunKey(
@@ -1584,6 +2152,7 @@ def _check_raw_bundle(
             else:
                 if manifest_key != key:
                     report.add_error(f"raw run manifest key mismatch: {key.display()}")
+        _check_raw_rescue_profile_resolution(manifest, key, inheritance, report)
         artifacts = manifest.get("artifacts")
         if not isinstance(artifacts, dict):
             report.add_error(f"raw run manifest artifacts missing: {key.display()}")
@@ -1627,7 +2196,8 @@ def _check_raw_bundle(
     for field_name, actual in actual_counts.items():
         try:
             recorded = _parse_int(
-                inventory_row.get(field_name), f"inventory {field_name} for {key.display()}"
+                inventory_row.get(field_name),
+                f"inventory {field_name} for {key.display()}",
             )
         except ReleaseAuditInputError:
             continue
@@ -1658,9 +2228,7 @@ def _check_raw_bundle(
                 report.add_error(str(exc))
             else:
                 _require_nonempty_file(truth_path, truth_field, report)
-        reconstructed = (
-            bundle / "vtk" / "reconstructed"
-        )
+        reconstructed = bundle / "vtk" / "reconstructed"
         _require_nonempty_file(
             reconstructed / "facets" / f"{case_index}.vtp",
             "reconstructed facets",
@@ -1686,6 +2254,7 @@ def _check_raw_bundles(
     target_commit: str,
     target_branch: str,
     production_context: Mapping[str, str],
+    inheritance: RescueProfileInheritance,
     report: AuditReport,
 ) -> None:
     raw_root = root / "raw_runs"
@@ -1706,7 +2275,9 @@ def _check_raw_bundles(
         report.add_error(f"unexpected non-directory in raw_runs: {path}")
 
     inventory_names = {
-        str(row.get("save_name", "")) for row in inventory.values() if row.get("save_name")
+        str(row.get("save_name", ""))
+        for row in inventory.values()
+        if row.get("save_name")
     }
     if set(raw_dirs) != inventory_names:
         for name in sorted(inventory_names - set(raw_dirs)):
@@ -1734,6 +2305,7 @@ def _check_raw_bundles(
             target_commit,
             target_branch,
             production_context,
+            inheritance,
             report,
         )
     report.summaries["raw_bundles"] = len(raw_dirs)
@@ -1871,7 +2443,7 @@ def audit_final_release(
         required_cases,
         report,
     )
-    target_commit = _check_source_provenance(root, config, report)
+    target_commit, snapshot_members = _check_source_provenance(root, config, report)
     target_branch = str(config.get("source", {}).get("target_branch", ""))
     production = config.get("production_method", {})
     if not isinstance(production, dict):
@@ -1879,7 +2451,10 @@ def audit_final_release(
         production = {}
     production_context = _production_context(production, report)
 
-    _check_controller(root, required_runs, required_cases, report)
+    controller_manifest = _check_controller(root, required_runs, required_cases, report)
+    inheritance = _build_rescue_profile_inheritance(
+        config, controller_manifest, snapshot_members
+    )
     inventory = _check_inventory(
         root,
         expected_runs,
@@ -1887,6 +2462,7 @@ def audit_final_release(
         target_commit,
         target_branch,
         production_context,
+        inheritance,
         report,
     )
     _check_consolidated_run_manifests(
@@ -1896,6 +2472,7 @@ def audit_final_release(
         target_commit,
         target_branch,
         production_context,
+        inheritance,
         report,
     )
     case_values = _check_case_metrics(
@@ -1905,6 +2482,7 @@ def audit_final_release(
         target_commit,
         target_branch,
         production_context,
+        inheritance,
         report,
     )
     _check_case_geometry(
@@ -1914,6 +2492,7 @@ def audit_final_release(
         target_commit,
         target_branch,
         production_context,
+        inheritance,
         report,
     )
     _check_consolidated_table_counts(root, inventory, report)
@@ -1925,6 +2504,7 @@ def audit_final_release(
         target_commit,
         target_branch,
         production_context,
+        inheritance,
         report,
     )
     _reconcile_consolidated_tables(
@@ -1932,8 +2512,10 @@ def audit_final_release(
         expected_runs,
         inventory,
         production_context,
+        inheritance,
         report,
     )
+    _finalize_rescue_profile_inheritance(inheritance, report)
     _check_aggregate_metrics(root, expected_runs, case_values, report)
     report.summaries["expected_runs"] = len(expected_runs)
     report.summaries["expected_cases"] = len(expected_runs) * trials
@@ -1950,7 +2532,9 @@ def _manifest_path(root: Path, relative_path: Path | str) -> Path:
     try:
         path.resolve().relative_to(root.resolve())
     except ValueError as exc:
-        raise ReleaseAuditInputError("SHA-256 manifest path escapes release root") from exc
+        raise ReleaseAuditInputError(
+            "SHA-256 manifest path escapes release root"
+        ) from exc
     return path
 
 
@@ -2077,6 +2661,8 @@ def _print_report(report: AuditReport) -> None:
     print(f"Release root: {report.release_root}")
     for key in sorted(report.summaries):
         print(f"{key}: {report.summaries[key]}")
+    for warning in report.warnings:
+        print(f"WARNING: {warning}")
     if report.ok:
         print("FINAL RELEASE AUDIT PASSED")
         return
@@ -2113,17 +2699,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     report = audit_final_release(args.release_root)
     if report.ok and args.write_sha256_manifest:
         try:
-            path = generate_sha256_manifest(
-                report.release_root, args.sha256_manifest
-            )
+            path = generate_sha256_manifest(report.release_root, args.sha256_manifest)
         except (OSError, ReleaseAuditInputError) as exc:
             report.add_error(f"could not write SHA-256 manifest: {exc}")
         else:
             print(f"Wrote SHA-256 manifest: {path}")
     if report.ok and args.verify_sha256_manifest:
-        for error in verify_sha256_manifest(
-            report.release_root, args.sha256_manifest
-        ):
+        for error in verify_sha256_manifest(report.release_root, args.sha256_manifest):
             report.add_error(error)
     _print_report(report)
     return 0 if report.ok else 1

@@ -73,6 +73,11 @@ def _run_manifest() -> dict:
         "source_commit": COMMIT,
         "source_branch": "main",
         "experiment": "lines",
+        "command": (
+            "python -m experiments.static.lines --facet_algo linear "
+            "--resolution 0.5 --perturb_wiggle 0.0 --perturb_seed 0 "
+            "--plic_fallback LVIRA --corner_behavior_profile pre_f8_corner"
+        ),
         "parameters": {
             "facet_algo": "linear",
             "resolution": 0.5,
@@ -113,6 +118,7 @@ def _config() -> dict:
         },
         "benchmarks": {
             "lines": {
+                "driver": "experiments.static.lines",
                 "resolutions": "full_resolutions",
                 "methods": ["linear"],
                 "planned_runs": 1,
@@ -177,6 +183,13 @@ def _make_release(root: Path) -> Path:
         root / "sweep_manifest.json",
         {
             "status": "completed",
+            "command": (
+                "python -m experiments.static.run_perturbed_sweeps "
+                "--rescue_profile exact_linear_support_only"
+            ),
+            "parameters": {
+                "rescue_profile": "exact_linear_support_only",
+            },
             "planned_run_count": 1,
             "planned_case_count": 2,
             "successful_run_count": 1,
@@ -386,21 +399,14 @@ def _make_release(root: Path) -> Path:
     for case_index in range(2):
         files = (
             bundle / "vtk" / "true" / f"true_line{case_index}.vtp",
-            bundle
-            / "vtk"
-            / "true"
-            / f"true_line{case_index}.facet_metadata.json",
+            bundle / "vtk" / "true" / f"true_line{case_index}.facet_metadata.json",
             bundle / "vtk" / "reconstructed" / "facets" / f"{case_index}.vtp",
             bundle
             / "vtk"
             / "reconstructed"
             / "facets"
             / f"{case_index}.facet_metadata.json",
-            bundle
-            / "vtk"
-            / "reconstructed"
-            / "mixed_cells"
-            / f"{case_index}.vtp",
+            bundle / "vtk" / "reconstructed" / "mixed_cells" / f"{case_index}.vtp",
         )
         for path in files:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -453,6 +459,105 @@ def _add_provenance_rows(root: Path) -> None:
     rows[0]["merge_events_rows"] = "1"
     rows[0]["unresolved_plic_fallbacks_rows"] = "1"
     _write_csv(inventory_path, fieldnames, rows)
+
+
+def _snapshot_files(path: Path) -> dict[str, bytes]:
+    with tarfile.open(path, "r:gz") as archive:
+        return {
+            member.name: archive.extractfile(member).read()
+            for member in archive.getmembers()
+            if member.isfile()
+        }
+
+
+def _rewrite_snapshot(root: Path, files: dict[str, bytes]) -> None:
+    snapshot_path = root / "diagnostics" / "source_snapshot.tar.gz"
+    _snapshot(snapshot_path, files)
+    state_path = root / "diagnostics" / "source_state.json"
+    state = json.loads(state_path.read_text())
+    state["snapshot_sha256"] = hashlib.sha256(snapshot_path.read_bytes()).hexdigest()
+    state["snapshot_file_count"] = len(files)
+    _write_json(state_path, state)
+
+
+def _enable_authoritative_rescue_inheritance(root: Path) -> None:
+    snapshot_path = root / "diagnostics" / "source_snapshot.tar.gz"
+    files = _snapshot_files(snapshot_path)
+    files.update(
+        {
+            "submission/run_final_static_sweep.sh": (
+                b"python -m experiments.static.run_perturbed_sweeps "
+                b"--rescue_profile exact_linear_support_only\n"
+            ),
+            "main/structs/meshes/merge_mesh.py": b"""
+class MergeMesh:
+    default_rescue_profile = "exact_linear_support_only"
+
+    def fitFacets(self, merge_ids, rescue_profile="exact_linear_support_only"):
+        pass
+""",
+            "util/reconstruction.py": b"""
+from main.structs.meshes.merge_mesh import MergeMesh
+
+def _run_with_merge(m, merge_ids, algo_kwargs):
+    m.fitFacets(
+        merge_ids,
+        rescue_profile=algo_kwargs.get(
+            "rescue_profile", MergeMesh.default_rescue_profile
+        ),
+    )
+""",
+            "experiments/static/lines.py": b"""
+def main(m, facet_algo, do_c0, output_dirs, plic_fallback, corner_profile):
+    runReconstruction(
+        m,
+        facet_algo,
+        do_c0,
+        0,
+        output_dirs,
+        algo_kwargs={
+            "plic_fallback": plic_fallback,
+            "corner_behavior_profile": corner_profile,
+        },
+    )
+""",
+        }
+    )
+    _rewrite_snapshot(root, files)
+
+
+def _omit_rescue_profile_everywhere(root: Path) -> None:
+    for relative in (
+        "diagnostics/run_inventory.csv",
+        "diagnostics/case_metrics.csv",
+        "diagnostics/cell_metrics.csv",
+        "diagnostics/merge_events.csv",
+        "diagnostics/unresolved_plic_fallbacks.csv",
+    ):
+        path = root / relative
+        fieldnames, rows = _read_csv(path)
+        for row in rows:
+            row["rescue_profile"] = ""
+        _write_csv(path, fieldnames, rows)
+
+    geometry_path = root / "diagnostics" / "case_geometry.jsonl"
+    geometry_rows = [
+        json.loads(line) for line in geometry_path.read_text().splitlines()
+    ]
+    for row in geometry_rows:
+        row["rescue_profile"] = ""
+    _write_jsonl(geometry_path, geometry_rows)
+
+    manifests_path = root / "diagnostics" / "run_manifests.jsonl"
+    consolidated = json.loads(manifests_path.read_text())
+    consolidated["rescue_profile"] = ""
+    consolidated["manifest"]["parameters"].pop("rescue_profile", None)
+    _write_jsonl(manifests_path, [consolidated])
+
+    raw_path = root / "raw_runs" / SAVE_NAME / "run_manifest.json"
+    raw = json.loads(raw_path.read_text())
+    raw["parameters"].pop("rescue_profile", None)
+    _write_json(raw_path, raw)
 
 
 def test_complete_synthetic_release_passes(tmp_path):
@@ -759,6 +864,135 @@ def test_rescue_profile_is_enforced_across_all_provenance_layers(tmp_path, sourc
     assert "rescue_profile" in messages
     assert "different" in messages
     assert "exact_linear_support_only" in messages
+
+
+def test_authoritative_non_zalesak_rescue_inheritance_is_allowed(tmp_path):
+    root = _make_release(tmp_path / "release")
+    _add_provenance_rows(root)
+    _enable_authoritative_rescue_inheritance(root)
+    _omit_rescue_profile_everywhere(root)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    assert report.ok, _messages(report)
+    assert report.summaries["rescue_profile_inherited_runs"] == 1
+    assert len(report.warnings) == 1
+    assert "Audited rescue_profile='exact_linear_support_only'" in report.warnings[0]
+    assert "1 non-Zalesak runs" in report.warnings[0]
+
+
+def test_matching_child_option_allows_redundant_raw_field_omission(tmp_path):
+    root = _make_release(tmp_path / "release")
+    _enable_authoritative_rescue_inheritance(root)
+    _omit_rescue_profile_everywhere(root)
+    raw_path = root / "raw_runs" / SAVE_NAME / "run_manifest.json"
+    raw = json.loads(raw_path.read_text())
+    raw["command"] += " --rescue_profile exact_linear_support_only"
+    _write_json(raw_path, raw)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    assert report.ok, _messages(report)
+    assert report.summaries["rescue_profile_inherited_runs"] == 1
+    assert len(report.warnings) == 1
+
+
+@pytest.mark.parametrize("conflict_source", ["raw_parameter", "raw_command"])
+def test_inherited_rescue_profile_rejects_lower_level_conflicts(
+    tmp_path, conflict_source
+):
+    root = _make_release(tmp_path / "release")
+    _enable_authoritative_rescue_inheritance(root)
+    _omit_rescue_profile_everywhere(root)
+    raw_path = root / "raw_runs" / SAVE_NAME / "run_manifest.json"
+    raw = json.loads(raw_path.read_text())
+    if conflict_source == "raw_parameter":
+        raw["parameters"]["rescue_profile"] = "different"
+    else:
+        raw["command"] += " --rescue_profile different"
+    _write_json(raw_path, raw)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    messages = _messages(report)
+    assert not report.ok
+    assert "rescue_profile" in messages
+    assert "different" in messages
+
+
+def test_rescue_inheritance_rejects_conflicting_global_pin(tmp_path):
+    root = _make_release(tmp_path / "release")
+    _enable_authoritative_rescue_inheritance(root)
+    _omit_rescue_profile_everywhere(root)
+    manifest_path = root / "sweep_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["parameters"]["rescue_profile"] = "different"
+    _write_json(manifest_path, manifest)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    messages = _messages(report)
+    assert not report.ok
+    assert "omission cannot be inherited" in messages
+    assert "sweep manifest rescue_profile does not match" in messages
+
+
+def test_rescue_inheritance_rejects_missing_child_command_proof(tmp_path):
+    root = _make_release(tmp_path / "release")
+    _enable_authoritative_rescue_inheritance(root)
+    _omit_rescue_profile_everywhere(root)
+    raw_path = root / "raw_runs" / SAVE_NAME / "run_manifest.json"
+    raw = json.loads(raw_path.read_text())
+    raw.pop("command")
+    _write_json(raw_path, raw)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    messages = _messages(report)
+    assert not report.ok
+    assert "raw rescue_profile omission is unproven" in messages
+    assert "command is absent or empty" in messages
+
+
+def test_rescue_inheritance_rejects_unverified_child_driver(tmp_path):
+    root = _make_release(tmp_path / "release")
+    _enable_authoritative_rescue_inheritance(root)
+    _omit_rescue_profile_everywhere(root)
+    raw_path = root / "raw_runs" / SAVE_NAME / "run_manifest.json"
+    raw = json.loads(raw_path.read_text())
+    raw["command"] = raw["command"].replace(
+        "experiments.static.lines", "experiments.static.circles"
+    )
+    _write_json(raw_path, raw)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    messages = _messages(report)
+    assert not report.ok
+    assert "raw rescue_profile omission is unproven" in messages
+    assert "does not invoke snapshotted driver" in messages
+
+
+def test_rescue_inheritance_rejects_unproven_source_default(tmp_path):
+    root = _make_release(tmp_path / "release")
+    _enable_authoritative_rescue_inheritance(root)
+    _omit_rescue_profile_everywhere(root)
+    snapshot_path = root / "diagnostics" / "source_snapshot.tar.gz"
+    files = _snapshot_files(snapshot_path)
+    files[
+        "util/reconstruction.py"
+    ] = b"""
+def _run_with_merge(m, merge_ids, algo_kwargs):
+    m.fitFacets(merge_ids, rescue_profile=None)
+"""
+    _rewrite_snapshot(root, files)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    messages = _messages(report)
+    assert not report.ok
+    assert "omission cannot be inherited" in messages
+    assert "reconstruction wrapper does not inherit" in messages
 
 
 def test_sha256_manifest_is_sorted_complete_and_verifiable(tmp_path):
