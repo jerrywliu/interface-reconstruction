@@ -8,6 +8,19 @@ The final review inventory is defined only by
 - 12 paired slots with `with_endpoints` and `clean` variants; and
 - five all-method summary PDFs, with auxiliary all-method exports excluded.
 
+The three row-level maps serve different stages of the review:
+
+- `submission/final_figure_candidates.json` defines every candidate ID, slot,
+  endpoint variant, and generated path;
+- `submission/figure_provenance.csv` maps the 26 manuscript slots to active TeX
+  includes and their promotion targets; and
+- `review/figure_candidate_source_map.csv` is generated with the packet and binds
+  all 38 concrete PDFs to producer inputs and evidence.
+
+After the author selects one PDF for each paired slot, the approved-figures CSV
+described in `submission/SUBMISSION_PACKAGING.md` pins the selected 26 manuscript
+paths and file digests. Until then, no candidate is promoted automatically.
+
 ## Figure Families
 
 | Family | Candidates | Scientific source |

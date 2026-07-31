@@ -6,9 +6,11 @@ This is the paper-to-code index for the static reconstruction results in
 Section 6 and its appendix. Run commands from the repository root. The target
 submission outputs are vector PDFs; PNG files are review previews only.
 
-The audited, per-include execution checklist for the completed sweep is
-`submission/POST_SWEEP_FIGURE_MANIFEST.md`. It resolves the low-resolution
-companion-run and endpoint-variant requirements against the active manuscript.
+The family-level execution checklist is
+`submission/POST_SWEEP_FIGURE_MANIFEST.md`. The exact 38-candidate inventory is
+`submission/final_figure_candidates.json`; each completed run also writes
+`review/figure_candidate_source_map.csv`, which binds every candidate PDF to its
+producer inputs. The tables below map the resulting slots to the active manuscript.
 
 ## Result Sources
 
@@ -16,7 +18,8 @@ companion-run and endpoint-variant requirements against the active manuscript.
 | --- | --- | --- |
 | Historical paper assets | March/May 2026 camera-ready bundles | Layout comparison only. Do not use as final numerical provenance. |
 | July baseline | `results/static/static_paper_simplified_default_20260717_212413/` | Comparison/recovery only: 300 affected-method runs, 7,500 cases. Its source snapshot is reproducible but dirty, and its historical square/Zalesak `area_error` columns are not submission-equivalent. |
-| Final release | `results/static/submission_static_20260731_012430_505aefa45432/` | Canonical completed result set: 970 all-method runs, 24,250 cases, clean source commit, read-only raw bundles, and consolidated diagnostics. Seal and verify its release-wide `SHA256SUMS` before any downstream validation. |
+| Completed source release | `results/static/submission_static_20260731_012430_505aefa45432/` | Original completed result set: 970 all-method runs and 24,250 cases. Preserve for comparison; do not use it as an immutable downstream input. |
+| Sealed final release | `results/static/submission_static_20260731_012430_505aefa45432.sealed/` | Canonical immutable numerical input. Its complete `SHA256SUMS` has digest `9b5cda54e469ee01bc6a9078bbe22b568ed1e211d16080be806dfe9458ff0b1e`. |
 
 The machine-readable specification is `submission/submission_config.json`.
 Figure promotion status and the paper filename contract are in
@@ -25,15 +28,17 @@ Figure promotion status and the paper filename contract are in
 Set these shell variables when a final release exists:
 
 ```bash
-export FINAL_ROOT="$PWD/results/static/submission_static_20260731_012430_505aefa45432"
+export SOURCE_RELEASE="$PWD/results/static/submission_static_20260731_012430_505aefa45432"
+export FINAL_ROOT="$PWD/results/static/submission_static_20260731_012430_505aefa45432.sealed"
 export SOURCE_COMMIT="$(python -c 'import json,os; print(json.load(open(os.environ["FINAL_ROOT"] + "/submission_config.resolved.json"))["source"]["target_commit"])')"
-export FIGURE_ROOT="$PWD/results/submission/final_figures_${SOURCE_COMMIT:0:12}"
-export PLOTS_VIEW="$FIGURE_ROOT/final_plots_view"
+export GENERATOR_COMMIT="$(git rev-parse HEAD)"
+export FIGURE_ROOT="$PWD/results/submission/final_figures_${GENERATOR_COMMIT:0:12}"
 ```
 
-`FINAL_ROOT` contains the immutable numerical release. All regenerated figure
-candidates live separately under the authoritative
-`results/submission/final_figures_<commit>/` root.
+`SOURCE_RELEASE` is the preserved writable run output; `FINAL_ROOT` is its
+read-only, checksum-sealed copy. All regenerated figure candidates live
+separately under an authoritative `results/submission/final_figures_<commit>/`
+root, where the suffix identifies the reviewed generator commit.
 
 ## Final Sweep
 
@@ -125,19 +130,23 @@ it to `$FINAL_ROOT/raw_runs/<unique-save-name>/`.
 
 ## Figure Regeneration
 
-### Prepare final geometry aliases
+The only submission-producing entry point is
+`submission/run_final_figure_orchestrator`, documented in
+`submission/FINAL_FIGURE_REGENERATION.md`. It privately materializes and audits
+the sealed release, creates a physical run-bundle view, performs companion runs,
+and accepts exactly the 38 allowlisted vector PDFs. It never follows a user-built
+symlink view or fills missing geometry from historical results.
 
-Paper figure code uses stable, profile-free run names. Build the final-only,
-symlink-based canonical view from immutable raw bundles using the exact snippet in
-`submission/FINAL_FIGURE_REGENERATION.md`. Do not fill missing geometry from July;
-the release audit and view construction must fail instead.
+The generator commands below document the paper-to-code mapping and are useful
+for local diagnosis. Their direct outputs are not submission candidates; the
+orchestrator supplies their private input paths and acceptance context.
 
 ### Main-text panels
 
 ```bash
 python -m experiments.static.generate_section6_maintext_figures \
   --csv "$FINAL_ROOT/perturbed_sweep.csv" \
-  --plots_root "$PLOTS_VIEW" \
+  --plots_root <orchestrator-private-physical-plots-view> \
   --out_dir "$FIGURE_ROOT/section6" \
   --figure_groups quantitative,representative \
   --endpoint_variants paired

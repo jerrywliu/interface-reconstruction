@@ -9,15 +9,17 @@ It does not modify the release, the paper source, or Overleaf.
 1. A completed `970`-run / `24,250`-case release root.
 2. A successful programmatic audit by `audit_final_release.py`.
 3. A complete and valid release-wide `SHA256SUMS`.
-4. A clean paper Git worktree pinned to an explicit full commit. Its root must
+4. A clean generator Git worktree pinned to the exact full commit that produced
+   the approved figure packet.
+5. A clean paper Git worktree pinned to an explicit full commit. Its root must
    contain `interface-reconstruction-paper/`.
-5. An explicit approval manifest for every imported figure.
-6. A non-placeholder DOI or URL for the complete raw-data deposit.
-7. A `sha256:<digest>` identifier for the exact `SHA256SUMS` deposited with the
+6. An explicit approval manifest for every imported figure.
+7. A non-placeholder DOI or URL for the complete raw-data deposit.
+8. A `sha256:<digest>` identifier for the exact `SHA256SUMS` deposited with the
    complete release.
-8. Either a locally downloaded/fetched copy of the deposited `SHA256SUMS`, or an
+9. Either a locally downloaded/fetched copy of the deposited `SHA256SUMS`, or an
    explicit acknowledgment that remote deposit contents remain a manual gate.
-9. A pre-existing output parent owned by the current user, represented by a real
+10. A pre-existing output parent owned by the current user, represented by a real
    directory, and not writable by group or other users.
 
 The packager reruns the full release audit and verifies every entry in the release
@@ -70,6 +72,20 @@ manuscript content. Approved figures must be tracked at that commit. Tracked fil
 under `.git/`, `.hg/`, `.svn/`, `__pycache__/`, `build/`, `dist/`, or `output/`
 are excluded from source discovery even when they exist in the pinned commit.
 
+Apply the same clean, detached-worktree discipline to the code repository at the
+exact reviewed generator commit:
+
+```sh
+export GENERATOR_REPO=/path/to/interface-reconstruction
+export GENERATOR_COMMIT=<reviewed-40-character-commit>
+export GENERATOR_WORKTREE=/tmp/interface-reconstruction-generator-submission
+git -C "$GENERATOR_REPO" worktree add --detach "$GENERATOR_WORKTREE" "$GENERATOR_COMMIT"
+test -z "$(git -C "$GENERATOR_WORKTREE" status --porcelain --untracked-files=all)"
+```
+
+The packager materializes the generator archive and experiment map from pinned Git
+objects. Worktree bytes cannot substitute a different plotting implementation.
+
 ## Figure Approval Manifest
 
 The approval manifest is CSV with these required columns:
@@ -96,7 +112,7 @@ The deposition URL alone is not accepted. Compute the SHA-256 of the final relea
 checksum manifest and pass it as an explicit manifest identifier:
 
 ```sh
-export RAW_DATA_MANIFEST_ID="sha256:$(shasum -a 256 "$RELEASE/SHA256SUMS" | awk '{print $1}')"
+export RAW_DATA_MANIFEST_ID="sha256:$(shasum -a 256 "$SEALED_RELEASE/SHA256SUMS" | awk '{print $1}')"
 ```
 
 The packager recomputes this digest from the already audited local release and
@@ -108,7 +124,7 @@ Preferred verification supplies a copy downloaded or fetched from the deposit:
 
 ```sh
 export DEPOSITED_MANIFEST=/path/to/downloaded/SHA256SUMS
-cmp "$RELEASE/SHA256SUMS" "$DEPOSITED_MANIFEST"
+cmp "$SEALED_RELEASE/SHA256SUMS" "$DEPOSITED_MANIFEST"
 ```
 
 Pass it with `--deposited-release-manifest "$DEPOSITED_MANIFEST"`. The packager
@@ -137,7 +153,9 @@ The exact parent must exist before planning; the packager never creates it.
 
 ```sh
 python submission/package_submission.py \
-  --release-root "$RELEASE" \
+  --release-root "$SEALED_RELEASE" \
+  --generator-worktree-root "$GENERATOR_WORKTREE" \
+  --generator-commit "$GENERATOR_COMMIT" \
   --paper-worktree-root "$PAPER_WORKTREE" \
   --paper-commit "$PAPER_COMMIT" \
   --approved-figures-manifest "$APPROVAL_CSV" \
@@ -212,12 +230,14 @@ README.md
 INVENTORY.csv
 INVENTORY.json
 SHA256SUMS
-code/source_snapshot.tar.gz
+code/scientific_source_snapshot.tar.gz
+code/figure_generator_snapshot.tar.gz
 docs/PAPER_EXPERIMENT_MAP.md
 manuscript/source/interface-reconstruction-paper/...
 manuscript/review/...
 results/perturbed_sweep.csv
 provenance/approved_figures.csv
+provenance/code_snapshots.json
 provenance/manuscript_build.json
 provenance/vector_pdf_qa.json
 provenance/RAW_DATA_DEPOSITION.md
@@ -225,9 +245,10 @@ provenance/deposit/SHA256SUMS.downloaded  # only when supplied
 provenance/release/...
 ```
 
-The code archive and paper experiment map come from the audited source snapshot,
-not from the checkout running the packager. This keeps source and result provenance
-aligned even if packaging occurs later.
+The scientific archive comes from the audited release snapshot. The separately
+named generator archive and paper experiment map come from the exact pinned Git
+commit that produced the approved figure packet. Their commits, trees, Git object
+IDs, and digests are recorded independently in `provenance/code_snapshots.json`.
 
 ## Raw-Data Boundary
 

@@ -41,8 +41,11 @@ command because it plans 970 runs and 24,250 cases; consult the submission confi
 and paper experiment map first.
 
 For a full description of the sweep experiments (linear + perturbed), see `docs/EXPERIMENTS.md`.
-For local plotting, reconstruction inspection, and paper-figure regeneration, see `docs/VISUALIZATION_WORKFLOW.md`.
-For the paper-to-code map of Section 6 experiments, final data, diagnostics, and figure assets, see `docs/PAPER_EXPERIMENT_MAP.md`.
+For local plotting and reconstruction inspection, see `docs/VISUALIZATION_WORKFLOW.md`.
+For the single fail-closed final paper-figure workflow, see
+`submission/FINAL_FIGURE_REGENERATION.md`. For the paper-to-code map of Section 6
+experiments, final data, diagnostics, and every figure asset, see
+`docs/PAPER_EXPERIMENT_MAP.md`.
 
 For deterministic, fail-closed assembly of the final code/manuscript package, see `submission/SUBMISSION_PACKAGING.md`.
 
