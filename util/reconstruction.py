@@ -7,6 +7,70 @@ from util.plotting.vtk_utils import writePartialCells, writeFacets
 from util.reconstruction_diagnostics import write_reconstruction_diagnostics
 
 
+class IncompleteReconstructionError(RuntimeError):
+    """Raised when the final facet list does not cover every active mixed component."""
+
+
+def _active_merged_polygons(m: MergeMesh):
+    active_merge_ids = []
+    seen = set()
+    for merge_id_row in m.coords_to_merge_id:
+        for merge_id in merge_id_row:
+            if merge_id is None or merge_id in seen:
+                continue
+            seen.add(merge_id)
+            active_merge_ids.append(merge_id)
+
+    missing_ids = [
+        merge_id for merge_id in active_merge_ids if merge_id not in m.merged_polys
+    ]
+    if missing_ids:
+        raise IncompleteReconstructionError(
+            f"Active merge ids have no polygon objects: {missing_ids}"
+        )
+    return active_merge_ids, [m.merged_polys[merge_id] for merge_id in active_merge_ids]
+
+
+def _validate_active_reconstruction(m, reconstructed_polys, reconstructed_facets):
+    active_merge_ids, active_polys = _active_merged_polygons(m)
+    returned_polys = list(reconstructed_polys)
+    returned_facets = list(reconstructed_facets)
+
+    if len(returned_polys) != len(returned_facets):
+        raise IncompleteReconstructionError(
+            "Final reconstruction returned "
+            f"{len(returned_facets)} facets for {len(returned_polys)} polygons"
+        )
+
+    active_by_object = {
+        id(poly): merge_id for merge_id, poly in zip(active_merge_ids, active_polys)
+    }
+    returned_objects = [id(poly) for poly in returned_polys]
+    missing_active_ids = [
+        active_by_object[object_id]
+        for object_id in active_by_object
+        if object_id not in returned_objects
+    ]
+    extra_count = sum(
+        object_id not in active_by_object for object_id in returned_objects
+    )
+    duplicate_count = len(returned_objects) - len(set(returned_objects))
+    if missing_active_ids or extra_count or duplicate_count:
+        raise IncompleteReconstructionError(
+            "Final reconstruction does not match the active mixed partition: "
+            f"missing active merge ids={missing_active_ids}, "
+            f"extra polygons={extra_count}, duplicate polygons={duplicate_count}"
+        )
+
+    missing_facet_indices = [
+        index for index, facet in enumerate(returned_facets) if facet is None
+    ]
+    if missing_facet_indices:
+        raise IncompleteReconstructionError(
+            f"Final reconstruction has missing facets at indices {missing_facet_indices}"
+        )
+
+
 def runReconstruction(
     m: MergeMesh, facet_algo, do_c0, iter, output_dirs, algo_kwargs={}, return_polys=False
 ):
@@ -56,6 +120,7 @@ def runReconstruction(
         os.path.join(output_dirs["vtk_reconstructed_facets"], f"{iter}.vtp"),
     )
     write_reconstruction_diagnostics(m, iter, output_dirs)
+    _validate_active_reconstruction(m, reconstructed_polys, reconstructed_facets)
 
     if return_polys:
         return reconstructed_facets, reconstructed_polys

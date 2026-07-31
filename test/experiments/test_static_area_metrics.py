@@ -1,6 +1,7 @@
 import json
 import math
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -132,3 +133,81 @@ def test_driver_area_metric_propagates_geometry_evaluation_failure(
         )
 
     assert isinstance(exc_info.value.__cause__, ValueError)
+
+
+def test_square_driver_uses_active_polygons_returned_by_reconstruction(
+    tmp_path, monkeypatch
+):
+    active = _Polygon()
+    stale = _Polygon()
+    facet = LinearFacet([0.3, 0.0], [0.3, 1.0])
+    mesh = SimpleNamespace(
+        merged_polys={0: active, 1: stale},
+        plic_fallback_records=[],
+        reconstruction_diagnostic_summary={},
+        initializeFractions=lambda fractions: None,
+    )
+    output_dirs = {
+        "base": str(tmp_path),
+        "metrics": str(tmp_path / "metrics"),
+        "vtk": str(tmp_path / "vtk"),
+        "vtk_true": str(tmp_path / "vtk" / "true"),
+        "plt_areas": str(tmp_path / "plt" / "areas"),
+        "plt_partial": str(tmp_path / "plt" / "partial"),
+    }
+    for directory in output_dirs.values():
+        Path(directory).mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(
+        squares,
+        "read_yaml",
+        lambda path: {
+            "TEST": {"SAVE_NAME": "unused"},
+            "MESH": {"GRID_SIZE": 100.0, "RESOLUTION": 1.0},
+            "GEOMS": {"FACET_ALGO": "linear", "THRESHOLD": 1.0e-10, "DO_C0": False},
+        },
+    )
+    monkeypatch.setattr(squares, "setupOutputDirs", lambda *args, **kwargs: output_dirs)
+    monkeypatch.setattr(squares, "write_run_manifest", lambda *args, **kwargs: None)
+    monkeypatch.setattr(squares, "make_points_from_config", lambda config: [])
+    monkeypatch.setattr(squares, "MergeMesh", lambda *args, **kwargs: mesh)
+    monkeypatch.setattr(squares, "writeMesh", lambda *args, **kwargs: None)
+    monkeypatch.setattr(squares, "initializePoly", lambda *args, **kwargs: [])
+    monkeypatch.setattr(squares, "plotAreas", lambda *args, **kwargs: None)
+    monkeypatch.setattr(squares, "plotPartialAreas", lambda *args, **kwargs: None)
+    monkeypatch.setattr(squares, "writeFacets", lambda *args, **kwargs: None)
+    monkeypatch.setattr(squares, "append_case_geometry", lambda *args, **kwargs: None)
+    monkeypatch.setattr(squares, "append_case_metrics", lambda *args, **kwargs: None)
+    monkeypatch.setattr(squares, "calculate_facet_gaps", lambda *args: 0.0)
+    monkeypatch.setattr(squares, "hausdorff_interface", lambda *args: 0.0)
+
+    def reconstruct(*args, **kwargs):
+        assert kwargs["return_polys"] is True
+        return [facet], [active]
+
+    seen = {}
+
+    def true_area(polygons, geometry):
+        seen["truth_polygons"] = list(polygons)
+        return 0.3
+
+    def reconstructed_area(polygons, facets, *, case_index):
+        seen["reconstructed_polygons"] = list(polygons)
+        assert list(facets) == [facet]
+        return 0.3
+
+    monkeypatch.setattr(squares, "runReconstruction", reconstruct)
+    monkeypatch.setattr(squares, "true_area_over_active_polygons", true_area)
+    monkeypatch.setattr(squares, "reconstructed_mixed_area", reconstructed_area)
+
+    areas, gaps, hausdorff = squares.main(
+        "static/square", num_squares=1, save_name="unit"
+    )
+
+    assert seen == {
+        "truth_polygons": [active],
+        "reconstructed_polygons": [active],
+    }
+    assert areas == [0.0]
+    assert gaps == [0.0]
+    assert hausdorff == [0.0]

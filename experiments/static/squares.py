@@ -34,10 +34,10 @@ from experiments.static.case_selection import parse_case_indices
 RANDOM_SEED = 42
 
 
-def true_area_from_polygon_over_mesh(m, polygon):
-    """Sum exact polygon∩cell areas (merged cells)."""
+def true_area_over_active_polygons(polygons, polygon):
+    """Sum exact truth area over the active reconstructed polygons."""
     total = 0.0
-    for poly in m.merged_polys.values():
+    for poly in polygons:
         intersects = getPolyIntersectArea(polygon, poly.points)
         if not intersects:
             continue
@@ -281,7 +281,7 @@ def main(
 
         # Run reconstruction
         print(f"Reconstructing square {i+1}")
-        reconstructed_facets = runReconstruction(
+        reconstructed_facets, reconstructed_polys = runReconstruction(
             m,
             facet_algo,
             do_c0,
@@ -291,6 +291,7 @@ def main(
                 "plic_fallback": plic_fallback,
                 "corner_behavior_profile": corner_behavior_profile,
             },
+            return_polys=True,
         )
         fallback_records = getattr(m, "plic_fallback_records", [])
         if fallback_records:
@@ -319,27 +320,15 @@ def main(
             },
         )
 
-        # ---------- Ground-truth area over the mesh (polygon ∩ cells) ----------
-        true_total_area = true_area_from_polygon_over_mesh(m, rotated_square)
-
-        # ---------- Reconstructed total area: mixed (via facet) + full (via exact ∩) ----------
-        reconstructed_polys = list(m.merged_polys.values())
+        # Compare truth and reconstruction over the same active mixed polygons.
+        true_total_area = true_area_over_active_polygons(
+            reconstructed_polys, rotated_square
+        )
         reconstructed_total_area = reconstructed_mixed_area(
             reconstructed_polys, reconstructed_facets, case_index=i
         )
-        mixed_ids = {id(poly) for poly in reconstructed_polys}
 
-        # Add area for cells without a facet (fully inside, or otherwise no mixed boundary)
-        for poly in m.merged_polys.values():
-            if id(poly) in mixed_ids:
-                continue
-            intersects = getPolyIntersectArea(rotated_square, poly.points)
-            if not intersects:
-                continue
-            inside_area = sum(abs(getArea(p)) for p in intersects)
-            reconstructed_total_area += inside_area
-
-        # Final area error (vs exact per-cell truth)
+        # Final area error (vs exact truth on the reconstructed mixed partition)
         area_error = abs(reconstructed_total_area - true_total_area) / max(
             true_total_area, 1e-12
         )
