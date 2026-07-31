@@ -28,10 +28,10 @@ from submission.accept_figure_candidates import (
 )
 from submission.pdf_vector_qa import FontRecord, PdfQaReport, inspect_pdf
 from submission.final_figure_orchestrator import (
-    _reserve_publication,
-    finalize_publication,
+    _remove_tree,
     validate_published_logical_paths,
 )
+from test.submission.final_figure_test_support import freeze_staging_for_test
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -324,39 +324,34 @@ def test_success_writes_hash_source_maps_and_generated_previews(tmp_path):
     assert qa["review_page_map_verified"]
 
 
-def test_published_artifact_paths_are_final_root_relative_and_exist(tmp_path):
+def test_frozen_artifact_paths_are_publication_root_relative_and_exist(tmp_path):
     _roots, state = _acceptance_fixture(tmp_path)
     staging = state.snapshot_root
-    output = tmp_path / "published-review"
-    reservation = _reserve_publication(output)
-    finalize_publication(
+    _accept(
+        tmp_path,
+        state,
+        output_dir=staging / "review",
+    )
+    frozen = tmp_path / "frozen-review"
+    freeze_staging_for_test(
         staging=staging,
-        output_root=output,
-        reservation=reservation,
+        destination=frozen,
         manifest_path=state.orchestration_record,
-        acceptance_runner=_accept_orchestrated_candidates,
-        acceptance_kwargs={
-            "orchestration_state": state,
-            "output_dir": staging / "review",
-            "pdf_inspector": _passing_report,
-            "page_inspector": _fake_page_inspector,
-            "preview_renderer": _fake_preview_renderer,
-            "review_builder": _fake_review_builder,
-            "review_map_verifier": lambda *args, **kwargs: None,
-        },
         candidate_specs=load_candidate_allowlist(),
     )
-
-    checked = validate_published_logical_paths(output)
-    assert len(checked) >= 38 * 7
-    for relative in checked:
-        assert not Path(relative).is_absolute()
-        target = output / relative
-        target.resolve().relative_to(output.resolve())
-        assert target.exists()
-    for artifact in output.rglob("*"):
-        if artifact.suffix in {".json", ".csv"}:
-            assert str(staging) not in artifact.read_text(encoding="utf-8")
+    try:
+        checked = validate_published_logical_paths(frozen)
+        assert len(checked) >= 38 * 7
+        for relative in checked:
+            assert not Path(relative).is_absolute()
+            target = frozen / relative
+            target.resolve().relative_to(frozen.resolve())
+            assert target.exists()
+        for artifact in frozen.rglob("*"):
+            if artifact.suffix in {".json", ".csv"}:
+                assert str(staging) not in artifact.read_text(encoding="utf-8")
+    finally:
+        _remove_tree(frozen)
 
 
 def test_late_write_failure_removes_staging_and_publishes_nothing(

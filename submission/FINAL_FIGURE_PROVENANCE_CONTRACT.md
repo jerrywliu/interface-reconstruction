@@ -60,9 +60,10 @@ startup and module-path variables, constructs a minimal environment, and
 executes a fresh interpreter with `-I`. The Python entry point refuses a
 non-isolated process, user/site customization, or any preloaded `submission`
 or `experiments` module. Direct `python .../final_figure_orchestrator.py`
-execution is deliberately unsupported. Production orchestration exposes no
-injectable command or race hooks; those exist only on a private test entry
-point that the CLI cannot select.
+execution is deliberately unsupported. The operational module contains one
+orchestration entry point and no injectable command, acceptance, publication,
+or race hooks. Tests exercise checksum, freeze, path, reservation, and atomic
+rename helpers without an alternate full-orchestration publication path.
 
 Every Git command receives a scrubbed Git environment. Replacement objects are
 disabled, caller `GIT_*` configuration is removed, and object facts are read

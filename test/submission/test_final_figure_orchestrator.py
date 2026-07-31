@@ -28,17 +28,18 @@ from submission.final_figure_orchestrator import (
     RESOLUTION_VALUES,
     RESOLUTION_WIGGLES,
     FinalFigureOrchestrationError,
-    _OrchestrationTestHooks,
     _capture_release_audit_pin,
     _generator_environment,
     _numbers,
+    _rehash_before_publish,
+    _rename_directory_noreplace,
     _remove_tree,
     _reserve_publication,
     _snapshot_release_inputs,
     _snapshot_complete_release,
     _seal_execution_config,
+    _verify_frozen_publication_tree,
     _write_command_record,
-    finalize_publication,
     resolution_input_paths,
     stage_all_method_candidates,
     validate_c0_metrics,
@@ -64,6 +65,7 @@ from submission.accept_figure_candidates import (
 )
 from submission.trusted_figure_runtime import prepare_trusted_figure_runtime
 from util.config import ConfigAuthorityError, read_yaml
+from test.submission.final_figure_test_support import freeze_staging_for_test
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -228,23 +230,95 @@ def test_materialized_source_reattestation_rejects_late_pyc(tmp_path):
     _remove_tree(source)
 
 
-def test_production_orchestration_api_exposes_no_cli_injection_hooks():
+def test_operational_module_has_one_noninjectable_orchestration_entry():
     parameters = set(inspect.signature(orchestrate_final_figures).parameters)
-    assert not parameters.intersection(
-        {
-            "command_runner",
-            "after_acceptance_hook",
-            "after_publish_freeze_hook",
-            "source_materialized_hook",
-            "release_after_open_hook",
-            "_test_hooks",
-        }
+    forbidden = {
+        "command_runner",
+        "acceptance_runner",
+        "acceptance_kwargs",
+        "after_acceptance_hook",
+        "after_publish_freeze_hook",
+        "source_materialized_hook",
+        "release_after_open_hook",
+        "_test_hooks",
+    }
+    assert not parameters.intersection(forbidden)
+    assert not hasattr(orchestrator_module, "_OrchestrationTestHooks")
+    assert not hasattr(orchestrator_module, "_orchestrate_final_figures")
+    assert not hasattr(orchestrator_module, "finalize_publication")
+    assert not hasattr(orchestrator_module, "_build_frozen_publication_tree")
+    orchestration_entries = [
+        name
+        for name, value in vars(orchestrator_module).items()
+        if inspect.isfunction(value)
+        and value.__module__ == orchestrator_module.__name__
+        and "orchestrat" in name
+    ]
+    assert orchestration_entries == ["orchestrate_final_figures"]
+
+
+def test_isolated_import_exposes_no_hook_bearing_publication_path(tmp_path):
+    probe = r"""
+import inspect
+import json
+import sys
+
+sys.path.insert(0, sys.argv[1])
+import submission.final_figure_orchestrator as module
+
+forbidden_symbols = {
+    "_OrchestrationTestHooks",
+    "_orchestrate_final_figures",
+    "finalize_publication",
+    "_build_frozen_publication_tree",
+}
+forbidden_parameters = {
+    "command_runner",
+    "acceptance_runner",
+    "acceptance_kwargs",
+    "after_acceptance_hook",
+    "after_publish_freeze_hook",
+    "source_materialized_hook",
+    "release_after_open_hook",
+    "_test_hooks",
+}
+present_symbols = sorted(forbidden_symbols.intersection(vars(module)))
+hook_bearing = {}
+for name, value in vars(module).items():
+    if not inspect.isfunction(value) or value.__module__ != module.__name__:
+        continue
+    parameters = set(inspect.signature(value).parameters)
+    dangerous = sorted(parameters.intersection(forbidden_parameters))
+    if dangerous:
+        hook_bearing[name] = dangerous
+alternate_entries = sorted(
+    name
+    for name, value in vars(module).items()
+    if inspect.isfunction(value)
+    and value.__module__ == module.__name__
+    and "orchestrat" in name
+    and name != "orchestrate_final_figures"
+)
+print(json.dumps({
+    "present_symbols": present_symbols,
+    "hook_bearing": hook_bearing,
+    "alternate_entries": alternate_entries,
+}))
+if present_symbols or hook_bearing or alternate_entries:
+    raise SystemExit(9)
+"""
+    completed = subprocess.run(
+        [sys.executable, "-I", "-c", probe, str(REPO_ROOT)],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
     )
-    assert (
-        "_test_hooks"
-        in inspect.signature(orchestrator_module._orchestrate_final_figures).parameters
-    )
-    assert _OrchestrationTestHooks.__name__.startswith("_")
+    assert json.loads(completed.stdout) == {
+        "present_symbols": [],
+        "hook_bearing": {},
+        "alternate_entries": [],
+    }
 
 
 def test_trusted_launcher_ignores_pythonpath_and_user_sitecustomize(tmp_path):
@@ -1288,7 +1362,7 @@ def test_general_generator_clis_do_not_require_submission_provenance(module):
     assert "--release_root" not in completed.stdout
 
 
-def test_candidate_mutation_after_acceptance_cleans_up_and_publishes_nothing(tmp_path):
+def test_candidate_mutation_is_rejected_before_frozen_tree_build(tmp_path):
     staging = tmp_path / ".publication.staging-test"
     staging.mkdir()
     candidates = []
@@ -1306,52 +1380,32 @@ def test_candidate_mutation_after_acceptance_cleans_up_and_publishes_nothing(tmp
         )
     manifest = staging / "provenance" / "final_figure_orchestration.json"
     atomic_write_json(manifest, {"snapshot_artifacts": [], "candidates": candidates})
-    output = tmp_path / "publication"
-    reservation = _reserve_publication(output)
-
-    def mutate(root):
-        first = load_candidate_allowlist()[0]
-        (root / "candidates" / first.root / first.pdf).write_bytes(b"mutated")
+    manifest_digest = file_sha256(manifest)
+    first = load_candidate_allowlist()[0]
+    (staging / "candidates" / first.root / first.pdf).write_bytes(b"mutated")
 
     with pytest.raises(FinalFigureOrchestrationError, match="mutated before publish"):
-        finalize_publication(
-            staging=staging,
-            output_root=output,
-            reservation=reservation,
-            manifest_path=manifest,
-            acceptance_runner=lambda **_kwargs: None,
-            acceptance_kwargs={},
-            candidate_specs=load_candidate_allowlist(),
-            after_acceptance_hook=mutate,
+        _rehash_before_publish(
+            staging,
+            manifest,
+            manifest_digest,
+            load_candidate_allowlist(),
         )
-    assert not output.exists()
-    assert not staging.exists()
+    assert not list(tmp_path.glob(".publication.publish-*"))
 
 
 def test_destination_race_never_replaces_competing_output(tmp_path):
-    staging = tmp_path / ".publication.staging-test"
-    staging.mkdir()
-    manifest = staging / "provenance" / "final_figure_orchestration.json"
-    atomic_write_json(manifest, {"snapshot_artifacts": [], "candidates": []})
+    frozen = tmp_path / ".publication.publish-test"
+    frozen.mkdir()
+    (frozen / "candidate.txt").write_text("accepted\n", encoding="utf-8")
     output = tmp_path / "publication"
-    reservation = _reserve_publication(output)
-
-    def create_competing_destination(_root):
-        output.mkdir()
-        (output / "sentinel.txt").write_text("winner\n", encoding="utf-8")
+    output.mkdir()
+    (output / "sentinel.txt").write_text("winner\n", encoding="utf-8")
 
     with pytest.raises(FinalFigureOrchestrationError, match="destination appeared"):
-        finalize_publication(
-            staging=staging,
-            output_root=output,
-            reservation=reservation,
-            manifest_path=manifest,
-            acceptance_runner=lambda **_kwargs: None,
-            acceptance_kwargs={},
-            after_acceptance_hook=create_competing_destination,
-        )
+        _rename_directory_noreplace(frozen, output)
     assert (output / "sentinel.txt").read_text(encoding="utf-8") == "winner\n"
-    assert not staging.exists()
+    assert (frozen / "candidate.txt").read_text(encoding="utf-8") == "accepted\n"
 
 
 def test_mutation_of_frozen_publish_tree_fails_final_locked_rehash(tmp_path):
@@ -1360,30 +1414,23 @@ def test_mutation_of_frozen_publish_tree_fails_final_locked_rehash(tmp_path):
     manifest = staging / "provenance" / "final_figure_orchestration.json"
     atomic_write_json(manifest, {"snapshot_artifacts": [], "candidates": []})
     output = tmp_path / "publication"
-    reservation = _reserve_publication(output)
-
-    def mutate_frozen_tree(root):
-        target = root / "provenance" / "final_figure_orchestration.json"
-        target.chmod(0o600)
-        target.write_text("late mutation\n", encoding="utf-8")
-        target.chmod(0o400)
+    frozen = tmp_path / "frozen-publication"
+    ledger_sha256 = freeze_staging_for_test(
+        staging=staging,
+        destination=frozen,
+        manifest_path=manifest,
+    )
+    target = frozen / "provenance" / "final_figure_orchestration.json"
+    target.chmod(0o600)
+    target.write_text("late mutation\n", encoding="utf-8")
+    target.chmod(0o400)
 
     with pytest.raises(
         FinalFigureOrchestrationError, match="Frozen publication artifact mutated"
     ):
-        finalize_publication(
-            staging=staging,
-            output_root=output,
-            reservation=reservation,
-            manifest_path=manifest,
-            acceptance_runner=lambda **_kwargs: None,
-            acceptance_kwargs={},
-            after_publish_freeze_hook=mutate_frozen_tree,
-        )
+        _verify_frozen_publication_tree(frozen, ledger_sha256=ledger_sha256)
     assert not output.exists()
-    assert not staging.exists()
-    assert not list(tmp_path.glob(".publication.publish-*"))
-    assert not list(tmp_path.glob(".publication.final-figure-reservation"))
+    _remove_tree(frozen)
 
 
 def test_publication_reservation_rejects_dangling_destination_symlink(tmp_path):
@@ -1394,26 +1441,25 @@ def test_publication_reservation_rejects_dangling_destination_symlink(tmp_path):
     assert output.is_symlink()
 
 
-def test_successful_publication_uses_atomic_no_replace(tmp_path):
+def test_frozen_publication_builder_seals_complete_tree(tmp_path):
     staging = tmp_path / ".publication.staging-test"
     staging.mkdir()
     manifest = staging / "provenance" / "final_figure_orchestration.json"
     atomic_write_json(manifest, {"snapshot_artifacts": [], "candidates": []})
     output = tmp_path / "publication"
-    reservation = _reserve_publication(output)
-    finalize_publication(
+    frozen = tmp_path / "frozen-publication"
+    ledger_sha256 = freeze_staging_for_test(
         staging=staging,
-        output_root=output,
-        reservation=reservation,
+        destination=frozen,
         manifest_path=manifest,
-        acceptance_runner=lambda **_kwargs: None,
-        acceptance_kwargs={},
     )
-    assert output.is_dir()
-    assert (output / "provenance" / "published_tree_sha256.json").is_file()
-    assert stat.S_IMODE(output.stat().st_mode) == 0o500
+    _verify_frozen_publication_tree(frozen, ledger_sha256=ledger_sha256)
+    assert (frozen / "provenance" / "published_tree_sha256.json").is_file()
+    assert stat.S_IMODE(frozen.stat().st_mode) == 0o500
     assert all(
         stat.S_IMODE(path.stat().st_mode) == (0o500 if path.is_dir() else 0o400)
-        for path in output.rglob("*")
+        for path in frozen.rglob("*")
     )
-    assert not staging.exists()
+    assert staging.exists()
+    assert not output.exists()
+    _remove_tree(frozen)

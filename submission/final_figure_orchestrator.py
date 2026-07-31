@@ -1969,81 +1969,7 @@ def validate_published_logical_paths(root: Path) -> tuple[str, ...]:
     return tuple(checked)
 
 
-def finalize_publication(
-    *,
-    staging: Path,
-    output_root: Path,
-    reservation: PublicationReservation,
-    manifest_path: Path,
-    acceptance_runner: Callable[..., object],
-    acceptance_kwargs: Mapping[str, object],
-    candidate_specs: Sequence[object] = (),
-    after_acceptance_hook: Optional[Callable[[Path], None]] = None,
-    after_publish_freeze_hook: Optional[Callable[[Path], None]] = None,
-) -> None:
-    """Accept, clone, seal, rehash, and atomically publish one private tree."""
-
-    manifest_digest = file_sha256(manifest_path)
-    publish_tree = None
-    try:
-        acceptance_runner(**dict(acceptance_kwargs))
-        accepted_records = [
-            snapshot_record(path, staging, "accepted_artifact")
-            for path in sorted(staging.rglob("*"))
-            if path.is_file()
-        ]
-        if after_acceptance_hook is not None:
-            after_acceptance_hook(staging)
-        _rehash_before_publish(staging, manifest_path, manifest_digest, candidate_specs)
-        publish_tree = Path(
-            tempfile.mkdtemp(
-                prefix=f".{output_root.name}.publish-", dir=output_root.parent
-            )
-        )
-        publish_tree.chmod(0o700)
-        _verify_tree_records(staging, accepted_records)
-        _copy_publication_tree(staging, publish_tree, accepted_records)
-        tree_records = _published_tree_records(publish_tree)
-        atomic_write_json(
-            publish_tree / PUBLISHED_TREE_LEDGER,
-            {"schema_version": 1, "files": tree_records},
-        )
-        ledger_sha256 = file_sha256(publish_tree / PUBLISHED_TREE_LEDGER)
-        validate_published_logical_paths(publish_tree)
-        _remove_tree(staging)
-        make_tree_read_only(publish_tree)
-        if after_publish_freeze_hook is not None:
-            after_publish_freeze_hook(publish_tree)
-        _verify_reservation(reservation)
-        _require(
-            not os.path.lexists(output_root),
-            f"Publication destination appeared before publish: {output_root}",
-        )
-        _verify_frozen_publication_tree(publish_tree, ledger_sha256=ledger_sha256)
-        _rename_directory_noreplace(publish_tree, output_root)
-        publish_tree = None
-    except Exception:
-        if staging.exists():
-            _remove_tree(staging)
-        if publish_tree is not None and publish_tree.exists():
-            _remove_tree(publish_tree)
-        raise
-    finally:
-        _release_reservation(reservation)
-
-
-@dataclass(frozen=True)
-class _OrchestrationTestHooks:
-    command_runner: Callable[[Sequence[str], Path, Mapping[str, str], Path], None] = (
-        run_command
-    )
-    after_acceptance: Optional[Callable[[Path], None]] = None
-    after_publish_freeze: Optional[Callable[[Path], None]] = None
-    source_materialized: Optional[Callable[[Path, Path], None]] = None
-    release_after_open: Optional[Callable[[Path], None]] = None
-
-
-def _orchestrate_final_figures(
+def orchestrate_final_figures(
     *,
     repository: Path,
     release_root: Path,
@@ -2052,9 +1978,9 @@ def _orchestrate_final_figures(
     approval_record_sha256: str,
     output_root: Path,
     allowlist_path: Path = DEFAULT_ALLOWLIST,
-    _test_hooks: Optional[_OrchestrationTestHooks] = None,
 ) -> Path:
-    hooks = _test_hooks or _OrchestrationTestHooks()
+    """Run the sole attested generation, acceptance, and publication path."""
+
     repository = Path(repository).resolve()
     release_root = Path(release_root).expanduser().absolute()
     supplied_output = Path(output_root).expanduser().absolute()
@@ -2080,6 +2006,7 @@ def _orchestrate_final_figures(
     reservation = _reserve_publication(output_root)
     staging = None
     execution = None
+    publish_tree = None
     try:
         staging = Path(
             tempfile.mkdtemp(
@@ -2104,8 +2031,6 @@ def _orchestrate_final_figures(
             len(specs) == EXPECTED_COUNTS["candidate_pdfs"],
             "Private allowlist does not encode the exact candidate contract",
         )
-        if hooks.source_materialized is not None:
-            hooks.source_materialized(repository, immutable_source)
         verify_materialized_source(
             repository, approved_generator_commit, immutable_source, attestation
         )
@@ -2114,7 +2039,7 @@ def _orchestrate_final_figures(
         )
         _verify_execution_config(config_authority)
 
-        def approved_command_runner(
+        def run_approved_command(
             command: Sequence[str],
             cwd: Path,
             command_environment: Mapping[str, str],
@@ -2125,7 +2050,7 @@ def _orchestrate_final_figures(
             )
             _verify_execution_config(config_authority)
             try:
-                hooks.command_runner(command, cwd, command_environment, log_path)
+                run_command(command, cwd, command_environment, log_path)
             finally:
                 _verify_execution_config(config_authority)
                 verify_materialized_source(
@@ -2144,7 +2069,6 @@ def _orchestrate_final_figures(
             release_root,
             execution / "audited_release",
             live_pin=live_release_pin,
-            after_open_hook=hooks.release_after_open,
         )
         release_audit_pin = validate_final_release_contract(complete_release.root)
         _require(
@@ -2242,7 +2166,7 @@ def _orchestrate_final_figures(
             "paired",
         ]
         _require(not main_out.exists(), "Main-text generator root already exists")
-        approved_command_runner(main_cmd, execution, env, logs / "maintext.log")
+        run_approved_command(main_cmd, execution, env, logs / "maintext.log")
         contracts["maintext"] = validate_maintext_manifest(
             main_out / "maintext_manifest.json"
         )
@@ -2327,7 +2251,7 @@ def _orchestrate_final_figures(
             "--no-notify",
         ]
         _require(not all_out.exists(), "All-method generator root already exists")
-        approved_command_runner(all_cmd, execution, env, logs / "all_methods.log")
+        run_approved_command(all_cmd, execution, env, logs / "all_methods.log")
         staged_all = stage_all_method_candidates(
             all_out, figure_root / "all_method_summary_plots"
         )
@@ -2404,7 +2328,7 @@ def _orchestrate_final_figures(
                 not out.exists(),
                 f"Resolution generator root already exists: {experiment}",
             )
-            approved_command_runner(
+            run_approved_command(
                 cmd, execution, env, logs / f"resolution_{experiment}.log"
             )
             run_manifests = validate_resolution_manifest(
@@ -2528,7 +2452,7 @@ def _orchestrate_final_figures(
                 not out.exists(),
                 f"Guarded-C0 generator root already exists: {experiment}",
             )
-            approved_command_runner(
+            run_approved_command(
                 cmd, execution, env, logs / f"guarded_c0_{experiment}.log"
             )
             c0_paths[experiment] = out / "manifest.json"
@@ -2677,9 +2601,7 @@ def _orchestrate_final_figures(
         _require(
             not deterministic.exists(), "Deterministic generator root already exists"
         )
-        approved_command_runner(
-            plic_cmd, execution, env, logs / "deterministic_plic.log"
-        )
+        run_approved_command(plic_cmd, execution, env, logs / "deterministic_plic.log")
         contracts["deterministic_plic"] = validate_plic_metadata(
             plic_base.with_name(f"{plic_base.name}_data.json"),
             approved_generator_commit,
@@ -2739,7 +2661,7 @@ def _orchestrate_final_figures(
             "staged_reconstruction_zalesak",
         ]
         _require(not staged_out.exists(), "Staged generator root already exists")
-        approved_command_runner(
+        run_approved_command(
             staged_cmd, execution, env, logs / "deterministic_staged.log"
         )
         staged_data = staged_out / "staged_reconstruction_zalesak_data.json"
@@ -2881,28 +2803,51 @@ def _orchestrate_final_figures(
             allowlist_path=private_allowlist,
             candidate_records=orchestration["candidates"],
         )
-        finalize_publication(
-            staging=staging,
-            output_root=output_root,
-            reservation=reservation,
-            manifest_path=manifest_path,
-            acceptance_runner=_accept_orchestrated_candidates,
-            acceptance_kwargs={
-                "orchestration_state": acceptance_state,
-                "output_dir": staging / "review",
-                "pdf_inspector": partial(inspect_pdf, runtime=runtime),
-                "page_inspector": partial(pdf_page_info, runtime=runtime),
-                "preview_renderer": partial(render_pdf_preview, runtime=runtime),
-                "review_builder": partial(build_vector_review_pdf, runtime=runtime),
-            },
-            candidate_specs=specs,
-            after_acceptance_hook=hooks.after_acceptance,
-            after_publish_freeze_hook=hooks.after_publish_freeze,
+        _accept_orchestrated_candidates(
+            orchestration_state=acceptance_state,
+            output_dir=staging / "review",
+            pdf_inspector=partial(inspect_pdf, runtime=runtime),
+            page_inspector=partial(pdf_page_info, runtime=runtime),
+            preview_renderer=partial(render_pdf_preview, runtime=runtime),
+            review_builder=partial(build_vector_review_pdf, runtime=runtime),
         )
+        manifest_digest = file_sha256(manifest_path)
+        accepted_records = [
+            snapshot_record(path, staging, "accepted_artifact")
+            for path in sorted(staging.rglob("*"))
+            if path.is_file()
+        ]
+        _rehash_before_publish(staging, manifest_path, manifest_digest, specs)
+        publish_tree = Path(
+            tempfile.mkdtemp(
+                prefix=f".{output_root.name}.publish-", dir=output_root.parent
+            )
+        )
+        publish_tree.chmod(0o700)
+        _verify_tree_records(staging, accepted_records)
+        _copy_publication_tree(staging, publish_tree, accepted_records)
+        tree_records = _published_tree_records(publish_tree)
+        atomic_write_json(
+            publish_tree / PUBLISHED_TREE_LEDGER,
+            {"schema_version": 1, "files": tree_records},
+        )
+        ledger_sha256 = file_sha256(publish_tree / PUBLISHED_TREE_LEDGER)
+        validate_published_logical_paths(publish_tree)
+        _remove_tree(staging)
+        make_tree_read_only(publish_tree)
+        _verify_reservation(reservation)
+        _require(
+            not os.path.lexists(output_root),
+            f"Publication destination appeared before publish: {output_root}",
+        )
+        _verify_frozen_publication_tree(publish_tree, ledger_sha256=ledger_sha256)
+        _rename_directory_noreplace(publish_tree, output_root)
+        publish_tree = None
     except Exception as exc:
         if staging is not None and staging.exists():
             _remove_tree(staging)
-        _release_reservation(reservation)
+        if publish_tree is not None and publish_tree.exists():
+            _remove_tree(publish_tree)
         if isinstance(
             exc,
             (
@@ -2927,30 +2872,8 @@ def _orchestrate_final_figures(
             except OSError:
                 pass
             _remove_tree(execution)
+        _release_reservation(reservation)
     return output_root
-
-
-def orchestrate_final_figures(
-    *,
-    repository: Path,
-    release_root: Path,
-    approved_generator_commit: str,
-    approval_record: Path,
-    approval_record_sha256: str,
-    output_root: Path,
-    allowlist_path: Path = DEFAULT_ALLOWLIST,
-) -> Path:
-    """Run production orchestration without injectable command or race hooks."""
-
-    return _orchestrate_final_figures(
-        repository=repository,
-        release_root=release_root,
-        approved_generator_commit=approved_generator_commit,
-        approval_record=approval_record,
-        approval_record_sha256=approval_record_sha256,
-        output_root=output_root,
-        allowlist_path=allowlist_path,
-    )
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
