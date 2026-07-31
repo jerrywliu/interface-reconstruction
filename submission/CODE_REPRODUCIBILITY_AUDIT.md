@@ -145,17 +145,20 @@ The submission audit should compare the three instead of trusting any one file.
 ### Command provenance schema
 
 The current final release predates tokenized command capture and stores each
-controller and child invocation in a shell-style `command` string. The audit parses
-those strings with POSIX shell quoting and compares the executable as an exact,
-lexical repository-relative path under the historical `repository.root`; that root
-is provenance metadata and need not equal the verifier's current checkout path.
+controller and child invocation using the lossy `" ".join(sys.argv)` representation.
+The audit therefore permits command-string parsing only for the byte-verified
+`505aefa` source release, schema version 1, a historical repository root without
+whitespace, and a canonical serialization in which no token contains whitespace.
+This exception cannot safely support relocation to a path containing spaces. The
+executable is still compared as an exact lexical repository-relative path; the
+historical root is provenance metadata and need not equal the verifier's checkout.
 
-Future manifests should add an `argv` JSON array whose elements are the exact
-argument tokens passed to the process, preferably with a repository-relative first
-token such as `experiments/static/lines.py`. `command` may remain as an optional
-display field. When both fields are present, the audit requires `argv` to equal the
-POSIX-tokenized `command` exactly, so the human-readable rendering cannot disagree
-with the machine-readable execution record.
+The controller and child-manifest producers now write an authoritative `argv` JSON
+array for future runs and render the optional `command` display field with
+`shlex.join`. When both fields are present, the audit requires `argv` to equal the
+POSIX-tokenized `command` exactly. Any future source release, noncanonical command,
+or path containing whitespace must provide `argv`; it cannot use the legacy
+exception.
 
 ### Source snapshot trust
 
@@ -163,10 +166,13 @@ The audit disables Git replacement objects for every Git operation and verifies 
 exact commit and blob object hashes itself. It enumerates the commit with
 `git ls-tree -rz` and reads each allowed regular-file blob with `git cat-file`, so
 archive attributes such as `export-ignore` cannot remove tracked source from the
-oracle. Before extracting any archived source payload, it checks the complete tar
-metadata pass against tree-derived bounds for file count, each file size, total
-uncompressed bytes, path, and executable mode. The archived bytes are then compared
-with the corresponding verified Git blobs.
+oracle. A seek-aware wrapper limits gzip output to the canonical Git-tree payload
+plus fixed per-member and global metadata allowances before `tarfile` can process
+PAX or GNU metadata. Before extracting any archived source payload, the audit also
+checks the complete tar metadata pass against tree-derived bounds for file count,
+each file size, total uncompressed bytes, path, and the complete executable mode;
+set-id and sticky bits are rejected. The archived bytes are then compared with the
+corresponding verified Git blobs.
 
 ## Result And Raw-Bundle Findings
 

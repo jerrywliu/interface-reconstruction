@@ -1,4 +1,9 @@
+import json
+import shlex
+import sys
+
 from main.structs.facets.linear_facet import LinearFacet
+from util import reconstruction_diagnostics
 from util.reconstruction_diagnostics import _component_rows
 
 
@@ -52,3 +57,18 @@ def test_component_rows_only_include_active_merge_component():
     assert rows[0]["construction_path"] == "plic_fallback"
     assert rows[0]["fallback_policy"] == "LVIRA"
     assert components == [(1, [(0, 0)])]
+
+
+def test_run_manifest_emits_authoritative_argv(tmp_path, monkeypatch):
+    argv = ["/source root/lines.py", "--save_name", "run with spaces"]
+    monkeypatch.setattr(sys, "argv", argv)
+    monkeypatch.setattr(reconstruction_diagnostics, "_source_commit", lambda: "abc")
+    monkeypatch.setattr(reconstruction_diagnostics, "_source_branch", lambda: "main")
+
+    reconstruction_diagnostics.write_run_manifest(
+        {"base": tmp_path}, "lines", {"facet_algo": "linear"}
+    )
+
+    manifest = json.loads((tmp_path / "run_manifest.json").read_text())
+    assert manifest["argv"] == argv
+    assert shlex.split(manifest["command"]) == argv

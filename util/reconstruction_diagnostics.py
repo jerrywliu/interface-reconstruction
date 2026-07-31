@@ -1,5 +1,6 @@
 import csv
 import json
+import shlex
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -127,7 +128,8 @@ def write_run_manifest(output_dirs, experiment, parameters):
         "source_commit": _source_commit(),
         "source_branch": _source_branch(),
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-        "command": " ".join(sys.argv),
+        "command": shlex.join(sys.argv),
+        "argv": list(sys.argv),
         "parameters": parameters,
         "artifacts": {
             "mesh": "vtk/mesh.vtk",

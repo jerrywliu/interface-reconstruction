@@ -1,10 +1,14 @@
 import inspect
+import json
+import shlex
+import sys
 from types import SimpleNamespace
 
 from experiments.static.run_perturbed_sweeps import (
     DISPLAY_LABELS,
     EXPERIMENTS,
     _build_run_spec,
+    _write_sweep_manifest,
 )
 from main.structs.meshes.merge_mesh import MergeMesh
 
@@ -72,3 +76,41 @@ def test_final_namespace_and_approved_circular_labels():
     assert spec["save_name"].startswith("submission_20260730_perturb_sweep_")
     assert DISPLAY_LABELS["safe_circle"] == "Ours (circular, independent cells)"
     assert DISPLAY_LABELS["circular"] == "Ours (circular, topology + merging)"
+
+
+def test_sweep_manifest_emits_authoritative_argv(tmp_path, monkeypatch):
+    argv = ["/source root/run_perturbed_sweeps.py", "--only", "lines,circles"]
+    monkeypatch.setattr(sys, "argv", argv)
+    args = SimpleNamespace(
+        only="lines,circles",
+        algos=None,
+        resolutions=None,
+        wiggles="0.0",
+        seeds="0",
+        plic_fallback="LVIRA",
+        rescue_profile="exact_linear_support_only",
+        corner_behavior_profile="pre_f8_corner",
+        corner_behavior_profiles=None,
+        run_namespace="future",
+        raw_bundle_dir="raw runs",
+        max_workers=1,
+    )
+    manifest_path = tmp_path / "sweep_manifest.json"
+
+    _write_sweep_manifest(
+        manifest_path,
+        "running",
+        args,
+        1,
+        25,
+        0,
+        [],
+        tmp_path / "metrics.csv",
+        tmp_path / "diagnostics",
+        tmp_path / "summary",
+        tmp_path / "logs",
+    )
+
+    manifest = json.loads(manifest_path.read_text())
+    assert manifest["argv"] == argv
+    assert shlex.split(manifest["command"]) == argv

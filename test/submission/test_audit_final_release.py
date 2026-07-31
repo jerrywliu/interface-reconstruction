@@ -1,4 +1,5 @@
 import csv
+import gzip
 import hashlib
 import io
 import json
@@ -61,6 +62,24 @@ def _snapshot_entries(path: Path, entries: list[tuple[str, bytes, int]]) -> None
             member.size = len(data)
             member.mode = mode
             archive.addfile(member, io.BytesIO(data))
+
+
+def _metadata_bomb_archive(metadata_kind: str, payload_size: int) -> bytes:
+    member = tarfile.TarInfo(
+        "././@PaxHeader" if metadata_kind == "pax" else "././@LongLink"
+    )
+    member.type = (
+        tarfile.XHDTYPE if metadata_kind == "pax" else tarfile.GNUTYPE_LONGNAME
+    )
+    member.mode = 0o644
+    member.size = payload_size
+    archive_format = (
+        tarfile.PAX_FORMAT if metadata_kind == "pax" else tarfile.GNU_FORMAT
+    )
+    header = member.tobuf(format=archive_format)
+    payload = b"\0" * payload_size
+    padding = b"\0" * ((-payload_size) % tarfile.BLOCKSIZE)
+    return gzip.compress(header + payload + padding + b"\0" * tarfile.RECORDSIZE)
 
 
 def _run_context() -> dict[str, object]:
@@ -182,6 +201,7 @@ def _trusted_source_repository(tmp_path, monkeypatch):
     )
     COMMIT = _git(repository, "rev-parse", "HEAD").decode().strip()
     monkeypatch.setattr(audit_module, "FINAL_SOURCE_COMMIT", COMMIT)
+    monkeypatch.setattr(audit_module, "LEGACY_COMMAND_SOURCE_COMMIT", COMMIT)
 
 
 def _make_release(root: Path) -> Path:
@@ -240,6 +260,7 @@ def _make_release(root: Path) -> Path:
     _write_json(
         root / "sweep_manifest.json",
         {
+            "schema_version": 1,
             "status": "completed",
             "command": (
                 f"{repository / 'experiments/static/run_perturbed_sweeps.py'} "
@@ -570,6 +591,18 @@ def _rewrite_snapshot_entries(
     _write_json(state_path, state)
 
 
+def _rewrite_snapshot_bytes(
+    root: Path, archive_bytes: bytes, recorded_count: int
+) -> None:
+    snapshot_path = root / "diagnostics" / "source_snapshot.tar.gz"
+    snapshot_path.write_bytes(archive_bytes)
+    state_path = root / "diagnostics" / "source_state.json"
+    state = json.loads(state_path.read_text())
+    state["snapshot_sha256"] = hashlib.sha256(archive_bytes).hexdigest()
+    state["snapshot_file_count"] = recorded_count
+    _write_json(state_path, state)
+
+
 def _replace_command_executable(command: str, executable: str) -> str:
     tokens = shlex.split(command)
     tokens[0] = executable
@@ -603,6 +636,24 @@ def _rewrite_historical_command_root(root: Path, historical_root: str) -> None:
     raw["command"] = _replace_command_executable(
         raw["command"], f"{historical_root}/experiments/static/lines.py"
     )
+    _write_json(raw_path, raw)
+
+
+def _add_argv_to_all_manifests(root: Path) -> None:
+    controller_path = root / "sweep_manifest.json"
+    controller = json.loads(controller_path.read_text())
+    controller["argv"] = shlex.split(controller["command"])
+    _write_json(controller_path, controller)
+
+    consolidated_path = root / "diagnostics" / "run_manifests.jsonl"
+    consolidated = json.loads(consolidated_path.read_text())
+    nested = consolidated["manifest"]
+    nested["argv"] = shlex.split(nested["command"])
+    _write_jsonl(consolidated_path, [consolidated])
+
+    raw_path = root / "raw_runs" / SAVE_NAME / "run_manifest.json"
+    raw = json.loads(raw_path.read_text())
+    raw["argv"] = shlex.split(raw["command"])
     _write_json(raw_path, raw)
 
 
@@ -730,11 +781,25 @@ def test_command_defaults_remain_hard_gated_to_final_scope(tmp_path):
     assert "exactly 24250 required" in _messages(report)
 
 
-def test_string_commands_survive_release_relocation_and_historical_spaces(tmp_path):
+def test_legacy_string_commands_reject_historical_paths_with_spaces(tmp_path):
     root = _make_release(tmp_path / "release")
     _rewrite_historical_command_root(
         root, "/archived experiment roots/Interface Reconstruction 2026"
     )
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    messages = _messages(report)
+    assert not report.ok
+    assert "argv is required; legacy command-string parsing is restricted" in messages
+
+
+def test_argv_commands_support_relocation_and_historical_spaces(tmp_path):
+    root = _make_release(tmp_path / "release")
+    _rewrite_historical_command_root(
+        root, "/archived experiment roots/Interface Reconstruction 2026"
+    )
+    _add_argv_to_all_manifests(root)
 
     report = audit_final_release(root, required_runs=1, required_cases=2)
 
@@ -793,6 +858,22 @@ def test_future_repository_relative_argv_schema_is_supported(tmp_path):
     report = audit_final_release(root, required_runs=1, required_cases=2)
 
     assert report.ok, _messages(report)
+
+
+def test_future_source_release_requires_argv(tmp_path, monkeypatch):
+    root = _make_release(tmp_path / "release")
+    (tmp_path / "future-source-marker.txt").write_text("future\n", encoding="utf-8")
+    _git(tmp_path, "add", "future-source-marker.txt")
+    _git(tmp_path, "commit", "-q", "-m", "future source release")
+    changed_commit = _git(tmp_path, "rev-parse", "HEAD").decode().strip()
+    monkeypatch.setattr(audit_module, "FINAL_SOURCE_COMMIT", changed_commit)
+    _retarget_release(root, changed_commit)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    messages = _messages(report)
+    assert not report.ok
+    assert "argv is required; legacy command-string parsing is restricted" in messages
 
 
 def test_conflicting_argv_and_command_are_rejected(tmp_path):
@@ -1101,11 +1182,12 @@ def test_git_info_export_ignore_cannot_hide_tracked_source_file(tmp_path):
     )
 
 
-def test_source_snapshot_mode_must_match_git_tree(tmp_path):
+@pytest.mark.parametrize("bad_mode", [0o755, 0o4644])
+def test_source_snapshot_complete_mode_must_match_git_tree(tmp_path, bad_mode):
     root = _make_release(tmp_path / "release")
     files = _snapshot_files(root / "diagnostics" / "source_snapshot.tar.gz")
     entries = [
-        (relative, data, 0o755 if relative == "requirements.txt" else 0o644)
+        (relative, data, bad_mode if relative == "requirements.txt" else 0o644)
         for relative, data in sorted(files.items())
     ]
     _rewrite_snapshot_entries(root, entries)
@@ -1115,9 +1197,30 @@ def test_source_snapshot_mode_must_match_git_tree(tmp_path):
     messages = _messages(report)
     assert not report.ok
     assert (
-        "source snapshot mode differs from target_commit for requirements.txt"
+        "source snapshot complete mode differs from target_commit for requirements.txt"
         in messages
     )
+
+
+@pytest.mark.parametrize("metadata_kind", ["pax", "gnu"])
+def test_source_snapshot_metadata_bomb_hits_decompressed_budget(
+    tmp_path, metadata_kind
+):
+    root = _make_release(tmp_path / "release")
+    files = _snapshot_files(root / "diagnostics" / "source_snapshot.tar.gz")
+    expected = {
+        relative: audit_module.GitBlob("100644", "0" * 40, data)
+        for relative, data in files.items()
+    }
+    budget = audit_module._source_tar_decompressed_budget(expected)
+    archive_bytes = _metadata_bomb_archive(metadata_kind, budget + 1)
+    _rewrite_snapshot_bytes(root, archive_bytes, len(files))
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    messages = _messages(report)
+    assert not report.ok
+    assert "decompressed source snapshot exceeds Git-derived byte budget" in messages
 
 
 def test_source_snapshot_member_count_is_bounded_by_git_tree(tmp_path):
@@ -1376,7 +1479,9 @@ def test_explicit_raw_profile_requires_matching_raw_command_evidence(
     root = _make_release(tmp_path / "release")
     path = root / "raw_runs" / SAVE_NAME / "run_manifest.json"
     manifest = json.loads(path.read_text())
-    manifest["command"] = manifest["command"].replace(f"{option} {expected}", "")
+    manifest["command"] = " ".join(
+        shlex.split(manifest["command"].replace(f"{option} {expected}", ""))
+    )
     _write_json(path, manifest)
 
     report = audit_final_release(root, required_runs=1, required_cases=2)

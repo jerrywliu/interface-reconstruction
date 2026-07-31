@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import copy
 import csv
+import gzip
 import hashlib
 import json
 import math
@@ -28,11 +29,17 @@ FINAL_CASE_COUNT = 24_250
 DEFAULT_SHA256_MANIFEST = "SHA256SUMS"
 MAX_REPORTED_ERRORS = 250
 FINAL_SOURCE_COMMIT = "505aefa454328d4ba34ade5e7247050a0acfc793"
+LEGACY_COMMAND_SOURCE_COMMIT = "505aefa454328d4ba34ade5e7247050a0acfc793"
+LEGACY_COMMAND_SCHEMA_VERSION = 1
 MAX_NUMERIC_TEXT_LENGTH = 128
 MAX_INTEGER_TEXT_LENGTH = 32
 MAX_DECIMAL_DIGITS = 64
 MIN_DECIMAL_ADJUSTED = -100
 MAX_DECIMAL_ADJUSTED = 100
+TAR_BLOCK_SIZE = 512
+TAR_RECORD_SIZE = 10_240
+MAX_TAR_METADATA_BYTES_PER_MEMBER = 4_096
+MAX_TAR_GLOBAL_METADATA_BYTES = 65_536
 
 SNAPSHOT_EXCLUDED_ROOTS = frozenset(
     {".git", "logs", "output", "plots", "results", "tmp"}
@@ -182,6 +189,57 @@ class ReleaseAuditInputError(ValueError):
     """Raised when a manifest operation receives an unsafe input path."""
 
 
+class DecompressedSnapshotBudgetExceeded(OSError):
+    """Raised before tarfile can consume data beyond the verified source budget."""
+
+
+class _DecompressedByteBudgetStream:
+    def __init__(self, stream: gzip.GzipFile, byte_budget: int):
+        self._stream = stream
+        self._byte_budget = byte_budget
+
+    def _raise_budget_error(self) -> None:
+        raise DecompressedSnapshotBudgetExceeded(
+            "decompressed source snapshot exceeds Git-derived byte budget "
+            f"of {self._byte_budget} bytes"
+        )
+
+    def tell(self) -> int:
+        position = self._stream.tell()
+        if position > self._byte_budget:
+            self._raise_budget_error()
+        return position
+
+    def read(self, size: int = -1) -> bytes:
+        position = self.tell()
+        remaining = self._byte_budget - position
+        if size is None or size < 0 or size > remaining + 1:
+            size = remaining + 1
+        data = self._stream.read(size)
+        if len(data) > remaining:
+            self._raise_budget_error()
+        return data
+
+    def seek(self, offset: int, whence: int = os.SEEK_SET) -> int:
+        if whence == os.SEEK_SET:
+            target = offset
+        elif whence == os.SEEK_CUR:
+            target = self.tell() + offset
+        else:
+            raise DecompressedSnapshotBudgetExceeded(
+                "end-relative seeks are forbidden for bounded source snapshots"
+            )
+        if target < 0 or target > self._byte_budget:
+            self._raise_budget_error()
+        position = self._stream.seek(offset, whence)
+        if position != target:
+            raise OSError(
+                f"decompressed source snapshot seek returned {position}, "
+                f"expected {target}"
+            )
+        return position
+
+
 @dataclass(frozen=True, order=True)
 class RunKey:
     experiment: str
@@ -210,6 +268,7 @@ class RescueProfileInheritance:
     eligible_experiments: frozenset[str]
     driver_modules: dict[str, str] = field(default_factory=dict)
     historical_root: PurePosixPath | None = None
+    legacy_command_strings_allowed: bool = False
     source_verified: bool = False
     evidence: tuple[str, ...] = ()
     proof_failures: tuple[str, ...] = ()
@@ -524,10 +583,36 @@ def _command_tokens(command: object) -> list[str]:
         raise ReleaseAuditInputError(f"command cannot be parsed: {exc}") from exc
 
 
-def _manifest_command_tokens(manifest: Mapping[str, object]) -> list[str]:
+def _manifest_command_tokens(
+    manifest: Mapping[str, object],
+    *,
+    allow_legacy_string: bool,
+) -> list[str]:
     argv = manifest.get("argv")
     if argv is None:
-        return _command_tokens(manifest.get("command"))
+        if not allow_legacy_string:
+            raise ReleaseAuditInputError(
+                "argv is required; legacy command-string parsing is restricted to "
+                "the frozen 505aefa schema-1 release with no spaces"
+            )
+        schema_version = manifest.get("schema_version")
+        if (
+            type(schema_version) is not int
+            or schema_version != LEGACY_COMMAND_SCHEMA_VERSION
+        ):
+            raise ReleaseAuditInputError(
+                "legacy command-string schema is not the frozen schema version 1"
+            )
+        command = manifest.get("command")
+        tokens = _command_tokens(command)
+        if command != " ".join(tokens) or any(
+            not token or any(character.isspace() for character in token)
+            for token in tokens
+        ):
+            raise ReleaseAuditInputError(
+                "legacy command is not a canonical no-space serialization"
+            )
+        return tokens
     if (
         not isinstance(argv, list)
         or not argv
@@ -542,6 +627,19 @@ def _manifest_command_tokens(manifest: Mapping[str, object]) -> list[str]:
                 "argv does not exactly match the tokenized command string"
             )
     return list(argv)
+
+
+def _allow_legacy_command_strings(
+    target_commit: str,
+    source_verified: bool,
+    historical_root: PurePosixPath | None,
+) -> bool:
+    return bool(
+        source_verified
+        and target_commit == LEGACY_COMMAND_SOURCE_COMMIT
+        and historical_root is not None
+        and not any(character.isspace() for character in str(historical_root))
+    )
 
 
 def _historical_repository_root(raw_root: object) -> PurePosixPath:
@@ -591,6 +689,7 @@ def _build_rescue_profile_inheritance(
     config: Mapping[str, object],
     global_profiles_verified: bool,
     historical_root: PurePosixPath | None,
+    legacy_command_strings_allowed: bool,
 ) -> RescueProfileInheritance:
     production = config.get("production_method")
     expected = ""
@@ -639,6 +738,7 @@ def _build_rescue_profile_inheritance(
         eligible_experiments=configured_inheritance_experiments,
         driver_modules=driver_modules,
         historical_root=historical_root,
+        legacy_command_strings_allowed=legacy_command_strings_allowed,
         source_verified=global_profiles_verified,
         evidence=evidence,
         proof_failures=tuple(dict.fromkeys(failures)),
@@ -714,7 +814,10 @@ def _check_child_manifest_command(
         report.add_error(f"{label} parameters are unavailable for command binding")
         return
     try:
-        tokens = _manifest_command_tokens(manifest)
+        tokens = _manifest_command_tokens(
+            manifest,
+            allow_legacy_string=inheritance.legacy_command_strings_allowed,
+        )
     except ReleaseAuditInputError as exc:
         report.add_error(f"{label} command evidence is invalid: {exc}")
         return
@@ -1043,6 +1146,24 @@ def _git_tree_blobs(repository: Path, target_commit: str) -> dict[str, GitBlob]:
     return members
 
 
+def _tar_padded_size(size: int) -> int:
+    return ((size + TAR_BLOCK_SIZE - 1) // TAR_BLOCK_SIZE) * TAR_BLOCK_SIZE
+
+
+def _source_tar_decompressed_budget(expected: Mapping[str, GitBlob]) -> int:
+    canonical_members = sum(
+        TAR_BLOCK_SIZE + _tar_padded_size(len(blob.data)) for blob in expected.values()
+    )
+    per_member_metadata = len(expected) * (
+        TAR_BLOCK_SIZE + _tar_padded_size(MAX_TAR_METADATA_BYTES_PER_MEMBER)
+    )
+    return (
+        canonical_members
+        + per_member_metadata
+        + max(TAR_RECORD_SIZE, MAX_TAR_GLOBAL_METADATA_BYTES)
+    )
+
+
 def _read_bounded_source_snapshot(
     snapshot_path: Path,
     expected: Mapping[str, GitBlob],
@@ -1055,92 +1176,102 @@ def _read_bounded_source_snapshot(
     declared_total = 0
     member_count = 0
     metadata_errors = report.total_errors
+    decompressed_budget = _source_tar_decompressed_budget(expected)
     try:
-        with tarfile.open(snapshot_path, "r:gz") as archive:
-            validated_members: list[tarfile.TarInfo] = []
-            seen_paths: set[str] = set()
-            for member in archive:
-                member_count += 1
-                declared_total += max(member.size, 0)
-                if member_count > maximum_members:
-                    report.add_error(
-                        "source snapshot member count exceeds target_commit tree bound: "
-                        f"{member_count} > {maximum_members}"
-                    )
-                    break
-                if declared_total > maximum_total_bytes:
-                    report.add_error(
-                        "source snapshot total uncompressed bytes exceed target_commit "
-                        f"tree bound: {declared_total} > {maximum_total_bytes}"
-                    )
-                    break
-                pure = PurePosixPath(member.name)
-                if (
-                    not member.name
-                    or pure.is_absolute()
-                    or ".." in pure.parts
-                    or str(pure) != member.name
-                ):
-                    report.add_error(f"unsafe path in source snapshot: {member.name!r}")
-                    continue
-                if not member.isfile():
-                    report.add_error(
-                        f"non-regular entry in source snapshot: {member.name!r}"
-                    )
-                    continue
-                if member.name in seen_paths:
-                    report.add_error(
-                        f"duplicate file in source snapshot: {member.name}"
-                    )
-                    continue
-                seen_paths.add(member.name)
-                expected_blob = expected.get(member.name)
-                if expected_blob is None:
-                    report.add_error(
-                        "source snapshot contains an unbudgeted path absent from "
-                        f"target_commit: {member.name!r}"
-                    )
-                    continue
-                expected_size = len(expected_blob.data)
-                if member.size != expected_size:
-                    report.add_error(
-                        f"source snapshot member size exceeds or differs from "
-                        f"target_commit bound for {member.name}: "
-                        f"{member.size} != {expected_size}"
-                    )
-                    continue
-                expected_mode = int(expected_blob.mode[-3:], 8)
-                actual_mode = member.mode & 0o777
-                if actual_mode != expected_mode:
-                    report.add_error(
-                        f"source snapshot mode differs from target_commit for "
-                        f"{member.name}: {actual_mode:o} != {expected_mode:o}"
-                    )
-                    continue
-                validated_members.append(member)
+        with snapshot_path.open("rb") as compressed_stream:
+            with gzip.GzipFile(fileobj=compressed_stream, mode="rb") as gzip_stream:
+                bounded_stream = _DecompressedByteBudgetStream(
+                    gzip_stream, decompressed_budget
+                )
+                with tarfile.open(fileobj=bounded_stream, mode="r:") as archive:
+                    validated_members: list[tarfile.TarInfo] = []
+                    seen_paths: set[str] = set()
+                    for member in archive:
+                        member_count += 1
+                        declared_total += max(member.size, 0)
+                        if member_count > maximum_members:
+                            report.add_error(
+                                "source snapshot member count exceeds target_commit "
+                                f"tree bound: {member_count} > {maximum_members}"
+                            )
+                            break
+                        if declared_total > maximum_total_bytes:
+                            report.add_error(
+                                "source snapshot total uncompressed bytes exceed "
+                                f"target_commit tree bound: {declared_total} > "
+                                f"{maximum_total_bytes}"
+                            )
+                            break
+                        pure = PurePosixPath(member.name)
+                        if (
+                            not member.name
+                            or pure.is_absolute()
+                            or ".." in pure.parts
+                            or str(pure) != member.name
+                        ):
+                            report.add_error(
+                                f"unsafe path in source snapshot: {member.name!r}"
+                            )
+                            continue
+                        if not member.isfile():
+                            report.add_error(
+                                f"non-regular entry in source snapshot: {member.name!r}"
+                            )
+                            continue
+                        if member.name in seen_paths:
+                            report.add_error(
+                                f"duplicate file in source snapshot: {member.name}"
+                            )
+                            continue
+                        seen_paths.add(member.name)
+                        expected_blob = expected.get(member.name)
+                        if expected_blob is None:
+                            report.add_error(
+                                "source snapshot contains an unbudgeted path absent "
+                                f"from target_commit: {member.name!r}"
+                            )
+                            continue
+                        expected_size = len(expected_blob.data)
+                        if member.size != expected_size:
+                            report.add_error(
+                                "source snapshot member size exceeds or differs from "
+                                f"target_commit bound for {member.name}: "
+                                f"{member.size} != {expected_size}"
+                            )
+                            continue
+                        expected_mode = int(expected_blob.mode[-3:], 8)
+                        actual_mode = member.mode
+                        if actual_mode != expected_mode:
+                            report.add_error(
+                                "source snapshot complete mode differs from "
+                                f"target_commit for {member.name}: "
+                                f"{actual_mode:o} != {expected_mode:o}"
+                            )
+                            continue
+                        validated_members.append(member)
 
-            if report.total_errors != metadata_errors:
-                return {}, {}
+                    if report.total_errors != metadata_errors:
+                        return {}, {}
 
-            for member in validated_members:
-                expected_blob = expected[member.name]
-                expected_size = len(expected_blob.data)
-                stream = archive.extractfile(member)
-                if stream is None:
-                    report.add_error(
-                        f"could not read source snapshot member: {member.name}"
-                    )
-                    continue
-                data = stream.read(expected_size + 1)
-                if len(data) != expected_size:
-                    report.add_error(
-                        f"source snapshot member read length differs from declared "
-                        f"size for {member.name}"
-                    )
-                    continue
-                members[member.name] = data
-                modes[member.name] = member.mode & 0o777
-    except (OSError, tarfile.TarError) as exc:
+                    for member in validated_members:
+                        expected_blob = expected[member.name]
+                        expected_size = len(expected_blob.data)
+                        stream = archive.extractfile(member)
+                        if stream is None:
+                            report.add_error(
+                                f"could not read source snapshot member: {member.name}"
+                            )
+                            continue
+                        data = stream.read(expected_size + 1)
+                        if len(data) != expected_size:
+                            report.add_error(
+                                "source snapshot member read length differs from "
+                                f"declared size for {member.name}"
+                            )
+                            continue
+                        members[member.name] = data
+                        modes[member.name] = member.mode
+    except (EOFError, OSError, tarfile.TarError) as exc:
         report.add_error(f"could not read source snapshot: {exc}")
     return members, modes
 
@@ -1377,6 +1508,7 @@ def _check_controller(
     required_cases: int,
     production_context: Mapping[str, str],
     historical_root: PurePosixPath | None,
+    legacy_command_strings_allowed: bool,
     report: AuditReport,
 ) -> tuple[dict | None, bool]:
     manifest = _load_json(root / "sweep_manifest.json", report)
@@ -1410,7 +1542,10 @@ def _check_controller(
             report.add_error("controller manifest parameters are unavailable")
             profiles_verified = False
         try:
-            tokens = _manifest_command_tokens(manifest)
+            tokens = _manifest_command_tokens(
+                manifest,
+                allow_legacy_string=legacy_command_strings_allowed,
+            )
         except ReleaseAuditInputError as exc:
             report.add_error(f"controller command evidence is invalid: {exc}")
             tokens = []
@@ -2932,6 +3067,9 @@ def audit_final_release(
         report.add_error("resolved config production_method is not an object")
         production = {}
     production_context = _production_context(production, report)
+    legacy_command_strings_allowed = _allow_legacy_command_strings(
+        target_commit, source_verified, historical_root
+    )
 
     _, controller_profiles_verified = _check_controller(
         root,
@@ -2939,12 +3077,14 @@ def audit_final_release(
         required_cases,
         production_context,
         historical_root,
+        legacy_command_strings_allowed,
         report,
     )
     inheritance = _build_rescue_profile_inheritance(
         config,
         source_verified and controller_profiles_verified,
         historical_root,
+        legacy_command_strings_allowed,
     )
     inventory = _check_inventory(
         root,

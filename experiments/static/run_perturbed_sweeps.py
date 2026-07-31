@@ -12,6 +12,7 @@ import json
 import math
 import os
 import re
+import shlex
 import subprocess
 import sys
 import tarfile
@@ -1676,7 +1677,8 @@ def _write_sweep_manifest(
         "schema_version": 1,
         "status": status,
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-        "command": " ".join(sys.argv),
+        "command": shlex.join(sys.argv),
+        "argv": list(sys.argv),
         "parameters": {
             "only": args.only,
             "algos": args.algos,
