@@ -19,10 +19,12 @@ import submission.package_submission as package_submission
 from submission.audit_final_release import AuditReport
 from submission.package_submission import (
     DEFAULT_PAPER_ENTRYPOINT,
+    GENERATOR_EXPERIMENT_MAP,
     RELEASE_PAYLOADS,
     SubmissionPackagingError,
     _extract_archive_safely,
     _safe_relative_path,
+    _validate_final_figure_candidate_contract,
     build_submission_package,
     discover_paper_source_files,
     load_approved_figures,
@@ -169,6 +171,26 @@ def _write_final_figure_publication(
     allowlist_path.parent.mkdir(parents=True)
     allowlist_path.write_text(json.dumps(allowlist, indent=2) + "\n", encoding="utf-8")
     allowlist_sha256 = _sha256(allowlist_path)
+    approval_payload = {
+        "schema_version": 2,
+        "record_type": "final_figure_orchestration_approval",
+        "approval_status": "approved",
+        "revoked": False,
+        "approved_generator_commit": generator_commit,
+        "approved_generator_tree": generator_tree,
+        "scientific_release_commit": scientific_commit,
+        "release_sha256sums_sha256": release_ledger_sha256,
+        "allowlist_sha256": allowlist_sha256,
+        "candidate_contract": allowlist["expected_counts"],
+        "orchestrator_schema_version": 4,
+        "approved_by": "Independent Reviewer",
+        "approved_at_utc": "2026-07-31T12:00:00Z",
+    }
+    approval_path = root / "provenance" / "external_approval_record.json"
+    approval_path.write_text(
+        json.dumps(approval_payload, indent=2) + "\n", encoding="utf-8"
+    )
+    approval_sha256 = _sha256(approval_path)
 
     candidate_rows = []
     orchestration_candidates = []
@@ -246,12 +268,33 @@ def _write_final_figure_publication(
         "schema_version": 4,
         "manifest_type": "final_figure_orchestration",
         "status": "ready_for_internal_acceptance",
+        "created_at_utc": "2026-07-31T12:30:00+00:00",
         "generator_checkout": {
+            "repository": "/Users/test/project",
             "approved_commit": generator_commit,
             "commit_tree": generator_tree,
             "scientific_release_commit": scientific_commit,
+            "tracked_file_count": 421,
+            "checkout_manifest_sha256": "1" * 64,
+            "materialized_manifest_sha256": "1" * 64,
+        },
+        "trusted_figure_runtime": {
+            "python": {
+                "executable": "/Users/test/.pyenv/versions/3.9.13/bin/python3.9",
+                "version": "3.9.13",
+            },
+            "runtime_root": "/Users/test/private-runtime",
+            "fontconfig_file": "/Users/test/private-runtime/fonts.conf",
+        },
+        "execution_config_authority": {
+            "path": "provenance/execution_config_authority.json",
+            "sha256": "2" * 64,
+            "file_count": 7,
+            "source": "approved_materialized_generator_commit",
+            "verification": "per_yaml_read_and_before_after_generator",
         },
         "external_approval": {
+            "sha256": approval_sha256,
             "approved_generator_commit": generator_commit,
             "approved_generator_tree": generator_tree,
             "scientific_release_commit": scientific_commit,
@@ -261,19 +304,40 @@ def _write_final_figure_publication(
             "orchestrator_schema_version": 4,
             "approval_status": "approved",
             "revoked": False,
+            "approved_by": "Independent Reviewer",
+            "approved_at_utc": "2026-07-31T12:00:00Z",
+            "snapshot_path": "provenance/external_approval_record.json",
         },
         "scientific_release": release,
         "audited_release_authority": {
             "source_commit": scientific_commit,
             "sha256sums_sha256": release_ledger_sha256,
+            "resolved_config_sha256": "3" * 64,
+            "audit_root": "private_complete_release_snapshot",
+            "checksum_verification": "complete_inventory_passed",
+            "snapshotted_file_count": 123_857,
+            "snapshotted_size_bytes": 1_000_000,
         },
+        "release_input_snapshot": {
+            "root": "provenance/release_input_snapshot",
+            "representative_alias_sources": {},
+            "artifact_count": 12,
+        },
+        "scientific_contracts": {"final_release": {"passed": True}},
         "allowlist": {
             "path": "provenance/approved_candidate_allowlist.json",
             "sha256": allowlist_sha256,
             "expected_counts": allowlist["expected_counts"],
         },
         "candidates": orchestration_candidates,
-        "snapshot_artifacts": [],
+        "snapshot_artifacts": [
+            {
+                "role": "external_approval_record",
+                "path": "provenance/external_approval_record.json",
+                "sha256": approval_sha256,
+                "size_bytes": approval_path.stat().st_size,
+            }
+        ],
     }
     orchestration_path = root / "provenance" / "final_figure_orchestration.json"
     orchestration_path.write_text(
@@ -940,6 +1004,16 @@ def test_approved_figures_require_exactly_one_candidate_per_slot(tmp_path):
         )
 
 
+def test_candidate_contract_requires_exact_clean_endpoint_pairs():
+    specs = {spec["candidate_id"]: dict(spec) for spec in _candidate_specs()}
+    _validate_final_figure_candidate_contract(specs)
+
+    specs["paired_00_clean"]["variant"] = "with_endpoints"
+    specs["paired_01_with_endpoints"]["variant"] = "clean"
+    with pytest.raises(SubmissionPackagingError, match="14 unique unpaired slots"):
+        _validate_final_figure_candidate_contract(specs)
+
+
 @pytest.mark.parametrize(
     ("mismatch", "message"),
     (
@@ -960,6 +1034,55 @@ def test_plan_rejects_final_figure_authority_mismatch(tmp_path, mismatch, messag
         orchestration["audited_release_authority"]["source_commit"] = "0" * 40
     else:
         orchestration["audited_release_authority"]["sha256sums_sha256"] = "0" * 64
+    orchestration_path.write_text(
+        json.dumps(orchestration, indent=2) + "\n", encoding="utf-8"
+    )
+    _reseal_final_figure_publication(figure_root)
+
+    with pytest.raises(SubmissionPackagingError, match=message):
+        plan_submission_package(
+            release_root=release,
+            final_figure_root=figure_root,
+            generator_worktree_root=paper,
+            generator_commit=paper_commit,
+            paper_worktree_root=paper,
+            paper_commit=paper_commit,
+            approved_figures_manifest=manifest,
+            raw_data_deposition="https://doi.org/10.1234/interface.release",
+            raw_data_manifest_identifier=_manifest_identifier(release),
+            acknowledge_unverified_remote_deposit=True,
+            latexmk_executable=str(latexmk),
+            output_dir=tmp_path / "package",
+            audit_runner=_passing_audit,
+            checksum_verifier=_checksums_pass,
+            pdf_inspector=_vector_pdf,
+        )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        ("revoked", "not approved and nonrevoked"),
+        ("embedded_mismatch", "do not exactly match the verified snapshot"),
+    ),
+)
+def test_plan_validates_complete_external_approval_snapshot(
+    tmp_path, mutation, message
+):
+    release, paper, manifest, paper_commit, latexmk = _make_inputs(tmp_path)
+    figure_root = tmp_path / "final-figures"
+    _open_final_figure_publication(figure_root)
+    approval_path = figure_root / "provenance" / "external_approval_record.json"
+    approval = json.loads(approval_path.read_text(encoding="utf-8"))
+    orchestration_path = figure_root / "provenance" / "final_figure_orchestration.json"
+    orchestration = json.loads(orchestration_path.read_text(encoding="utf-8"))
+    if mutation == "revoked":
+        approval["revoked"] = True
+        orchestration["external_approval"]["revoked"] = True
+    else:
+        approval["approved_by"] = "Second Independent Reviewer"
+    approval_path.write_text(json.dumps(approval, indent=2) + "\n", encoding="utf-8")
+    orchestration["external_approval"]["sha256"] = _sha256(approval_path)
     orchestration_path.write_text(
         json.dumps(orchestration, indent=2) + "\n", encoding="utf-8"
     )
@@ -1041,6 +1164,7 @@ def test_plan_rejects_candidate_hash_changed_in_published_source_map(tmp_path):
         "https://doi.org/10.xxxx/record",
         "doi:10.0000/interface-release",
         "https://doi.org/10.1234/record",
+        "https://doi.org/10.1234/xxxx",
     ),
 )
 def test_plan_rejects_placeholder_doi_patterns(tmp_path, location):
@@ -1237,7 +1361,8 @@ def test_build_stages_compact_payload_and_valid_checksums(tmp_path):
     assert generator_inventory["git_tree"] == plan.generator_tree_object_id
     assert generator_inventory["sha256"] == _sha256(generator_snapshot)
     map_inventory = inventory["code"]["paper_experiment_map"]
-    assert map_inventory["git_commit"] == plan.generator_commit
+    assert map_inventory["git_commit"] == plan.documentation_commit
+    assert map_inventory["git_tree"] == plan.documentation_tree_object_id
     assert map_inventory["sha256"] == _sha256(
         package / "docs" / "PAPER_EXPERIMENT_MAP.md"
     )
@@ -1263,7 +1388,7 @@ def test_build_stages_compact_payload_and_valid_checksums(tmp_path):
         plan.generator_tree_object_id
     )
     assert code_record["paper_experiment_map"]["git_object_id"] == (
-        plan.generator_experiment_map_object_id
+        plan.documentation_experiment_map_object_id
     )
     assert len(inventory["approved_figures"]) == 26
     assert inventory["approved_figures"][0]["candidate_id"]
@@ -1280,7 +1405,19 @@ def test_build_stages_compact_payload_and_valid_checksums(tmp_path):
     assert binding["scientific_commit"] == plan.scientific_commit
     assert (
         _sha256(package / "provenance" / "figures" / "final_figure_orchestration.json")
-        == binding["orchestration_manifest_sha256"]
+        == binding["orchestration_manifest_public_sha256"]
+    )
+    assert (
+        plan.final_figure_publication.orchestration_sha256
+        == binding["orchestration_manifest_authority_sha256"]
+    )
+    assert (
+        _sha256(package / "provenance" / "figures" / "external_approval_record.json")
+        == binding["external_approval_record_public_sha256"]
+    )
+    assert (
+        plan.final_figure_publication.external_approval_sha256
+        == binding["external_approval_record_authority_sha256"]
     )
     assert (
         _sha256(package / "provenance" / "figures" / "figure_candidate_source_map.json")
@@ -1291,6 +1428,22 @@ def test_build_stages_compact_payload_and_valid_checksums(tmp_path):
     )
     assert privacy["passed"] is True
     assert sum(row["replacement_count"] for row in privacy["records"]) >= 5
+    privacy_by_path = {row["package_path"]: row for row in privacy["records"]}
+    orchestration_privacy = privacy_by_path[
+        "provenance/figures/final_figure_orchestration.json"
+    ]
+    assert orchestration_privacy["authority_sha256"] == (
+        plan.final_figure_publication.orchestration_sha256
+    )
+    assert orchestration_privacy["public_sha256"] == _sha256(
+        package / "provenance" / "figures" / "final_figure_orchestration.json"
+    )
+    approval_privacy = privacy_by_path[
+        "provenance/figures/external_approval_record.json"
+    ]
+    assert approval_privacy["authority_sha256"] == (
+        plan.final_figure_publication.external_approval_sha256
+    )
     packaged_bytes = b"".join(
         path.read_bytes() for path in package.rglob("*") if path.is_file()
     )
@@ -1584,13 +1737,70 @@ def test_generator_bytes_come_from_commit_despite_hidden_worktree_edit(tmp_path)
         assert b"<HOSTNAME>" in archived_map
 
 
+def test_experiment_map_uses_independent_pinned_documentation_commit(tmp_path):
+    release, paper, manifest, generator_commit, latexmk = _make_inputs(tmp_path)
+    generator_map = paper / GENERATOR_EXPERIMENT_MAP
+    generator_map.write_text(
+        "# Corrected Paper Experiment Map\n\nDocumentation-only repair.\n",
+        encoding="utf-8",
+    )
+    _git(paper, "add", GENERATOR_EXPERIMENT_MAP)
+    _git(paper, "commit", "-q", "-m", "Repair experiment map")
+    documentation_commit = _git(paper, "rev-parse", "HEAD")
+    documentation_tree = _git(paper, "rev-parse", "HEAD^{tree}")
+    generator_worktree = tmp_path / "approved-generator-worktree"
+    _git(
+        paper,
+        "worktree",
+        "add",
+        "-q",
+        "--detach",
+        str(generator_worktree),
+        generator_commit,
+    )
+
+    output = tmp_path / "deliverable" / "bundle"
+    output.parent.mkdir(parents=True)
+    plan = plan_submission_package(
+        release_root=release,
+        final_figure_root=release.parent / "final-figures",
+        generator_worktree_root=generator_worktree,
+        generator_commit=generator_commit,
+        documentation_commit=documentation_commit,
+        paper_worktree_root=paper,
+        paper_commit=documentation_commit,
+        approved_figures_manifest=manifest,
+        raw_data_deposition="https://doi.org/10.1234/interface.release",
+        raw_data_manifest_identifier=_manifest_identifier(release),
+        acknowledge_unverified_remote_deposit=True,
+        latexmk_executable=str(latexmk),
+        output_dir=output,
+        audit_runner=_passing_audit,
+        checksum_verifier=_checksums_pass,
+        pdf_inspector=_vector_pdf,
+    )
+    package, _ = build_submission_package(plan, create_archive=False)
+
+    assert plan.generator_commit == generator_commit
+    assert plan.documentation_commit == documentation_commit
+    assert plan.documentation_tree_object_id == documentation_tree
+    assert (package / GENERATOR_EXPERIMENT_MAP).read_text(encoding="utf-8") == (
+        "# Corrected Paper Experiment Map\n\nDocumentation-only repair.\n"
+    )
+    code_record = json.loads(
+        (package / "provenance" / "code_snapshots.json").read_text(encoding="utf-8")
+    )
+    assert code_record["figure_generator_snapshot"]["git_commit"] == generator_commit
+    assert code_record["paper_experiment_map"]["git_commit"] == documentation_commit
+
+
 def test_generator_object_substitution_fails_closed(tmp_path, monkeypatch):
     output = tmp_path / "deliverable" / "bundle"
     plan = _plan(tmp_path / "inputs", output)
     original_read = package_submission._read_git_blob
 
     def substituted_blob(repository, object_id):
-        if object_id == plan.generator_experiment_map_object_id:
+        if object_id == plan.documentation_experiment_map_object_id:
             return b"substituted object bytes\n"
         return original_read(repository, object_id)
 

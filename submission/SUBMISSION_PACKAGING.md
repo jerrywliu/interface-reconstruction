@@ -11,19 +11,22 @@ It does not modify the release, the paper source, or Overleaf.
 3. A complete and valid release-wide `SHA256SUMS`.
 4. A clean generator Git worktree pinned to the exact full commit that produced
    the approved figure packet.
-5. The sealed, read-only final-figure publication root. It must contain the
+5. An explicit documentation commit, descending from the generator commit, that
+   contains the reviewed `docs/PAPER_EXPERIMENT_MAP.md`.
+6. The sealed, read-only final-figure publication root. It must contain the
    canonical orchestration manifest, JSON/CSV candidate source maps, private
-   allowlist snapshot, 38 candidate PDFs, and full published-tree checksum ledger.
-6. A clean paper Git worktree pinned to an explicit full commit. Its root must
+   allowlist and external-approval snapshots, 38 candidate PDFs, and full
+   published-tree checksum ledger.
+7. A clean paper Git worktree pinned to an explicit full commit. Its root must
    contain `interface-reconstruction-paper/`.
-7. A 26-row approval manifest selecting exactly one published candidate for each
+8. A 26-row approval manifest selecting exactly one published candidate for each
    manuscript figure slot.
-8. A non-placeholder DOI or URL for the complete raw-data deposit.
-9. A `sha256:<digest>` identifier for the exact `SHA256SUMS` deposited with the
+9. A non-placeholder DOI or URL for the complete raw-data deposit.
+10. A `sha256:<digest>` identifier for the exact `SHA256SUMS` deposited with the
    complete release.
-10. Either a locally downloaded/fetched copy of the deposited `SHA256SUMS`, or an
+11. Either a locally downloaded/fetched copy of the deposited `SHA256SUMS`, or an
    explicit acknowledgment that remote deposit contents remain a manual gate.
-11. A pre-existing output parent owned by the current user, represented by a real
+12. A pre-existing output parent owned by the current user, represented by a real
    directory, and not writable by group or other users.
 
 The packager reruns the full release audit and verifies every entry in the release
@@ -94,8 +97,18 @@ git -C "$GENERATOR_REPO" worktree add --detach "$GENERATOR_WORKTREE" "$GENERATOR
 test -z "$(git -C "$GENERATOR_WORKTREE" status --porcelain --untracked-files=all)"
 ```
 
-The packager materializes the generator archive and experiment map from pinned Git
-objects. Worktree bytes cannot substitute a different plotting implementation.
+The packager materializes the generator archive from the approved generator
+commit. It materializes the experiment map from a separate explicit documentation
+commit so documentation-only repairs do not falsely appear to have produced the
+older figure packet. The documentation commit must descend from the generator
+commit; its commit, tree, map blob, original digest, and public digest are recorded.
+Worktree bytes cannot substitute either plotting or documentation content.
+
+```sh
+export DOCUMENTATION_COMMIT=<reviewed-40-character-documentation-commit>
+git -C "$GENERATOR_REPO" merge-base --is-ancestor \
+  "$GENERATOR_COMMIT" "$DOCUMENTATION_COMMIT"
+```
 
 Point `--final-figure-root` at the exact output published by
 `run_final_figure_orchestrator`. The packager uses fixed canonical paths beneath
@@ -103,6 +116,7 @@ that root; callers cannot substitute a different manifest or source map:
 
 ```text
 provenance/final_figure_orchestration.json
+provenance/external_approval_record.json
 provenance/approved_candidate_allowlist.json
 provenance/published_tree_sha256.json
 review/figure_candidate_source_map.json
@@ -111,7 +125,10 @@ review/figure_candidate_source_map.csv
 
 The root and every contained file/directory must remain sealed read-only. The
 packager verifies every non-ledger file against the publication ledger during both
-planning and materialization.
+planning and materialization. It validates the complete external approval schema,
+digest, generator/scientific/release authorities, reviewer fields, approval status,
+and nonrevocation state, then requires the orchestration's embedded approval fields
+to match the snapshot exactly.
 
 ## Figure Approval Manifest
 
@@ -169,7 +186,7 @@ When the deposited manifest cannot yet be fetched, omit that file and pass
 `manual_acknowledgment_remote_contents_unverified`. This is an explicit manual
 submission gate, not a remote verification claim. The packager performs no network
 request and never claims that a DOI/URL was reachable or that its contents matched.
-Values such as `10.xxxx/record`, `10.0000/...`, `/record`, `pending`, or
+Values such as `10.xxxx/record`, `10.0000/...`, `10.1234/xxxx`, `/record`, `pending`, or
 `placeholder` are rejected rather than accepted as deposit identifiers.
 
 ## Public-Package Privacy
@@ -178,7 +195,8 @@ Release metadata and historical source-audit notes may contain absolute user-hom
 paths or the sweep workstation hostname. The compact public package does not copy
 those presentation bytes verbatim. It deterministically replaces user-home
 prefixes with `<HOME>` and the hostname captured in `environment.json` with
-`<HOSTNAME>` in textual release metadata and in text members of both code archives.
+`<HOSTNAME>` in textual release metadata, the figure orchestration and external
+approval records, and text members of both code archives.
 
 This does not weaken the scientific authority. For every sanitized payload,
 `provenance/privacy_redactions.json` records the exact original authority SHA-256,
@@ -212,6 +230,7 @@ python submission/package_submission.py \
   --final-figure-root "$FINAL_FIGURE_ROOT" \
   --generator-worktree-root "$GENERATOR_WORKTREE" \
   --generator-commit "$GENERATOR_COMMIT" \
+  --documentation-commit "$DOCUMENTATION_COMMIT" \
   --paper-worktree-root "$PAPER_WORKTREE" \
   --paper-commit "$PAPER_COMMIT" \
   --approved-figures-manifest "$APPROVAL_CSV" \
@@ -299,6 +318,7 @@ provenance/manuscript_build.json
 provenance/vector_pdf_qa.json
 provenance/figures/approved_figure_bindings.json
 provenance/figures/final_figure_orchestration.json
+provenance/figures/external_approval_record.json
 provenance/figures/figure_candidate_source_map.json
 provenance/figures/figure_candidate_source_map.csv
 provenance/figures/approved_candidate_allowlist.json
@@ -311,8 +331,11 @@ provenance/release/...
 The scientific and generator archives are deterministic privacy-sanitized public
 copies. Their exact pre-redaction archive hashes, commits, trees, Git object IDs,
 and public hashes are recorded independently in `provenance/code_snapshots.json`.
-The paper experiment map is also privacy-sanitized for presentation; its pinned Git
-object ID and original blob digest remain recorded beside the public-copy digest.
+The paper experiment map is also privacy-sanitized for presentation; its independent
+documentation commit/tree, pinned Git object ID, and original blob digest remain
+recorded beside the public-copy digest. The orchestration and external approval
+records likewise retain their original sealed-publication authority hashes beside
+the hashes of their sanitized public copies.
 
 ## Raw-Data Boundary
 
