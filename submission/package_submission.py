@@ -11,6 +11,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -31,8 +32,11 @@ from submission.audit_final_release import (
 from submission.pdf_vector_qa import PdfQaReport, inspect_pdf
 
 
-PACKAGE_SCHEMA_VERSION = 1
+PACKAGE_SCHEMA_VERSION = 2
 RELEASE_SHA256_MANIFEST = "SHA256SUMS"
+DEFAULT_PAPER_SOURCE_SUBDIR = "interface-reconstruction-paper"
+DEFAULT_PAPER_ENTRYPOINT = "interface-reconstruction-paper/interface-reconstruction.tex"
+DEFAULT_MANUSCRIPT_COMPILE_TIMEOUT_SECONDS = 300
 
 RELEASE_PAYLOADS = (
     (
@@ -40,15 +44,39 @@ RELEASE_PAYLOADS = (
         "provenance/release/submission_config.resolved.json",
         "release_configuration",
     ),
-    ("sweep_manifest.json", "provenance/release/sweep_manifest.json", "release_manifest"),
+    (
+        "sweep_manifest.json",
+        "provenance/release/sweep_manifest.json",
+        "release_manifest",
+    ),
     ("environment.json", "provenance/release/environment.json", "environment_manifest"),
     ("failures.csv", "provenance/release/failures.csv", "failure_ledger"),
     ("perturbed_sweep.csv", "results/perturbed_sweep.csv", "aggregate_results"),
-    ("diagnostics/source_state.json", "provenance/release/source_state.json", "source_manifest"),
-    ("diagnostics/run_inventory.csv", "provenance/release/run_inventory.csv", "run_inventory"),
-    ("diagnostics/run_manifests.jsonl", "provenance/release/run_manifests.jsonl", "run_manifests"),
-    (RELEASE_SHA256_MANIFEST, "provenance/release/SHA256SUMS", "full_release_checksums"),
-    ("diagnostics/source_snapshot.tar.gz", "code/source_snapshot.tar.gz", "code_archive"),
+    (
+        "diagnostics/source_state.json",
+        "provenance/release/source_state.json",
+        "source_manifest",
+    ),
+    (
+        "diagnostics/run_inventory.csv",
+        "provenance/release/run_inventory.csv",
+        "run_inventory",
+    ),
+    (
+        "diagnostics/run_manifests.jsonl",
+        "provenance/release/run_manifests.jsonl",
+        "run_manifests",
+    ),
+    (
+        RELEASE_SHA256_MANIFEST,
+        "provenance/release/SHA256SUMS",
+        "full_release_checksums",
+    ),
+    (
+        "diagnostics/source_snapshot.tar.gz",
+        "code/source_snapshot.tar.gz",
+        "code_archive",
+    ),
 )
 
 PAPER_SOURCE_SUFFIXES = {
@@ -84,6 +112,8 @@ EXCLUDED_DIRECTORY_NAMES = {
 }
 REVIEW_BUNDLE_SUFFIXES = {".csv", ".json", ".md", ".pdf", ".txt"}
 DEPOSITION_PATTERN = re.compile(r"^(?:https?://\S+|doi:\s*10\.\S+)$", re.IGNORECASE)
+FULL_GIT_COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+SHA256_IDENTIFIER_PATTERN = re.compile(r"^sha256:([0-9a-f]{64})$")
 
 
 class SubmissionPackagingError(RuntimeError):
@@ -115,16 +145,39 @@ class InventoryEntry:
 
 
 @dataclass(frozen=True)
+class PaperGitState:
+    worktree_root: Path
+    commit: str
+    source_subdir: str
+    entrypoint: str
+    tracked_paths: frozenset[str]
+
+
+@dataclass(frozen=True)
+class RawDataDeposit:
+    location: str
+    release_name: str
+    manifest_name: str
+    manifest_identifier: str
+    manifest_sha256: str
+
+
+@dataclass(frozen=True)
 class PackagePlan:
     release_root: Path
-    paper_source_root: Path
+    paper_worktree_root: Path
+    paper_commit: str
+    paper_source_subdir: str
+    paper_entrypoint: str
+    paper_tracked_file_count: int
+    latexmk_executable: str
     output_dir: Path
     files: tuple[PlannedFile, ...]
     approved_figures: tuple[ApprovedFigure, ...]
     figure_qa: tuple[PdfQaReport, ...]
     excluded_paper_files: tuple[str, ...]
     audit_summary: Mapping[str, int | str]
-    raw_data_deposition: str
+    raw_data_deposit: RawDataDeposit
     review_bundle: Path | None
 
 
@@ -145,7 +198,9 @@ def _safe_relative_path(value: str, label: str) -> str:
         or "\n" in value
         or "\r" in value
     ):
-        raise SubmissionPackagingError(f"{label} is not a safe relative path: {value!r}")
+        raise SubmissionPackagingError(
+            f"{label} is not a safe relative path: {value!r}"
+        )
     normalized = pure.as_posix()
     if normalized in {".", ""}:
         raise SubmissionPackagingError(f"{label} is empty")
@@ -162,15 +217,162 @@ def _require_regular_file(path: Path, label: str) -> Path:
     return path
 
 
-def _validate_deposition(value: str) -> str:
+def _validate_deposition_location(value: str) -> str:
     value = value.strip()
     if not DEPOSITION_PATTERN.match(value):
         raise SubmissionPackagingError(
             "raw-data deposition must be an http(s) URL or a 'doi:10....' identifier"
         )
-    if any(token in value.lower() for token in ("pending", "placeholder", "example.com")):
+    if any(
+        token in value.lower() for token in ("pending", "placeholder", "example.com")
+    ):
         raise SubmissionPackagingError("raw-data deposition contains a placeholder")
     return value
+
+
+def _validate_deposition(
+    location: str,
+    manifest_identifier: str,
+    release_root: Path,
+) -> RawDataDeposit:
+    location = _validate_deposition_location(location)
+    identifier = manifest_identifier.strip().lower()
+    match = SHA256_IDENTIFIER_PATTERN.fullmatch(identifier)
+    if match is None:
+        raise SubmissionPackagingError(
+            "raw-data manifest identifier must have the form 'sha256:<64-hex-digest>'"
+        )
+    manifest = _require_regular_file(
+        release_root / RELEASE_SHA256_MANIFEST,
+        "complete-release checksum manifest",
+    )
+    actual_digest = _sha256(manifest)
+    expected_digest = match.group(1)
+    if actual_digest != expected_digest:
+        raise SubmissionPackagingError(
+            "raw-data manifest identifier does not match the audited release "
+            f"{RELEASE_SHA256_MANIFEST}: expected sha256:{actual_digest}"
+        )
+    return RawDataDeposit(
+        location=location,
+        release_name=release_root.name,
+        manifest_name=RELEASE_SHA256_MANIFEST,
+        manifest_identifier=identifier,
+        manifest_sha256=actual_digest,
+    )
+
+
+def _run_git(worktree_root: Path, arguments: Sequence[str]) -> bytes:
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(worktree_root), *arguments],
+            check=False,
+            capture_output=True,
+        )
+    except OSError as exc:
+        raise SubmissionPackagingError(f"could not run git: {exc}") from exc
+    if completed.returncode != 0:
+        detail = completed.stderr.decode("utf-8", errors="replace").strip()
+        if not detail:
+            detail = completed.stdout.decode("utf-8", errors="replace").strip()
+        raise SubmissionPackagingError(
+            f"paper Git inspection failed ({' '.join(arguments)}): {detail}"
+        )
+    return completed.stdout
+
+
+def inspect_paper_worktree(
+    worktree_root: Path,
+    expected_commit: str,
+    *,
+    source_subdir: str = DEFAULT_PAPER_SOURCE_SUBDIR,
+    entrypoint: str = DEFAULT_PAPER_ENTRYPOINT,
+) -> PaperGitState:
+    """Require an exact, clean Git worktree with the expected paper layout."""
+    raw_root = Path(worktree_root)
+    if raw_root.is_symlink():
+        raise SubmissionPackagingError(
+            f"paper worktree root cannot be a symbolic link: {raw_root}"
+        )
+    worktree_root = raw_root.resolve()
+    if not worktree_root.is_dir():
+        raise SubmissionPackagingError(
+            f"paper worktree root is not a directory: {worktree_root}"
+        )
+    expected_commit = expected_commit.strip().lower()
+    if FULL_GIT_COMMIT_PATTERN.fullmatch(expected_commit) is None:
+        raise SubmissionPackagingError(
+            "paper commit must be a full 40-character hexadecimal Git SHA"
+        )
+    source_subdir = _safe_relative_path(source_subdir, "paper source subdirectory")
+    entrypoint = _safe_relative_path(entrypoint, "paper entrypoint")
+    source_parts = PurePosixPath(source_subdir).parts
+    entrypoint_parts = PurePosixPath(entrypoint).parts
+    if entrypoint_parts[: len(source_parts)] != source_parts:
+        raise SubmissionPackagingError(
+            "paper entrypoint must be inside the paper source subdirectory"
+        )
+
+    top_level = Path(
+        _run_git(worktree_root, ("rev-parse", "--show-toplevel"))
+        .decode("utf-8")
+        .strip()
+    ).resolve()
+    if top_level != worktree_root:
+        raise SubmissionPackagingError(
+            "paper worktree root must be the Git top level containing "
+            f"{source_subdir}/: {top_level}"
+        )
+    actual_commit = (
+        _run_git(worktree_root, ("rev-parse", "HEAD")).decode("ascii").strip().lower()
+    )
+    if actual_commit != expected_commit:
+        raise SubmissionPackagingError(
+            f"paper commit mismatch: expected {expected_commit}, found {actual_commit}"
+        )
+    status = _run_git(
+        worktree_root,
+        ("status", "--porcelain=v1", "-z", "--untracked-files=all"),
+    )
+    if status:
+        entries = [
+            item.decode("utf-8", errors="replace")
+            for item in status.split(b"\0")
+            if item
+        ]
+        raise SubmissionPackagingError(
+            "paper worktree is not clean: " + "; ".join(entries[:5])
+        )
+
+    tracked = _run_git(
+        worktree_root,
+        ("ls-files", "-z", "--", source_subdir),
+    )
+    tracked_paths = frozenset(
+        item.decode("utf-8") for item in tracked.split(b"\0") if item
+    )
+    if not tracked_paths:
+        raise SubmissionPackagingError(
+            f"paper commit tracks no files under {source_subdir}/"
+        )
+    if entrypoint not in tracked_paths:
+        raise SubmissionPackagingError(
+            f"paper entrypoint is not tracked at {expected_commit}: {entrypoint}"
+        )
+    source_root = worktree_root.joinpath(*source_parts)
+    if not source_root.is_dir():
+        raise SubmissionPackagingError(
+            f"paper source subdirectory is missing: {source_root}"
+        )
+    if not (worktree_root / entrypoint).is_file():
+        raise SubmissionPackagingError(f"paper entrypoint is missing: {entrypoint}")
+    return PaperGitState(
+        worktree_root=worktree_root,
+        commit=actual_commit,
+        source_subdir=source_subdir,
+        entrypoint=entrypoint,
+        tracked_paths=tracked_paths,
+    )
 
 
 def _paper_source_is_allowed(path: Path) -> bool:
@@ -181,7 +383,11 @@ def _paper_source_is_allowed(path: Path) -> bool:
     )
 
 
-def discover_paper_source_files(root: Path) -> tuple[tuple[Path, ...], tuple[str, ...]]:
+def discover_paper_source_files(
+    root: Path,
+    *,
+    tracked_paths: frozenset[str] | None = None,
+) -> tuple[tuple[Path, ...], tuple[str, ...]]:
     """Return allowlisted manuscript source and a record of everything excluded."""
     root = Path(root).resolve()
     if not root.is_dir():
@@ -200,15 +406,36 @@ def discover_paper_source_files(root: Path) -> tuple[tuple[Path, ...], tuple[str
         if not path.is_file():
             continue
         relative_text = relative.as_posix()
+        if tracked_paths is not None and relative_text not in tracked_paths:
+            continue
         if _paper_source_is_allowed(path):
             included.append(path)
         else:
             excluded.append(relative_text)
     if not included:
-        raise SubmissionPackagingError("paper source root contains no allowlisted source files")
+        raise SubmissionPackagingError(
+            "paper source root contains no allowlisted source files"
+        )
     if not any(path.suffix.lower() == ".tex" for path in included):
         raise SubmissionPackagingError("paper source root contains no TeX source")
     return tuple(included), tuple(excluded)
+
+
+def _require_tracked_paper_file(
+    path: Path,
+    paper_state: PaperGitState,
+    label: str,
+) -> None:
+    try:
+        relative = path.resolve().relative_to(paper_state.worktree_root).as_posix()
+    except ValueError as exc:
+        raise SubmissionPackagingError(
+            f"{label} is outside the pinned paper worktree: {path}"
+        ) from exc
+    if relative not in paper_state.tracked_paths:
+        raise SubmissionPackagingError(
+            f"{label} is not tracked at paper commit {paper_state.commit}: {relative}"
+        )
 
 
 def discover_imported_graphics(
@@ -226,7 +453,9 @@ def discover_imported_graphics(
         try:
             lines = path.read_text(encoding="utf-8").splitlines()
         except (OSError, UnicodeError) as exc:
-            raise SubmissionPackagingError(f"could not read TeX source {path}: {exc}") from exc
+            raise SubmissionPackagingError(
+                f"could not read TeX source {path}: {exc}"
+            ) from exc
         uncommented = []
         for line in lines:
             pieces = re.split(r"(?<!\\)%", line, maxsplit=1)
@@ -260,7 +489,8 @@ def load_approved_figures(
             missing = sorted(required - fieldnames)
             if missing:
                 raise SubmissionPackagingError(
-                    "approved-figures manifest is missing columns: " + ", ".join(missing)
+                    "approved-figures manifest is missing columns: "
+                    + ", ".join(missing)
                 )
             rows = list(reader)
     except (OSError, UnicodeError, csv.Error) as exc:
@@ -278,7 +508,8 @@ def load_approved_figures(
                 f"figure row {row_number} is not explicitly approved"
             )
         paper_path = _safe_relative_path(
-            str(row.get("paper_path", "")).strip(), f"figure row {row_number} paper_path"
+            str(row.get("paper_path", "")).strip(),
+            f"figure row {row_number} paper_path",
         )
         if not paper_path.lower().endswith(".pdf"):
             raise SubmissionPackagingError(
@@ -299,7 +530,9 @@ def load_approved_figures(
             raise SubmissionPackagingError(
                 f"approved figure escapes the paper source root: {source_value}"
             ) from exc
-        source_path = _require_regular_file(source_path, f"approved figure {paper_path}")
+        source_path = _require_regular_file(
+            source_path, f"approved figure {paper_path}"
+        )
 
         expected_digest = str(row.get("sha256", "")).strip().lower()
         if len(expected_digest) != 64 or any(
@@ -368,7 +601,9 @@ def _extract_experiment_map(source_snapshot: Path, destination: Path) -> None:
     member_name = "docs/PAPER_EXPERIMENT_MAP.md"
     try:
         with tarfile.open(source_snapshot, "r:gz") as archive:
-            members = [member for member in archive.getmembers() if member.name == member_name]
+            members = [
+                member for member in archive.getmembers() if member.name == member_name
+            ]
             if len(members) != 1 or not members[0].isfile():
                 raise SubmissionPackagingError(
                     f"audited source snapshot must contain exactly one {member_name}"
@@ -380,7 +615,9 @@ def _extract_experiment_map(source_snapshot: Path, destination: Path) -> None:
                 )
             data = stream.read()
     except (OSError, tarfile.TarError) as exc:
-        raise SubmissionPackagingError(f"could not inspect source snapshot: {exc}") from exc
+        raise SubmissionPackagingError(
+            f"could not inspect source snapshot: {exc}"
+        ) from exc
     _write_bytes(destination, data)
 
 
@@ -409,13 +646,145 @@ def _audit_release_or_fail(
     return report
 
 
+def _compile_manuscript_tree(
+    source_root: Path,
+    *,
+    source_subdir: str,
+    entrypoint: str,
+    latexmk_executable: str,
+    timeout_seconds: int = DEFAULT_MANUSCRIPT_COMPILE_TIMEOUT_SECONDS,
+) -> None:
+    """Compile a disposable copy of one exact manuscript source tree."""
+    source_root = Path(source_root).resolve()
+    if not source_root.is_dir():
+        raise SubmissionPackagingError(
+            f"manuscript compile source is not a directory: {source_root}"
+        )
+    executable = shutil.which(latexmk_executable)
+    if executable is None:
+        explicit = Path(latexmk_executable)
+        if explicit.is_file() and os.access(explicit, os.X_OK):
+            executable = str(explicit.resolve())
+    if executable is None:
+        raise SubmissionPackagingError(
+            f"manuscript compiler is unavailable: {latexmk_executable}"
+        )
+
+    with tempfile.TemporaryDirectory(prefix="submission-manuscript-compile-") as temp:
+        scratch = Path(temp)
+        compile_root = scratch / "paper-worktree"
+        shutil.copytree(source_root, compile_root)
+        compile_entrypoint = compile_root.joinpath(*PurePosixPath(entrypoint).parts)
+        if not compile_entrypoint.is_file():
+            raise SubmissionPackagingError(
+                f"staged manuscript entrypoint is missing: {entrypoint}"
+            )
+        build_dir = scratch / "build"
+        build_dir.mkdir()
+        environment = os.environ.copy()
+        search_prefix = f"{source_subdir}//:"
+        for variable in ("TEXINPUTS", "BIBINPUTS", "BSTINPUTS"):
+            environment[variable] = search_prefix + environment.get(variable, "")
+        environment["SOURCE_DATE_EPOCH"] = "0"
+        environment["TZ"] = "UTC"
+        command = [
+            executable,
+            "-pdf",
+            "-interaction=nonstopmode",
+            "-halt-on-error",
+            f"-outdir={build_dir}",
+            entrypoint,
+        ]
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=compile_root,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise SubmissionPackagingError(
+                f"manuscript compile exceeded {timeout_seconds} seconds"
+            ) from exc
+        except OSError as exc:
+            raise SubmissionPackagingError(
+                f"could not run manuscript compiler: {exc}"
+            ) from exc
+        if completed.returncode != 0:
+            transcript = "\n".join(
+                (completed.stdout + "\n" + completed.stderr).splitlines()[-30:]
+            )
+            raise SubmissionPackagingError(
+                "manuscript compile failed" + (f":\n{transcript}" if transcript else "")
+            )
+        expected_name = f"{PurePosixPath(entrypoint).stem}.pdf"
+        outputs = [
+            path
+            for path in build_dir.rglob(expected_name)
+            if path.is_file() and path.stat().st_size > 0
+        ]
+        if not outputs:
+            raise SubmissionPackagingError(
+                "manuscript compiler returned success without producing "
+                f"{expected_name}"
+            )
+
+
+def _materialize_manuscript_files(
+    planned_files: Sequence[PlannedFile],
+    destination_root: Path,
+) -> None:
+    prefix = "manuscript/source/"
+    copied = 0
+    for item in planned_files:
+        if not item.destination.startswith(prefix):
+            continue
+        relative = item.destination[len(prefix) :]
+        if not relative:
+            raise SubmissionPackagingError("empty manuscript package destination")
+        _copy_file(
+            item.source,
+            destination_root.joinpath(*PurePosixPath(relative).parts),
+        )
+        copied += 1
+    if copied == 0:
+        raise SubmissionPackagingError("package plan contains no manuscript files")
+
+
+def _preflight_manuscript_compile(
+    planned_files: Sequence[PlannedFile],
+    *,
+    source_subdir: str,
+    entrypoint: str,
+    latexmk_executable: str,
+) -> None:
+    with tempfile.TemporaryDirectory(prefix="submission-manuscript-plan-") as temp:
+        source_root = Path(temp) / "source"
+        source_root.mkdir()
+        _materialize_manuscript_files(planned_files, source_root)
+        _compile_manuscript_tree(
+            source_root,
+            source_subdir=source_subdir,
+            entrypoint=entrypoint,
+            latexmk_executable=latexmk_executable,
+        )
+
+
 def plan_submission_package(
     *,
     release_root: Path,
-    paper_source_root: Path,
+    paper_worktree_root: Path,
+    paper_commit: str,
     approved_figures_manifest: Path,
     raw_data_deposition: str,
+    raw_data_manifest_identifier: str,
     output_dir: Path,
+    paper_source_subdir: str = DEFAULT_PAPER_SOURCE_SUBDIR,
+    paper_entrypoint: str = DEFAULT_PAPER_ENTRYPOINT,
+    latexmk_executable: str = "latexmk",
     review_bundle: Path | None = None,
     audit_runner: Callable[[Path], AuditReport] = audit_final_release,
     checksum_verifier: Callable[[Path, str], list[str]] = verify_sha256_manifest,
@@ -423,11 +792,22 @@ def plan_submission_package(
 ) -> PackagePlan:
     """Validate every input and return the exact package plan without writing it."""
     release_root = Path(release_root).resolve()
-    paper_source_root = Path(paper_source_root).resolve()
     output_dir = Path(output_dir).resolve()
     if not release_root.is_dir():
-        raise SubmissionPackagingError(f"release root is not a directory: {release_root}")
-    deposition = _validate_deposition(raw_data_deposition)
+        raise SubmissionPackagingError(
+            f"release root is not a directory: {release_root}"
+        )
+    paper_state = inspect_paper_worktree(
+        paper_worktree_root,
+        paper_commit,
+        source_subdir=paper_source_subdir,
+        entrypoint=paper_entrypoint,
+    )
+    deposition = _validate_deposition(
+        raw_data_deposition,
+        raw_data_manifest_identifier,
+        release_root,
+    )
     archive_path = output_dir.with_suffix(output_dir.suffix + ".tar.gz")
     if output_dir.exists():
         raise SubmissionPackagingError(f"output directory already exists: {output_dir}")
@@ -435,7 +815,7 @@ def plan_submission_package(
         raise SubmissionPackagingError(f"output archive already exists: {archive_path}")
     for protected_root, label in (
         (release_root, "release root"),
-        (paper_source_root, "paper source root"),
+        (paper_state.worktree_root, "paper worktree root"),
     ):
         try:
             output_dir.relative_to(protected_root)
@@ -445,14 +825,26 @@ def plan_submission_package(
             raise SubmissionPackagingError(
                 f"output directory cannot be inside the {label}: {output_dir}"
             )
-    audit_report = _audit_release_or_fail(
-        release_root, audit_runner, checksum_verifier
-    )
+    audit_report = _audit_release_or_fail(release_root, audit_runner, checksum_verifier)
 
-    paper_files, excluded = discover_paper_source_files(paper_source_root)
-    figures = load_approved_figures(approved_figures_manifest, paper_source_root)
+    paper_files, excluded = discover_paper_source_files(
+        paper_state.worktree_root,
+        tracked_paths=paper_state.tracked_paths,
+    )
+    figures = load_approved_figures(
+        approved_figures_manifest,
+        paper_state.worktree_root,
+    )
+    for source in paper_files:
+        _require_tracked_paper_file(source, paper_state, "manuscript source")
+    for figure in figures:
+        _require_tracked_paper_file(
+            figure.source_path,
+            paper_state,
+            f"approved figure {figure.paper_path}",
+        )
     approved_source_paths = {
-        figure.source_path.relative_to(paper_source_root).as_posix()
+        figure.source_path.relative_to(paper_state.worktree_root).as_posix()
         for figure in figures
     }
     excluded = tuple(
@@ -460,7 +852,7 @@ def plan_submission_package(
     )
     approved_paths = {figure.paper_path for figure in figures}
     imported_graphics = set(
-        discover_imported_graphics(paper_source_root, paper_files)
+        discover_imported_graphics(paper_state.worktree_root, paper_files)
     )
     missing_approvals = sorted(imported_graphics - approved_paths)
     if missing_approvals:
@@ -489,14 +881,18 @@ def plan_submission_package(
     def add(destination: str, source: Path, role: str) -> None:
         destination = _safe_relative_path(destination, "package destination")
         if destination in destinations:
-            raise SubmissionPackagingError(f"duplicate package destination: {destination}")
+            raise SubmissionPackagingError(
+                f"duplicate package destination: {destination}"
+            )
         destinations.add(destination)
-        planned.append(PlannedFile(destination, _require_regular_file(source, role), role))
+        planned.append(
+            PlannedFile(destination, _require_regular_file(source, role), role)
+        )
 
     for source_relative, destination, role in RELEASE_PAYLOADS:
         add(destination, release_root / source_relative, role)
     for source in paper_files:
-        relative = source.relative_to(paper_source_root).as_posix()
+        relative = source.relative_to(paper_state.worktree_root).as_posix()
         add(f"manuscript/source/{relative}", source, "manuscript_source")
     for figure in figures:
         add(
@@ -507,16 +903,29 @@ def plan_submission_package(
     for source, relative in _review_bundle_files(review_bundle):
         add(f"manuscript/review/{relative}", source, "review_bundle")
 
+    planned_files = tuple(sorted(planned, key=lambda item: item.destination))
+    _preflight_manuscript_compile(
+        planned_files,
+        source_subdir=paper_state.source_subdir,
+        entrypoint=paper_state.entrypoint,
+        latexmk_executable=latexmk_executable,
+    )
+
     return PackagePlan(
         release_root=release_root,
-        paper_source_root=paper_source_root,
+        paper_worktree_root=paper_state.worktree_root,
+        paper_commit=paper_state.commit,
+        paper_source_subdir=paper_state.source_subdir,
+        paper_entrypoint=paper_state.entrypoint,
+        paper_tracked_file_count=len(paper_state.tracked_paths),
+        latexmk_executable=latexmk_executable,
         output_dir=output_dir,
-        files=tuple(sorted(planned, key=lambda item: item.destination)),
+        files=planned_files,
         approved_figures=figures,
         figure_qa=tuple(figure_qa),
         excluded_paper_files=excluded,
         audit_summary=dict(audit_report.summaries),
-        raw_data_deposition=deposition,
+        raw_data_deposit=deposition,
         review_bundle=Path(review_bundle).resolve() if review_bundle else None,
     )
 
@@ -544,7 +953,7 @@ def _copy_file(source: Path, destination: Path) -> None:
 def _source_label(plan: PackagePlan, source: Path) -> str:
     for root, prefix in (
         (plan.release_root, "release"),
-        (plan.paper_source_root, "paper"),
+        (plan.paper_worktree_root, "paper"),
     ):
         try:
             relative = source.relative_to(root)
@@ -605,13 +1014,20 @@ def _write_inventory(
         },
         "raw_data": {
             "included": False,
-            "deposition": plan.raw_data_deposition,
+            "deposition": asdict(plan.raw_data_deposit),
             "excluded_paths": [
                 "raw_runs/",
                 "diagnostics/case_*",
                 "diagnostics/cell_metrics.csv",
                 "diagnostics/merge_events.csv",
             ],
+        },
+        "paper": {
+            "git_commit": plan.paper_commit,
+            "source_subdirectory": plan.paper_source_subdir,
+            "entrypoint": plan.paper_entrypoint,
+            "clean_pinned_worktree_verified": True,
+            "tracked_file_count": plan.paper_tracked_file_count,
         },
         "approved_figures": [
             {
@@ -668,10 +1084,18 @@ This package was assembled from the completed, programmatically audited release
 The 970 raw run bundles and large case/cell/merge diagnostic tables are deliberately
 excluded from this compact submission package. They are deposited at:
 
-{plan.raw_data_deposition}
+{plan.raw_data_deposit.location}
 
 `provenance/release/SHA256SUMS` identifies every file in the complete deposited
-release. `provenance/RAW_DATA_DEPOSITION.md` records the exclusion boundary.
+release. Its deposit binding is `{plan.raw_data_deposit.manifest_identifier}`.
+`provenance/RAW_DATA_DEPOSITION.md` records the exclusion boundary.
+
+## Manuscript Provenance
+
+The manuscript source came from clean paper commit `{plan.paper_commit}`. The
+packager compiled the staged source from a disposable copy. When this package was
+created with its outer archive, it also verified package checksums and compiled a
+disposable copy of the extracted manuscript before reporting success.
 
 ## Verification
 
@@ -689,10 +1113,13 @@ On macOS, `shasum -a 256 -c SHA256SUMS` provides the equivalent check.
 def _write_deposition_record(root: Path, plan: PackagePlan) -> None:
     text = f"""# Raw Data Deposition
 
-- Complete release identifier: `{plan.release_root.name}`
-- Deposition: {plan.raw_data_deposition}
+- Complete release identifier: `{plan.raw_data_deposit.release_name}`
+- Deposition: {plan.raw_data_deposit.location}
 - Raw data included in this compact package: no
 - Complete release checksum manifest: `provenance/release/SHA256SUMS`
+- Deposited release-manifest identifier: `{plan.raw_data_deposit.manifest_identifier}`
+- Release-manifest filename: `{plan.raw_data_deposit.manifest_name}`
+- Release-manifest SHA-256: `{plan.raw_data_deposit.manifest_sha256}`
 
 The external deposit should contain the complete audited release, including
 `raw_runs/` and the case-, cell-, merge-, and fallback-indexed diagnostic tables.
@@ -700,6 +1127,39 @@ The compact package retains the aggregate results and run inventory needed to ma
 paper results to those deposited bundles.
 """
     _write_text(root / "provenance" / "RAW_DATA_DEPOSITION.md", text)
+
+
+def _write_manuscript_build_record(
+    root: Path,
+    plan: PackagePlan,
+    *,
+    archive_verification_required: bool,
+) -> None:
+    payload = {
+        "schema_version": 1,
+        "paper_git_commit": plan.paper_commit,
+        "paper_source_subdirectory": plan.paper_source_subdir,
+        "entrypoint": plan.paper_entrypoint,
+        "compiler": Path(plan.latexmk_executable).name,
+        "compile_arguments": [
+            "-pdf",
+            "-interaction=nonstopmode",
+            "-halt-on-error",
+            "-outdir=<temporary-build-directory>",
+            plan.paper_entrypoint,
+        ],
+        "clean_pinned_worktree_verified": True,
+        "preflight_compile_passed": True,
+        "staged_compile_passed": True,
+        "compile_outputs_in_package": False,
+        "extracted_archive_compile_required_before_packager_success": (
+            archive_verification_required
+        ),
+    }
+    _write_text(
+        root / "provenance" / "manuscript_build.json",
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+    )
 
 
 def _write_release_audit_record(root: Path, plan: PackagePlan) -> None:
@@ -837,7 +1297,9 @@ def _write_deterministic_tar_gz(root: Path, archive_path: Path) -> None:
         temporary.unlink()
     try:
         with temporary.open("wb") as raw_stream:
-            with gzip.GzipFile(filename="", mode="wb", fileobj=raw_stream, mtime=0) as gzip_stream:
+            with gzip.GzipFile(
+                filename="", mode="wb", fileobj=raw_stream, mtime=0
+            ) as gzip_stream:
                 with tarfile.open(
                     fileobj=gzip_stream,
                     mode="w",
@@ -878,10 +1340,92 @@ def _write_deterministic_tar_gz(root: Path, archive_path: Path) -> None:
         raise
 
 
+def _extract_archive_safely(archive_path: Path, destination: Path) -> Path:
+    try:
+        with tarfile.open(archive_path, "r:gz") as archive:
+            members = archive.getmembers()
+            if not members:
+                raise SubmissionPackagingError("submission archive is empty")
+            top_levels: set[str] = set()
+            for member in members:
+                pure = PurePosixPath(member.name)
+                if pure.is_absolute() or ".." in pure.parts or not pure.parts:
+                    raise SubmissionPackagingError(
+                        f"unsafe path in submission archive: {member.name}"
+                    )
+                if member.issym() or member.islnk():
+                    raise SubmissionPackagingError(
+                        f"submission archive contains a link: {member.name}"
+                    )
+                if not member.isdir() and not member.isfile():
+                    raise SubmissionPackagingError(
+                        f"submission archive contains a special file: {member.name}"
+                    )
+                top_levels.add(pure.parts[0])
+            if len(top_levels) != 1:
+                raise SubmissionPackagingError(
+                    "submission archive must contain exactly one top-level directory"
+                )
+            archive.extractall(destination)
+    except (OSError, tarfile.TarError) as exc:
+        raise SubmissionPackagingError(
+            f"could not extract submission archive: {exc}"
+        ) from exc
+    extracted_root = destination / next(iter(top_levels))
+    if not extracted_root.is_dir():
+        raise SubmissionPackagingError(
+            "submission archive did not extract to a package directory"
+        )
+    return extracted_root
+
+
+def _verify_extracted_archive(archive_path: Path, plan: PackagePlan) -> None:
+    """Verify and compile an extracted archive without modifying its contents."""
+    with tempfile.TemporaryDirectory(prefix="submission-archive-check-") as temp:
+        extracted_root = _extract_archive_safely(archive_path, Path(temp))
+        checksum_errors = verify_package_checksums(extracted_root)
+        if checksum_errors:
+            raise SubmissionPackagingError(
+                "extracted package checksum verification failed: "
+                + "; ".join(checksum_errors[:5])
+            )
+        _compile_manuscript_tree(
+            extracted_root / "manuscript" / "source",
+            source_subdir=plan.paper_source_subdir,
+            entrypoint=plan.paper_entrypoint,
+            latexmk_executable=plan.latexmk_executable,
+        )
+        checksum_errors = verify_package_checksums(extracted_root)
+        if checksum_errors:
+            raise SubmissionPackagingError(
+                "manuscript compile contaminated the extracted package: "
+                + "; ".join(checksum_errors[:5])
+            )
+
+
 def build_submission_package(
     plan: PackagePlan, *, create_archive: bool = True
 ) -> tuple[Path, Path | None]:
     """Atomically materialize a validated package and optional deterministic archive."""
+    paper_state = inspect_paper_worktree(
+        plan.paper_worktree_root,
+        plan.paper_commit,
+        source_subdir=plan.paper_source_subdir,
+        entrypoint=plan.paper_entrypoint,
+    )
+    if len(paper_state.tracked_paths) != plan.paper_tracked_file_count:
+        raise SubmissionPackagingError(
+            "paper tracked-file inventory changed after package planning"
+        )
+    current_deposit = _validate_deposition(
+        plan.raw_data_deposit.location,
+        plan.raw_data_deposit.manifest_identifier,
+        plan.release_root,
+    )
+    if current_deposit != plan.raw_data_deposit:
+        raise SubmissionPackagingError(
+            "raw-data release-manifest binding changed after package planning"
+        )
     output_dir = plan.output_dir
     archive_path = output_dir.with_suffix(output_dir.suffix + ".tar.gz")
     if output_dir.exists():
@@ -898,11 +1442,22 @@ def build_submission_package(
             destination = staging.joinpath(*PurePosixPath(item.destination).parts)
             _copy_file(item.source, destination)
 
+        _compile_manuscript_tree(
+            staging / "manuscript" / "source",
+            source_subdir=plan.paper_source_subdir,
+            entrypoint=plan.paper_entrypoint,
+            latexmk_executable=plan.latexmk_executable,
+        )
         _extract_experiment_map(
             staging / "code" / "source_snapshot.tar.gz",
             staging / "docs" / "PAPER_EXPERIMENT_MAP.md",
         )
         _write_deposition_record(staging, plan)
+        _write_manuscript_build_record(
+            staging,
+            plan,
+            archive_verification_required=create_archive,
+        )
         _write_release_audit_record(staging, plan)
         _write_figure_approval_record(staging, plan)
         _write_vector_qa_record(staging, plan)
@@ -920,6 +1475,11 @@ def build_submission_package(
                     staging,
                     "provenance/RAW_DATA_DEPOSITION.md",
                     "raw_data_deposition",
+                ),
+                _generated_inventory_entry(
+                    staging,
+                    "provenance/manuscript_build.json",
+                    "manuscript_build_record",
                 ),
                 _generated_inventory_entry(
                     staging,
@@ -951,6 +1511,7 @@ def build_submission_package(
         staging.replace(output_dir)
         if create_archive:
             _write_deterministic_tar_gz(output_dir, archive_path)
+            _verify_extracted_archive(archive_path, plan)
         return output_dir, archive_path if create_archive else None
     except Exception:
         if staging.exists():
@@ -969,7 +1530,11 @@ def _plan_payload(plan: PackagePlan) -> dict:
         "audit_summary": dict(sorted(plan.audit_summary.items())),
         "output_dir": str(plan.output_dir),
         "raw_data_included": False,
-        "raw_data_deposition": plan.raw_data_deposition,
+        "raw_data_deposition": plan.raw_data_deposit.location,
+        "raw_data_manifest_identifier": (plan.raw_data_deposit.manifest_identifier),
+        "paper_commit": plan.paper_commit,
+        "paper_entrypoint": plan.paper_entrypoint,
+        "manuscript_compile_preflight_passed": True,
         "approved_figure_count": len(plan.approved_figures),
         "paper_source_file_count": sum(
             item.role == "manuscript_source" for item in plan.files
@@ -982,10 +1547,44 @@ def _plan_payload(plan: PackagePlan) -> dict:
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--release-root", type=Path, required=True)
-    parser.add_argument("--paper-source-root", type=Path, required=True)
+    parser.add_argument(
+        "--paper-worktree-root",
+        "--paper-source-root",
+        dest="paper_worktree_root",
+        type=Path,
+        required=True,
+        help=(
+            "clean paper Git top level containing interface-reconstruction-paper/; "
+            "--paper-source-root is retained as a compatibility alias"
+        ),
+    )
+    parser.add_argument(
+        "--paper-commit",
+        required=True,
+        help="full 40-character paper Git commit required at the worktree HEAD",
+    )
+    parser.add_argument(
+        "--paper-source-subdir",
+        default=DEFAULT_PAPER_SOURCE_SUBDIR,
+    )
+    parser.add_argument(
+        "--paper-entrypoint",
+        default=DEFAULT_PAPER_ENTRYPOINT,
+    )
+    parser.add_argument(
+        "--latexmk-executable",
+        default="latexmk",
+        help="latexmk executable used for disposable manuscript compile gates",
+    )
     parser.add_argument("--approved-figures-manifest", type=Path, required=True)
     parser.add_argument("--review-bundle", type=Path)
     parser.add_argument("--raw-data-deposition", required=True)
+    parser.add_argument(
+        "--raw-data-manifest-id",
+        dest="raw_data_manifest_identifier",
+        required=True,
+        help="sha256:<digest> of the complete release SHA256SUMS file",
+    )
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument(
         "--dry-run",
@@ -1005,10 +1604,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         plan = plan_submission_package(
             release_root=args.release_root,
-            paper_source_root=args.paper_source_root,
+            paper_worktree_root=args.paper_worktree_root,
+            paper_commit=args.paper_commit,
+            paper_source_subdir=args.paper_source_subdir,
+            paper_entrypoint=args.paper_entrypoint,
+            latexmk_executable=args.latexmk_executable,
             approved_figures_manifest=args.approved_figures_manifest,
             review_bundle=args.review_bundle,
             raw_data_deposition=args.raw_data_deposition,
+            raw_data_manifest_identifier=args.raw_data_manifest_identifier,
             output_dir=args.output_dir,
         )
         if args.dry_run:
