@@ -1895,11 +1895,14 @@ def main():
         csv_path = Path(args.plot_from_csv)
         if not csv_path.exists():
             raise FileNotFoundError(f"CSV not found: {csv_path}")
-        plots_by_exp = _generate_summary_plots(
-            str(csv_path),
-            summary_dir,
-            legacy_lvira_means_elvira=args.legacy_lvira_means_elvira,
-        )
+        if args.legacy_lvira_means_elvira:
+            plots_by_exp = _generate_summary_plots(
+                str(csv_path),
+                summary_dir,
+                legacy_lvira_means_elvira=True,
+            )
+        else:
+            plots_by_exp = _generate_summary_plots(str(csv_path), summary_dir)
         print(f"Generated perturbed summary plots from {csv_path}")
         if notify:
             for exp, plot_paths in plots_by_exp.items():
