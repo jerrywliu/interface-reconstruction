@@ -330,7 +330,7 @@ if any(reachable.values()) or injectable:
     ),
     reason="Poppler PDF tools are unavailable",
 )
-def test_real_transaction_accepts_freezes_publishes_and_cleans_attack(tmp_path):
+def test_real_transaction_races_after_preflight_and_requires_noreplace(tmp_path):
     worker = REPO_ROOT / "test/submission/final_figure_transaction_probe.py"
     boundary = REPO_ROOT / "submission/final_figure_orchestrator.py"
     completed = subprocess.run(
@@ -345,7 +345,7 @@ def test_real_transaction_accepts_freezes_publishes_and_cleans_attack(tmp_path):
         check=True,
         capture_output=True,
         text=True,
-        timeout=120,
+        timeout=180,
     )
     result = json.loads(completed.stdout)
 
@@ -365,11 +365,34 @@ def test_real_transaction_accepts_freezes_publishes_and_cleans_attack(tmp_path):
     }
     attack = result["destination_attack"]
     assert "destination appeared before publish" in attack["error"]
+    assert attack["rejected_by_noreplace"]
+    assert "_rename_directory_noreplace" in attack["traceback_functions"]
+    assert attack["read_only_observed"]
+    assert attack["staging_absent_when_observed"]
+    assert attack["attacker_error"] is None
     assert attack["winner"] == "competing winner\n"
     assert attack["reservation_cleaned"]
     assert attack["staging_cleaned"]
     assert attack["acceptance_temporaries"] == 0
     assert attack["publish_temporaries"] == 0
+
+    mutation = subprocess.run(
+        [
+            str(Path(sys.executable).resolve()),
+            "-I",
+            str(worker),
+            str(boundary),
+            str(tmp_path / "mutation"),
+            "--mutate-rename",
+        ],
+        cwd=tmp_path,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    assert mutation.returncode == 3, mutation.stderr
+    assert "MUTATION DETECTED: ordinary rename failed after the race" in mutation.stderr
 
 
 def test_trusted_launcher_ignores_pythonpath_and_user_sitecustomize(tmp_path):

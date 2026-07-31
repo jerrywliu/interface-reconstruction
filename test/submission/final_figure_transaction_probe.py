@@ -8,7 +8,14 @@ import os
 import shutil
 import stat
 import sys
+import threading
+import time
 from pathlib import Path
+
+
+FROZEN_VERIFY_BALLAST_BYTES = 256 * 1024 * 1024
+POST_READ_ONLY_DELAY_SECONDS = 0.02
+ATTACK_OBSERVATION_TIMEOUT_SECONDS = 30.0
 
 
 def _load_script_boundary(path: Path) -> dict:
@@ -58,7 +65,7 @@ def _write_candidate_pdf(path: Path, label: str) -> None:
     drawing.save()
 
 
-def _make_staging(namespace: dict, root: Path):
+def _make_staging(namespace: dict, root: Path, *, frozen_verify_ballast=False):
     staging = root / "staging"
     staging.mkdir(parents=True)
     specs = namespace["load_candidate_allowlist"]()
@@ -109,6 +116,10 @@ def _make_staging(namespace: dict, root: Path):
         allowlist_path=allowlist,
         candidate_records=candidates,
     )
+    if frozen_verify_ballast:
+        ballast = staging / "zz_frozen_verify_ballast.bin"
+        with ballast.open("wb") as stream:
+            stream.truncate(FROZEN_VERIFY_BALLAST_BYTES)
     return staging, manifest, specs, state
 
 
@@ -160,15 +171,48 @@ def _run_success(namespace: dict, root: Path, runtime) -> dict:
 
 def _run_destination_attack(namespace: dict, root: Path, runtime) -> dict:
     root.mkdir()
-    staging, manifest, specs, state = _make_staging(namespace, root)
+    staging, manifest, specs, state = _make_staging(
+        namespace, root, frozen_verify_ballast=True
+    )
     output = root / "publication"
     reservation = namespace["_reserve_publication"](output)
     reservation_path = reservation.path
 
-    output.mkdir()
     sentinel = output / "winner.txt"
-    sentinel.write_text("competing winner\n", encoding="utf-8")
+    observation = {}
+
+    def create_competing_destination():
+        deadline = time.monotonic() + ATTACK_OBSERVATION_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            publish_trees = list(root.glob(".publication.publish-*"))
+            if publish_trees and not staging.exists():
+                publish_tree = publish_trees[0]
+                try:
+                    mode = stat.S_IMODE(publish_tree.stat().st_mode)
+                except FileNotFoundError:
+                    continue
+                if mode == 0o500:
+                    observation["read_only_seen_at"] = time.monotonic()
+                    observation["publish_tree"] = str(publish_tree)
+                    observation["staging_absent"] = not staging.exists()
+                    break
+            time.sleep(0.0005)
+        else:
+            observation["error"] = "timed out observing frozen publication tree"
+            return
+
+        time.sleep(POST_READ_ONLY_DELAY_SECONDS)
+        try:
+            output.mkdir()
+            sentinel.write_text("competing winner\n", encoding="utf-8")
+            observation["destination_created_at"] = time.monotonic()
+        except Exception as exc:
+            observation["error"] = f"attacker could not create destination: {exc}"
+
+    attacker = threading.Thread(target=create_competing_destination)
+    attacker.start()
     error = None
+    traceback_functions = []
     try:
         namespace["_complete_publication_transaction"](
             staging=staging,
@@ -181,8 +225,20 @@ def _run_destination_attack(namespace: dict, root: Path, runtime) -> dict:
         )
     except namespace["FinalFigureOrchestrationError"] as exc:
         error = str(exc)
+        traceback = exc.__traceback__
+        while traceback is not None:
+            traceback_functions.append(traceback.tb_frame.f_code.co_name)
+            traceback = traceback.tb_next
+    attacker.join(timeout=ATTACK_OBSERVATION_TIMEOUT_SECONDS)
+    if attacker.is_alive():
+        raise RuntimeError("destination attacker did not terminate")
     result = {
         "error": error,
+        "rejected_by_noreplace": "_rename_directory_noreplace" in traceback_functions,
+        "traceback_functions": traceback_functions,
+        "read_only_observed": "read_only_seen_at" in observation,
+        "staging_absent_when_observed": observation.get("staging_absent", False),
+        "attacker_error": observation.get("error"),
         "winner": sentinel.read_text(encoding="utf-8"),
         "reservation_cleaned": not reservation_path.exists(),
         "staging_cleaned": not staging.exists(),
@@ -198,6 +254,19 @@ def main() -> int:
     work = Path(sys.argv[2]).resolve()
     namespace = _load_script_boundary(boundary)
     runtime = namespace["prepare_trusted_figure_runtime"](work / "runtime")
+    mutate_rename = len(sys.argv) > 3 and sys.argv[3] == "--mutate-rename"
+    if mutate_rename:
+        namespace["_rename_directory_noreplace"] = os.rename
+        try:
+            _run_destination_attack(namespace, work / "mutation-attack", runtime)
+        except OSError as exc:
+            print(
+                f"MUTATION DETECTED: ordinary rename failed after the race: {exc}",
+                file=sys.stderr,
+            )
+            return 3
+        print("MUTATION SURVIVED: ordinary rename was not detected", file=sys.stderr)
+        return 4
     result = {
         "success": _run_success(namespace, work / "success", runtime),
         "destination_attack": _run_destination_attack(
