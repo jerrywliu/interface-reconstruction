@@ -486,14 +486,20 @@ def _build_aggregate_plot(save_name, sample_count=5):
     return str(out_path), indices
 
 
-def _load_sweep_rows(csv_path):
+def _load_sweep_rows(csv_path, *, legacy_lvira_means_elvira=False):
+    """Load sweep rows without inferring method identity from CSV coverage.
+
+    Before ELVIRA and LVIRA became separate baselines, sweep CSVs used the
+    label ``LVIRA`` for the implementation now called ELVIRA. Those files are
+    inherently ambiguous, so compatibility requires an explicit opt-in rather
+    than treating every modern LVIRA-only sweep as legacy data.
+    """
     rows = []
     with open(csv_path, "r", newline="") as csvfile:
         reader = csv.DictReader(csvfile)
         for row in reader:
             rows.append(row)
-    algos = {row.get("algo") for row in rows}
-    if "ELVIRA" not in algos and "LVIRA" in algos:
+    if legacy_lvira_means_elvira:
         for row in rows:
             if row.get("algo") == "LVIRA":
                 row["algo"] = "ELVIRA"
@@ -1423,8 +1429,11 @@ def _generate_zalesak_method_summary_plots(data, out_dir):
     return plots
 
 
-def _generate_summary_plots(csv_path, out_dir):
-    rows = _load_sweep_rows(csv_path)
+def _generate_summary_plots(csv_path, out_dir, *, legacy_lvira_means_elvira=False):
+    rows = _load_sweep_rows(
+        csv_path,
+        legacy_lvira_means_elvira=legacy_lvira_means_elvira,
+    )
     data = _build_metric_index(rows)
     plots_by_exp = {}
 
@@ -1853,12 +1862,23 @@ def main():
         help="skip sweep execution and generate summary plots from an existing CSV",
     )
     parser.add_argument(
+        "--legacy_lvira_means_elvira",
+        action="store_true",
+        help=(
+            "interpret LVIRA rows as ELVIRA when replaying a provenance-confirmed "
+            "CSV created before the ELVIRA/LVIRA baseline split"
+        ),
+    )
+    parser.add_argument(
         "--collect_existing",
         action="store_true",
         help="skip execution and collect metrics from existing plots/perturb_sweep_* outputs",
     )
 
     args = parser.parse_args()
+
+    if args.legacy_lvira_means_elvira and not args.plot_from_csv:
+        parser.error("--legacy_lvira_means_elvira requires --plot_from_csv")
 
     load_slack_env()
     notify = (
@@ -1875,7 +1895,11 @@ def main():
         csv_path = Path(args.plot_from_csv)
         if not csv_path.exists():
             raise FileNotFoundError(f"CSV not found: {csv_path}")
-        plots_by_exp = _generate_summary_plots(str(csv_path), summary_dir)
+        plots_by_exp = _generate_summary_plots(
+            str(csv_path),
+            summary_dir,
+            legacy_lvira_means_elvira=args.legacy_lvira_means_elvira,
+        )
         print(f"Generated perturbed summary plots from {csv_path}")
         if notify:
             for exp, plot_paths in plots_by_exp.items():
