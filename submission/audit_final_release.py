@@ -29,6 +29,7 @@ from decimal import Decimal, DecimalException
 from pathlib import Path, PurePosixPath
 from typing import Iterable, Iterator, Mapping, Sequence
 
+import numpy as np
 import yaml
 
 
@@ -1351,6 +1352,98 @@ def _git_sha1(object_type: str, data: bytes) -> str:
     return hashlib.sha1(header + data).hexdigest()
 
 
+def _verified_git_tree_entries(
+    repository: Path,
+    tree_id: str,
+    tree_path: PurePosixPath,
+    cache: dict[str, tuple[tuple[str, str, str], ...]],
+) -> tuple[tuple[str, str, str], ...]:
+    cached = cache.get(tree_id)
+    if cached is not None:
+        return cached
+
+    result = _run_git(repository, ("cat-file", "tree", tree_id))
+    label = tree_path.as_posix() if tree_path.parts else "."
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", errors="replace").strip()
+        raise ReleaseAuditInputError(
+            f"could not read Git tree object {tree_id} at {label!r}: {detail}"
+        )
+    if _git_sha1("tree", result.stdout) != tree_id:
+        raise ReleaseAuditInputError(
+            f"Git tree object hash verification failed at {label!r}: {tree_id}"
+        )
+
+    entries: list[tuple[str, str, str]] = []
+    names: set[str] = set()
+    cursor = 0
+    try:
+        while cursor < len(result.stdout):
+            mode_end = result.stdout.index(b" ", cursor)
+            name_end = result.stdout.index(b"\0", mode_end + 1)
+            object_end = name_end + 21
+            if object_end > len(result.stdout):
+                raise ValueError("truncated object ID")
+            mode = result.stdout[cursor:mode_end].decode("ascii")
+            raw_name = result.stdout[mode_end + 1 : name_end]
+            name = raw_name.decode("utf-8")
+            object_id = result.stdout[name_end + 1 : object_end].hex()
+            if (
+                not name
+                or name in {".", ".."}
+                or "/" in name
+                or "\0" in name
+                or name in names
+            ):
+                raise ValueError(f"unsafe or duplicate entry name {name!r}")
+            if mode not in {"40000", "100644", "100755"}:
+                raise ValueError(f"unsupported mode {mode!r} for {name!r}")
+            if not re.fullmatch(r"[0-9a-f]{40}", object_id):
+                raise ValueError(f"invalid object ID for {name!r}")
+            names.add(name)
+            entries.append((mode, name, object_id))
+            cursor = object_end
+    except (UnicodeError, ValueError) as exc:
+        raise ReleaseAuditInputError(
+            f"could not parse Git tree object {tree_id} at {label!r}: {exc}"
+        ) from exc
+
+    parsed = tuple(entries)
+    cache[tree_id] = parsed
+    return parsed
+
+
+def _walk_verified_git_tree(
+    repository: Path,
+    tree_id: str,
+    prefix: PurePosixPath,
+    tree_cache: dict[str, tuple[tuple[str, str, str], ...]],
+    ancestry: frozenset[str],
+) -> list[tuple[str, str, str]]:
+    if tree_id in ancestry:
+        raise ReleaseAuditInputError(
+            f"Git tree cycle detected at {prefix.as_posix()!r}: {tree_id}"
+        )
+    entries = _verified_git_tree_entries(repository, tree_id, prefix, tree_cache)
+    blobs: list[tuple[str, str, str]] = []
+    child_ancestry = ancestry | {tree_id}
+    for mode, name, object_id in entries:
+        path = prefix / name
+        if mode == "40000":
+            blobs.extend(
+                _walk_verified_git_tree(
+                    repository,
+                    object_id,
+                    path,
+                    tree_cache,
+                    child_ancestry,
+                )
+            )
+        else:
+            blobs.append((path.as_posix(), mode, object_id))
+    return blobs
+
+
 def _find_git_repository(root: Path, target_commit: str) -> Path:
     candidates = (root, Path(__file__).resolve().parents[1])
     repositories: list[Path] = []
@@ -1393,60 +1486,16 @@ def _git_tree_blobs(repository: Path, target_commit: str) -> dict[str, GitBlob]:
     if not re.fullmatch(rb"tree [0-9a-f]{40}", first_line):
         raise ReleaseAuditInputError("target commit has no canonical tree linkage")
     tree_id = first_line[5:].decode("ascii")
-    tree_object = _run_git(repository, ("cat-file", "tree", tree_id))
-    if tree_object.returncode != 0 or _git_sha1("tree", tree_object.stdout) != tree_id:
-        raise ReleaseAuditInputError(
-            "target commit's root tree object failed independent hash verification"
-        )
-    result = _run_git(
+    entries = _walk_verified_git_tree(
         repository,
-        ("ls-tree", "-r", "-z", "--full-tree", tree_id),
+        tree_id,
+        PurePosixPath(),
+        {},
+        frozenset(),
     )
-    if result.returncode != 0:
-        detail = result.stderr.decode("utf-8", errors="replace").strip()
-        raise ReleaseAuditInputError(
-            f"could not enumerate target_commit tree: {detail}"
-        )
-
-    entries: list[tuple[str, str, str]] = []
-    paths: set[str] = set()
-    try:
-        records = result.stdout.split(b"\0")
-        if records[-1] != b"":
-            raise ReleaseAuditInputError("Git ls-tree output is not NUL terminated")
-        for record in records[:-1]:
-            metadata, raw_path = record.split(b"\t", 1)
-            mode, object_type, object_id = metadata.decode("ascii").split(" ")
-            path = raw_path.decode("utf-8")
-            pure = PurePosixPath(path)
-            if (
-                not path
-                or pure.is_absolute()
-                or ".." in pure.parts
-                or str(pure) != path
-            ):
-                raise ReleaseAuditInputError(
-                    f"unsafe path in target_commit tree: {path!r}"
-                )
-            if path in paths:
-                raise ReleaseAuditInputError(
-                    f"duplicate path in target_commit tree: {path!r}"
-                )
-            if object_type != "blob" or mode not in {"100644", "100755"}:
-                raise ReleaseAuditInputError(
-                    f"unsupported tracked source entry {path!r}: "
-                    f"mode={mode!r}, type={object_type!r}"
-                )
-            if not re.fullmatch(r"[0-9a-f]{40}", object_id):
-                raise ReleaseAuditInputError(
-                    f"invalid blob object ID for tracked source entry {path!r}"
-                )
-            paths.add(path)
-            entries.append((path, mode, object_id))
-    except (UnicodeError, ValueError) as exc:
-        raise ReleaseAuditInputError(
-            f"could not parse Git ls-tree output: {exc}"
-        ) from exc
+    paths = [path for path, _, _ in entries]
+    if len(paths) != len(set(paths)):
+        raise ReleaseAuditInputError("duplicate path in recursively verified Git tree")
 
     request = b"".join(object_id.encode("ascii") + b"\n" for _, _, object_id in entries)
     blobs = _run_git(repository, ("cat-file", "--batch"), input_data=request)
@@ -2536,135 +2585,112 @@ def _rotated_point(
     )
 
 
-def _check_case_geometry_contract(
-    row: Mapping[str, object],
-    key: RunKey,
-    case_index: int,
-    trials: int,
-    config: Mapping[str, object],
-    label: str,
-    report: AuditReport,
-) -> None:
+def _replay_benchmark_case_geometries(
+    config: Mapping[str, object], trials: int
+) -> dict[tuple[str, int], dict[str, object]]:
     benchmarks = config.get("benchmarks")
     if not isinstance(benchmarks, Mapping):
-        report.add_error(f"{label} cannot resolve benchmark geometry")
-        return
-    benchmark = benchmarks.get(key.experiment)
-    if not isinstance(benchmark, Mapping):
-        report.add_error(f"{label} has no benchmark geometry declaration")
-        return
-    expected_type = BENCHMARK_GEOMETRY_TYPES.get(key.experiment)
-    if row.get("geometry_type") != expected_type:
-        report.add_error(
-            f"{label} geometry_type differs from benchmark: "
-            f"{row.get('geometry_type')!r} != {expected_type!r}"
+        raise ReleaseAuditInputError(
+            "resolved benchmarks cannot replay benchmark case geometry"
+        )
+    if trials <= 0:
+        raise ReleaseAuditInputError(
+            f"benchmark geometry replay requires positive trials, got {trials}"
         )
 
-    if key.experiment == "lines":
-        expected_angle = case_index * 2.0 * math.pi / trials
-        _require_numeric_close(
-            row.get("angle"), expected_angle, f"{label} angle", report
-        )
-        left = _check_point_in_unit_center_box(
-            row.get("p_left"), f"{label} p_left", report
-        )
-        if left is not None:
-            expected_right = (
-                left[0] + 0.2,
-                left[1] + math.tan(expected_angle) * 0.2,
+    replayed: dict[tuple[str, int], dict[str, object]] = {}
+    for experiment, benchmark in benchmarks.items():
+        if experiment not in BENCHMARK_RANDOM_SEEDS:
+            raise ReleaseAuditInputError(
+                f"benchmark geometry replay does not recognize {experiment!r}"
             )
-            _require_point_close(
-                row.get("p_right"), expected_right, f"{label} p_right", report
+        if not isinstance(benchmark, Mapping):
+            raise ReleaseAuditInputError(
+                f"benchmark geometry replay has no declaration for {experiment!r}"
             )
-    elif key.experiment == "circles":
-        _require_numeric_close(
-            row.get("radius"), benchmark.get("radius"), f"{label} radius", report
-        )
-        _check_point_in_unit_center_box(row.get("center"), f"{label} center", report)
-    elif key.experiment == "ellipses":
-        denominator = max(trials - 1, 1)
-        aspect_ratio = 1.5 + 1.5 * case_index / denominator
-        _require_numeric_close(
-            row.get("aspect_ratio"), aspect_ratio, f"{label} aspect_ratio", report
-        )
-        _require_numeric_close(row.get("major_axis"), 30, f"{label} major_axis", report)
-        _require_numeric_close(
-            row.get("minor_axis"), 30 / aspect_ratio, f"{label} minor_axis", report
-        )
-        _check_point_in_unit_center_box(row.get("center"), f"{label} center", report)
-    elif key.experiment == "squares":
-        denominator = max(trials - 1, 1)
-        side_length = 10.0 + 20.0 * case_index / denominator
-        _require_numeric_close(
-            row.get("side_length"), side_length, f"{label} side_length", report
-        )
-        center = _check_point_in_unit_center_box(
-            row.get("center"), f"{label} center", report
-        )
-        vertices = row.get("vertices")
-        if not isinstance(vertices, list) or len(vertices) != 4:
-            report.add_error(f"{label} does not contain four square vertices")
+        seed = BENCHMARK_RANDOM_SEEDS[experiment]
+        rng = np.random.default_rng(seed)
+        if experiment == "lines":
+            case_values = np.linspace(0, 2 * np.pi, trials + 1)[:-1]
+        elif experiment == "ellipses":
+            case_values = np.linspace(1.5, 3.0, trials)
+        elif experiment == "squares":
+            case_values = np.linspace(10, 30, trials)
         else:
-            for vertex_index, vertex in enumerate(vertices):
-                _check_point(vertex, f"{label} vertices[{vertex_index}]", report)
-    elif key.experiment == "zalesak":
-        for field_name, config_name in (
-            ("radius", "radius"),
-            ("slot_width", "slot_width"),
-            ("slot_top_rel", "slot_top_relative_to_center"),
-        ):
-            _require_numeric_close(
-                row.get(field_name),
-                benchmark.get(config_name),
-                f"{label} {field_name}",
-                report,
-            )
-        center = _check_point_in_unit_center_box(
-            row.get("center"), f"{label} center", report
-        )
-        vertices = row.get("slot_vertices")
-        if not isinstance(vertices, list) or len(vertices) != 4:
-            report.add_error(f"{label} does not contain four slot vertices")
-        else:
-            for vertex_index, vertex in enumerate(vertices):
-                _check_point(vertex, f"{label} slot_vertices[{vertex_index}]", report)
+            case_values = range(trials)
 
-    if key.experiment in {"ellipses", "squares", "zalesak"}:
-        try:
-            theta = float(_bounded_decimal(row.get("theta"), f"{label} theta"))
-        except (ReleaseAuditInputError, ValueError, OverflowError) as exc:
-            report.add_error(str(exc))
-        else:
-            if not 0.0 <= theta < math.pi / 2:
-                report.add_error(f"{label} theta is outside [0, pi/2): {theta}")
-            elif (
-                key.experiment == "squares"
-                and center is not None
-                and isinstance(vertices, list)
-                and len(vertices) == 4
-            ):
-                half_side = side_length / 2.0
-                unrotated = (
-                    (center[0] - half_side, center[1] - half_side),
-                    (center[0] + half_side, center[1] - half_side),
-                    (center[0] + half_side, center[1] + half_side),
-                    (center[0] - half_side, center[1] + half_side),
+        for case_index, case_value in enumerate(case_values):
+            if experiment == "lines":
+                angle = float(case_value)
+                x1 = float(rng.uniform(50, 51))
+                y1 = float(rng.uniform(50, 51))
+                x2 = x1 + 0.2
+                y2 = y1 + float(np.tan(case_value)) * (x2 - x1)
+                payload: dict[str, object] = {
+                    "geometry_type": "line",
+                    "angle": angle,
+                    "p_left": [x1, y1],
+                    "p_right": [x2, y2],
+                    "truth_vtp": f"vtk/true/true_line{case_index}.vtp",
+                    "truth_metadata": (
+                        f"vtk/true/true_line{case_index}.facet_metadata.json"
+                    ),
+                }
+            elif experiment == "circles":
+                center = [float(rng.uniform(50, 51)), float(rng.uniform(50, 51))]
+                payload = {
+                    "geometry_type": "circle",
+                    "center": center,
+                    "radius": benchmark.get("radius"),
+                    "truth_vtp": f"vtk/true/true_circle{case_index}.vtp",
+                    "truth_metadata": (
+                        f"vtk/true/true_circle{case_index}.facet_metadata.json"
+                    ),
+                }
+            elif experiment == "ellipses":
+                aspect_ratio = float(case_value)
+                center = [float(rng.uniform(50, 51)), float(rng.uniform(50, 51))]
+                theta = float(rng.uniform(0, math.pi / 2))
+                major_axis = 30
+                payload = {
+                    "geometry_type": "ellipse",
+                    "center": center,
+                    "major_axis": major_axis,
+                    "minor_axis": major_axis / aspect_ratio,
+                    "aspect_ratio": aspect_ratio,
+                    "theta": theta,
+                    "truth_representation": "analytic_rotated_ellipse",
+                }
+            elif experiment == "squares":
+                side_length = float(case_value)
+                center = [float(rng.uniform(50, 51)), float(rng.uniform(50, 51))]
+                theta = float(rng.uniform(0, math.pi / 2))
+                half_side = side_length / 2
+                square = (
+                    (-half_side, -half_side),
+                    (half_side, -half_side),
+                    (half_side, half_side),
+                    (-half_side, half_side),
                 )
-                for vertex_index, (vertex, expected_vertex) in enumerate(
-                    zip(vertices, unrotated)
-                ):
-                    _require_point_close(
-                        vertex,
-                        _rotated_point(expected_vertex, center, theta),
-                        f"{label} vertices[{vertex_index}]",
-                        report,
-                    )
-            elif (
-                key.experiment == "zalesak"
-                and center is not None
-                and isinstance(vertices, list)
-                and len(vertices) == 4
-            ):
+                vertices = []
+                for x, y in square:
+                    rotated_x = x * math.cos(theta) - y * math.sin(theta)
+                    rotated_y = x * math.sin(theta) + y * math.cos(theta)
+                    vertices.append([rotated_x + center[0], rotated_y + center[1]])
+                payload = {
+                    "geometry_type": "square",
+                    "center": center,
+                    "side_length": side_length,
+                    "theta": theta,
+                    "vertices": vertices,
+                    "truth_vtp": f"vtk/true/true_square{case_index}.vtp",
+                    "truth_metadata": (
+                        f"vtk/true/true_square{case_index}.facet_metadata.json"
+                    ),
+                }
+            else:
+                center = [float(rng.uniform(50, 51)), float(rng.uniform(50, 51))]
+                theta = float(rng.uniform(0, math.pi / 2))
                 try:
                     radius = float(_bounded_decimal(benchmark.get("radius"), "radius"))
                     slot_width = float(
@@ -2675,25 +2701,113 @@ def _check_case_geometry_contract(
                             benchmark.get("slot_top_relative_to_center"), "slot_top"
                         )
                     )
-                except (ReleaseAuditInputError, ValueError, OverflowError) as exc:
-                    report.add_error(str(exc))
-                    return
-                half_width = slot_width / 2.0
-                unrotated = (
-                    (center[0] - half_width, center[1] - radius - 1.0e-6),
-                    (center[0] + half_width, center[1] - radius - 1.0e-6),
-                    (center[0] + half_width, center[1] + slot_top),
-                    (center[0] - half_width, center[1] + slot_top),
+                except (ValueError, OverflowError) as exc:
+                    raise ReleaseAuditInputError(
+                        f"invalid Zalesak benchmark geometry: {exc}"
+                    ) from exc
+                half_width = slot_width * 0.5
+                rectangle = (
+                    [center[0] - half_width, center[1] - radius - 1.0e-6],
+                    [center[0] + half_width, center[1] - radius - 1.0e-6],
+                    [center[0] + half_width, center[1] + slot_top],
+                    [center[0] - half_width, center[1] + slot_top],
                 )
-                for vertex_index, (vertex, expected_vertex) in enumerate(
-                    zip(vertices, unrotated)
-                ):
-                    _require_point_close(
-                        vertex,
-                        _rotated_point(expected_vertex, center, theta),
-                        f"{label} slot_vertices[{vertex_index}]",
-                        report,
-                    )
+                slot_vertices = [
+                    list(_rotated_point(tuple(point), tuple(center), theta))
+                    for point in rectangle
+                ]
+                payload = {
+                    "geometry_type": "zalesak",
+                    "center": center,
+                    "radius": benchmark.get("radius"),
+                    "slot_width": benchmark.get("slot_width"),
+                    "slot_top_rel": benchmark.get("slot_top_relative_to_center"),
+                    "theta": theta,
+                    "slot_vertices": slot_vertices,
+                    "truth_vtp": f"vtk/true/true_zalesak{case_index}.vtp",
+                    "truth_metadata": (
+                        f"vtk/true/true_zalesak{case_index}.facet_metadata.json"
+                    ),
+                }
+            replayed[(experiment, case_index)] = payload
+    return replayed
+
+
+def _check_replayed_geometry_value(
+    actual: object,
+    expected: object,
+    label: str,
+    report: AuditReport,
+) -> None:
+    if isinstance(expected, list):
+        if not isinstance(actual, list) or len(actual) != len(expected):
+            report.add_error(
+                f"{label} differs from exact seeded benchmark replay: "
+                f"{actual!r} != {expected!r}"
+            )
+            return
+        for index, (actual_item, expected_item) in enumerate(zip(actual, expected)):
+            _check_replayed_geometry_value(
+                actual_item,
+                expected_item,
+                f"{label}[{index}]",
+                report,
+            )
+        return
+    if isinstance(expected, (int, float, Decimal)) and not isinstance(expected, bool):
+        if not isinstance(actual, (int, Decimal)) or isinstance(actual, bool):
+            report.add_error(
+                f"{label} differs from exact seeded benchmark replay: "
+                f"{actual!r} != {expected!r}"
+            )
+            return
+        try:
+            actual_number = _bounded_decimal(actual, label)
+            expected_number = _bounded_decimal(expected, f"{label} expected")
+        except (ReleaseAuditInputError, ValueError, OverflowError) as exc:
+            report.add_error(str(exc))
+            return
+        if actual_number != expected_number:
+            report.add_error(
+                f"{label} differs from exact seeded benchmark replay: "
+                f"{actual!r} != {expected!r}"
+            )
+        return
+    if type(actual) is not type(expected) or actual != expected:
+        report.add_error(
+            f"{label} differs from exact seeded benchmark replay: "
+            f"{actual!r} != {expected!r}"
+        )
+
+
+def _check_case_geometry_contract(
+    row: Mapping[str, object],
+    key: RunKey,
+    case_index: int,
+    expected_geometries: Mapping[tuple[str, int], Mapping[str, object]],
+    label: str,
+    report: AuditReport,
+) -> None:
+    expected = expected_geometries.get((key.experiment, case_index))
+    if expected is None:
+        report.add_error(f"{label} has no exact seeded benchmark replay record")
+        return
+    actual_fields = set(row) - set(RUN_CONTEXT_FIELDS) - {"case_index"}
+    expected_fields = set(expected)
+    if actual_fields != expected_fields:
+        missing = sorted(expected_fields - actual_fields)
+        unexpected = sorted(actual_fields - expected_fields)
+        report.add_error(
+            f"{label} geometry fields differ from reviewed driver output: "
+            f"missing={missing!r}, unexpected={unexpected!r}"
+        )
+    for field_name, expected_value in expected.items():
+        _check_replayed_geometry_value(
+            row.get(field_name),
+            expected_value,
+            f"{label} {field_name}",
+            report,
+        )
 
 
 def _check_case_metrics(
@@ -2797,6 +2911,11 @@ def _check_case_geometry(
     report: AuditReport,
 ) -> dict[tuple[RunKey, int], dict]:
     path = root / "diagnostics" / "case_geometry.jsonl"
+    try:
+        expected_geometries = _replay_benchmark_case_geometries(config, trials)
+    except ReleaseAuditInputError as exc:
+        report.add_error(str(exc))
+        expected_geometries = {}
     seen: set[tuple[RunKey, int]] = set()
     geometry: dict[tuple[RunKey, int], dict] = {}
     case_references: dict[tuple[str, int], object] = {}
@@ -2824,7 +2943,7 @@ def _check_case_geometry(
         if not row.get("geometry_type"):
             report.add_error(f"{label} has no geometry_type")
         _check_case_geometry_contract(
-            row, key, case_index, trials, config, label, report
+            row, key, case_index, expected_geometries, label, report
         )
         geometry_payload = {
             field_name: value
@@ -2988,6 +3107,111 @@ def _line_facet_signature(
         report.add_error(f"{label} fallback line has coincident endpoints")
         return None
     return tuple(sorted(points))  # type: ignore[return-value]
+
+
+def _read_reconstructed_facet_vtp(path: Path, report: AuditReport):
+    try:
+        import vtk
+    except ImportError as exc:
+        report.add_error(f"cannot validate reconstructed facet VTP without VTK: {exc}")
+        return None
+    try:
+        reader = vtk.vtkXMLPolyDataReader()
+        reader.SetGlobalWarningDisplay(False)
+        if reader.CanReadFile(str(path)) != 1:
+            report.add_error(f"reconstructed facet VTP is not readable: {path}")
+            return None
+        reader.SetFileName(str(path))
+        reader.Update()
+        if reader.GetErrorCode() != 0:
+            report.add_error(
+                f"reconstructed facet VTP reader failed with code "
+                f"{reader.GetErrorCode()}: {path}"
+            )
+            return None
+        polydata = reader.GetOutput()
+        if polydata is None:
+            report.add_error(f"reconstructed facet VTP has no PolyData output: {path}")
+            return None
+        return polydata
+    except Exception as exc:
+        report.add_error(f"could not read reconstructed facet VTP {path}: {exc}")
+        return None
+
+
+def _check_vtp_line_primitive(
+    polydata,
+    primitive_index: int,
+    signature: tuple[tuple[str, str], tuple[str, str]],
+    label: str,
+    report: AuditReport,
+) -> None:
+    if not 0 <= primitive_index < polydata.GetNumberOfLines():
+        report.add_error(
+            f"{label} primitive index {primitive_index} is absent from reconstructed VTP"
+        )
+        return
+    cell = polydata.GetCell(primitive_index)
+    if cell is None or cell.GetNumberOfPoints() != 2:
+        report.add_error(f"{label} reconstructed VTP cell is not a two-point line")
+        return
+    point_ids = cell.GetPointIds()
+    endpoints = (
+        polydata.GetPoint(point_ids.GetId(0)),
+        polydata.GetPoint(point_ids.GetId(cell.GetNumberOfPoints() - 1)),
+    )
+    expected = tuple(
+        (
+            float(np.float32(float(Decimal(point[0])))),
+            float(np.float32(float(Decimal(point[1])))),
+        )
+        for point in signature
+    )
+    actual = tuple((point[0], point[1]) for point in endpoints)
+    if not all(math.isfinite(value) for point in expected for value in point):
+        report.add_error(
+            f"{label} component geometry is not finite in the reviewed float32 "
+            "VTP representation"
+        )
+        return
+
+    if actual != expected and actual != tuple(reversed(expected)):
+        direct_error = sum(
+            abs(actual_value - expected_value)
+            for actual_point, expected_point in zip(actual, expected)
+            for actual_value, expected_value in zip(actual_point, expected_point)
+        )
+        reversed_expected = tuple(reversed(expected))
+        reverse_error = sum(
+            abs(actual_value - expected_value)
+            for actual_point, expected_point in zip(actual, reversed_expected)
+            for actual_value, expected_value in zip(actual_point, expected_point)
+        )
+        closest_expected = (
+            expected if direct_error <= reverse_error else reversed_expected
+        )
+        for endpoint_index, (actual_point, expected_point) in enumerate(
+            zip(actual, closest_expected)
+        ):
+            for coordinate_index, (actual_value, expected_value) in enumerate(
+                zip(actual_point, expected_point)
+            ):
+                if actual_value == expected_value:
+                    continue
+                report.add_error(
+                    f"{label} reconstructed VTP endpoint[{endpoint_index}]"
+                    f"[{coordinate_index}] differs from the exact float32 component "
+                    f"geometry: "
+                    f"{actual_value!r} != {expected_value!r}"
+                )
+    scalars = polydata.GetCellData().GetScalars()
+    if scalars is None or scalars.GetNumberOfTuples() <= primitive_index:
+        report.add_error(f"{label} reconstructed VTP has no facet type scalar")
+    elif int(scalars.GetTuple1(primitive_index)) != 8:
+        report.add_error(
+            f"{label} reconstructed VTP facet type is not the LVIRA code 8: "
+            f"{scalars.GetTuple1(primitive_index)!r}"
+        )
 
 
 def _count_csv_rows(
@@ -3899,6 +4123,9 @@ def _check_raw_cell_fallback_provenance(
     component_facets: dict[
         tuple[int, int], set[tuple[tuple[str, str], tuple[str, str]]]
     ] = defaultdict(set)
+    component_facet_indices: dict[tuple[int, int], int] = {}
+    component_order_by_case: dict[int, list[tuple[int, int]]] = defaultdict(list)
+    previous_component_by_case: dict[int, tuple[int, int]] = {}
     fallback_components: set[tuple[int, int]] = set()
     for row_number, row in enumerate(cell_rows, start=2):
         label = f"{cell_path}:{row_number}"
@@ -3909,6 +4136,18 @@ def _check_raw_cell_fallback_provenance(
         if not 0 <= case_index < trials:
             report.add_error(f"{label} references unexpected case {case_index}")
         component_key = (case_index, merge_id)
+        previous_component = previous_component_by_case.get(case_index)
+        if component_key not in component_facet_indices:
+            component_facet_indices[component_key] = len(
+                component_order_by_case[case_index]
+            )
+            component_order_by_case[case_index].append(component_key)
+        elif previous_component != component_key:
+            report.add_error(
+                f"{label} component rows are not contiguous for "
+                f"{key.display()}/case={case_index}/merge_id={merge_id}"
+            )
+        previous_component_by_case[case_index] = component_key
         component_paths[component_key].add(construction_path)
         try:
             cell = (
@@ -4126,13 +4365,8 @@ def _check_raw_cell_fallback_provenance(
                 f"{sorted(component_cells[event_key])!r}"
             )
 
-    expected_metadata_facets: dict[
-        int, Counter[tuple[tuple[str, str], tuple[str, str]]]
-    ] = defaultdict(Counter)
-    for (case_index, merge_id), facets in component_facets.items():
-        if (case_index, merge_id) in fallback_components and len(facets) == 1:
-            expected_metadata_facets[case_index][next(iter(facets))] += 1
-    for case_index, expected_facets in sorted(expected_metadata_facets.items()):
+    fallback_cases = sorted({case_index for case_index, _ in fallback_components})
+    for case_index in fallback_cases:
         metadata_path = (
             bundle
             / "vtk"
@@ -4143,31 +4377,131 @@ def _check_raw_cell_fallback_provenance(
         metadata = _load_json(metadata_path, report)
         if metadata is None:
             continue
+        if metadata.get("schema_version") != 2:
+            report.add_error(f"{metadata_path} schema_version is not 2")
+        if metadata.get("source") != "util.plotting.vtk_utils.writeFacets":
+            report.add_error(f"{metadata_path} has an unexpected source writer")
         primitives = metadata.get("primitives")
         if not isinstance(primitives, list):
             report.add_error(f"{metadata_path} primitives is not an array")
             continue
-        actual_facets: Counter[tuple[tuple[str, str], tuple[str, str]]] = Counter()
+        primitives_by_facet: dict[int, list[tuple[int, Mapping[str, object]]]] = (
+            defaultdict(list)
+        )
+        primitive_indices: set[int] = set()
         for primitive_index, primitive in enumerate(primitives):
             if not isinstance(primitive, Mapping):
-                continue
-            if (
-                primitive.get("kind") != "line"
-                or primitive.get("source_name") != expected_policy
-            ):
-                continue
-            signature = _line_facet_signature(
-                primitive,
-                f"{metadata_path} primitive {primitive_index}",
-                report,
-            )
-            if signature is not None:
-                actual_facets[signature] += 1
-        for signature, expected_count in expected_facets.items():
-            if actual_facets[signature] < expected_count:
                 report.add_error(
-                    f"saved facet metadata lacks fallback LVIRA geometry for "
-                    f"{key.display()}/case={case_index}: {signature!r}"
+                    f"{metadata_path} primitive {primitive_index} is not an object"
+                )
+                continue
+            label = f"{metadata_path} primitive {primitive_index}"
+            try:
+                recorded_index = _parse_canonical_int(
+                    primitive.get("index"), f"{label} index"
+                )
+                facet_index = _parse_canonical_int(
+                    primitive.get("facet_index"), f"{label} facet_index"
+                )
+                local_index = _parse_canonical_int(
+                    primitive.get("primitive_index"), f"{label} primitive_index"
+                )
+            except ReleaseAuditInputError as exc:
+                report.add_error(str(exc))
+                continue
+            if recorded_index != primitive_index or recorded_index in primitive_indices:
+                report.add_error(
+                    f"{label} index is not the unique serialized primitive position: "
+                    f"{recorded_index} != {primitive_index}"
+                )
+            if facet_index < 0 or local_index < 0:
+                report.add_error(f"{label} has a negative facet/primitive index")
+                continue
+            primitive_indices.add(recorded_index)
+            primitives_by_facet[facet_index].append((recorded_index, primitive))
+
+        component_count = len(component_order_by_case.get(case_index, ()))
+        if set(primitives_by_facet) != set(range(component_count)):
+            report.add_error(
+                f"{metadata_path} facet indices do not bind every reconstructed "
+                f"component for case {case_index}: "
+                f"{sorted(primitives_by_facet)!r} != {list(range(component_count))!r}"
+            )
+
+        vtp_path = metadata_path.with_suffix("").with_suffix(".vtp")
+        polydata = _read_reconstructed_facet_vtp(vtp_path, report)
+        if polydata is not None:
+            if (
+                polydata.GetNumberOfVerts() != 0
+                or polydata.GetNumberOfStrips() != 0
+                or polydata.GetNumberOfPolys() != 0
+            ):
+                report.add_error(
+                    f"reconstructed facet VTP contains non-line cells: {vtp_path}"
+                )
+            if polydata.GetNumberOfLines() != len(primitives):
+                report.add_error(
+                    f"reconstructed facet VTP line count differs from exact facet "
+                    f"metadata: {polydata.GetNumberOfLines()} != {len(primitives)}"
+                )
+            points = polydata.GetPoints()
+            if (
+                points is None
+                or points.GetData() is None
+                or points.GetData().GetDataTypeAsString() != "float"
+            ):
+                report.add_error(
+                    f"reconstructed facet VTP does not use the reviewed float32 "
+                    f"point representation: {vtp_path}"
+                )
+            scalars = polydata.GetCellData().GetScalars()
+            if (
+                scalars is None
+                or scalars.GetDataTypeAsString() != "int"
+                or scalars.GetNumberOfComponents() != 1
+                or scalars.GetNumberOfTuples() != len(primitives)
+            ):
+                report.add_error(
+                    f"reconstructed facet VTP does not have one reviewed Int32 "
+                    f"facet-type scalar per primitive: {vtp_path}"
+                )
+
+        for component_key in component_order_by_case.get(case_index, ()):
+            if component_key not in fallback_components:
+                continue
+            facets = component_facets.get(component_key, set())
+            if len(facets) != 1:
+                continue
+            signature = next(iter(facets))
+            facet_index = component_facet_indices[component_key]
+            facet_primitives = primitives_by_facet.get(facet_index, [])
+            label = (
+                f"{key.display()}/case={case_index}/merge_id={component_key[1]} "
+                f"fallback facet index {facet_index}"
+            )
+            if len(facet_primitives) != 1:
+                report.add_error(
+                    f"{label} does not map to exactly one sidecar primitive"
+                )
+                continue
+            serialized_index, primitive = facet_primitives[0]
+            if primitive.get("primitive_index") != 0:
+                report.add_error(f"{label} sidecar primitive_index is not 0")
+            artifact_signature = _line_facet_signature(
+                primitive, f"{label} sidecar geometry", report
+            )
+            if artifact_signature != signature:
+                report.add_error(
+                    f"{label} sidecar geometry differs from its exact merge component "
+                    f"and member cells: {artifact_signature!r} != {signature!r}"
+                )
+            if polydata is not None:
+                _check_vtp_line_primitive(
+                    polydata,
+                    serialized_index,
+                    signature,
+                    label,
+                    report,
                 )
     return len(cell_rows), len(merge_rows), len(fallback_rows)
 

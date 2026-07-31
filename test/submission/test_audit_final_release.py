@@ -419,6 +419,7 @@ def _make_release(root: Path) -> Path:
     raw_case_rows = []
     raw_geometry_rows = []
     raw_cell_rows = []
+    replayed_geometries = audit_module._replay_benchmark_case_geometries(config, 2)
     for case_index, (hausdorff, facet_gap) in enumerate(((1.0, 2.0), (3.0, 4.0))):
         raw_case = {
             "case_index": case_index,
@@ -433,17 +434,9 @@ def _make_release(root: Path) -> Path:
         }
         raw_case_rows.append(raw_case)
         case_rows.append({**context, **raw_case})
-        truth_vtp = f"vtk/true/true_line{case_index}.vtp"
-        truth_metadata = f"vtk/true/true_line{case_index}.facet_metadata.json"
-        angle = case_index * 3.141592653589793
         raw_geometry = {
             "case_index": case_index,
-            "geometry_type": "line",
-            "angle": angle,
-            "p_left": [50.0, 50.0],
-            "p_right": [50.2, 50.0 if case_index == 0 else 50.0],
-            "truth_vtp": truth_vtp,
-            "truth_metadata": truth_metadata,
+            **replayed_geometries[("lines", case_index)],
         }
         raw_geometry_rows.append(raw_geometry)
         geometry_rows.append({**context, **raw_geometry})
@@ -678,6 +671,49 @@ def _mutate_raw_and_consolidated_csv(
     )
 
 
+def _write_line_vtp(path: Path, lines, scalar=8) -> None:
+    points = []
+    connectivity = []
+    offsets = []
+    for line in lines:
+        first_point = len(points)
+        points.extend(line)
+        connectivity.extend(range(first_point, len(points)))
+        offsets.append(len(connectivity))
+    point_text = " ".join(
+        str(coordinate) for point in points for coordinate in (point[0], point[1], 0)
+    )
+    connectivity_text = " ".join(str(value) for value in connectivity)
+    offsets_text = " ".join(str(value) for value in offsets)
+    scalars_text = " ".join(str(scalar) for _ in lines)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"""<?xml version="1.0"?>
+<VTKFile type="PolyData" version="0.1" byte_order="LittleEndian">
+  <PolyData>
+    <Piece NumberOfPoints="{len(points)}" NumberOfVerts="0" NumberOfLines="{len(lines)}" NumberOfStrips="0" NumberOfPolys="0">
+      <PointData/>
+      <CellData Scalars="Scalars_">
+        <DataArray type="Int32" Name="Scalars_" format="ascii">{scalars_text}</DataArray>
+      </CellData>
+      <Points>
+        <DataArray type="Float32" NumberOfComponents="3" format="ascii">{point_text}</DataArray>
+      </Points>
+      <Verts/>
+      <Lines>
+        <DataArray type="Int64" Name="connectivity" format="ascii">{connectivity_text}</DataArray>
+        <DataArray type="Int64" Name="offsets" format="ascii">{offsets_text}</DataArray>
+      </Lines>
+      <Strips/>
+      <Polys/>
+    </Piece>
+  </PolyData>
+</VTKFile>
+""",
+        encoding="utf-8",
+    )
+
+
 def _add_provenance_rows(root: Path) -> None:
     context = _run_context()
     merge_fields = [
@@ -775,8 +811,12 @@ def _add_provenance_rows(root: Path) -> None:
         metadata_path,
         {
             "schema_version": 2,
+            "source": "util.plotting.vtk_utils.writeFacets",
             "primitives": [
                 {
+                    "index": 0,
+                    "facet_index": 0,
+                    "primitive_index": 0,
                     "kind": "line",
                     "source_name": "LVIRA",
                     "p_left": [0, 0],
@@ -786,11 +826,131 @@ def _add_provenance_rows(root: Path) -> None:
             "corners": [],
         },
     )
+    _write_line_vtp(
+        metadata_path.with_suffix("").with_suffix(".vtp"), [([0, 0], [1, 1])]
+    )
 
     inventory_path = root / "diagnostics" / "run_inventory.csv"
     fieldnames, rows = _read_csv(inventory_path)
     rows[0]["merge_events_rows"] = "1"
     rows[0]["unresolved_plic_fallbacks_rows"] = "1"
+    _write_csv(inventory_path, fieldnames, rows)
+
+
+def _add_two_fallback_components(root: Path) -> None:
+    _add_provenance_rows(root)
+    second_geometry = json.dumps(
+        {
+            "class": "linear",
+            "name": "LVIRA",
+            "p_left": [2, 0],
+            "p_right": [3, 1],
+        },
+        separators=(",", ":"),
+    )
+    for relative in (
+        "diagnostics/cell_metrics.csv",
+        f"raw_runs/{SAVE_NAME}/metrics/cell_metrics.csv",
+    ):
+        path = root / relative
+        fieldnames, rows = _read_csv(path)
+        second = dict(rows[0])
+        second.update(
+            {
+                "cell_id": "1,0",
+                "cell_x": "1",
+                "cell_y": "0",
+                "merge_id": "8",
+                "facet_geometry_json": second_geometry,
+            }
+        )
+        rows.insert(1, second)
+        _write_csv(path, fieldnames, rows)
+
+    for relative in (
+        "diagnostics/case_metrics.csv",
+        f"raw_runs/{SAVE_NAME}/metrics/case_metrics.csv",
+    ):
+        path = root / relative
+        fieldnames, rows = _read_csv(path)
+        rows[0]["num_mixed_cells"] = "2"
+        _write_csv(path, fieldnames, rows)
+
+    for relative in (
+        "diagnostics/merge_events.csv",
+        f"raw_runs/{SAVE_NAME}/metrics/merge_events.csv",
+    ):
+        path = root / relative
+        fieldnames, rows = _read_csv(path)
+        second = dict(rows[0])
+        second.update(
+            {
+                "event_order": "2",
+                "merge_id": "8",
+                "member_cells_json": "[[1,0]]",
+            }
+        )
+        rows.append(second)
+        _write_csv(path, fieldnames, rows)
+
+    for relative in (
+        "diagnostics/unresolved_plic_fallbacks.csv",
+        f"raw_runs/{SAVE_NAME}/metrics/unresolved_plic_fallbacks.csv",
+    ):
+        path = root / relative
+        fieldnames, rows = _read_csv(path)
+        second = dict(rows[0])
+        second["merge_id"] = "8"
+        rows.append(second)
+        _write_csv(path, fieldnames, rows)
+
+    metadata_path = (
+        root
+        / "raw_runs"
+        / SAVE_NAME
+        / "vtk"
+        / "reconstructed"
+        / "facets"
+        / "0.facet_metadata.json"
+    )
+    _write_json(
+        metadata_path,
+        {
+            "schema_version": 2,
+            "source": "util.plotting.vtk_utils.writeFacets",
+            "primitives": [
+                {
+                    "index": 0,
+                    "facet_index": 0,
+                    "primitive_index": 0,
+                    "kind": "line",
+                    "source_name": "LVIRA",
+                    "p_left": [0, 0],
+                    "p_right": [1, 1],
+                },
+                {
+                    "index": 1,
+                    "facet_index": 1,
+                    "primitive_index": 0,
+                    "kind": "line",
+                    "source_name": "LVIRA",
+                    "p_left": [2, 0],
+                    "p_right": [3, 1],
+                },
+            ],
+            "corners": [],
+        },
+    )
+    _write_line_vtp(
+        metadata_path.with_suffix("").with_suffix(".vtp"),
+        [([0, 0], [1, 1]), ([2, 0], [3, 1])],
+    )
+
+    inventory_path = root / "diagnostics" / "run_inventory.csv"
+    fieldnames, rows = _read_csv(inventory_path)
+    rows[0]["cell_metrics_rows"] = "3"
+    rows[0]["merge_events_rows"] = "2"
+    rows[0]["unresolved_plic_fallbacks_rows"] = "2"
     _write_csv(inventory_path, fieldnames, rows)
 
 
@@ -1391,6 +1551,31 @@ def test_self_reported_snapshot_hash_cannot_hide_git_byte_mismatch(tmp_path):
     )
 
 
+def test_corrupted_nested_git_tree_object_is_rejected(tmp_path, monkeypatch):
+    root = _make_release(tmp_path / "release")
+    nested_tree = _git(tmp_path, "rev-parse", f"{COMMIT}:experiments").decode().strip()
+    real_run_git = audit_module._run_git
+
+    def corrupt_nested_tree(repository, arguments, **kwargs):
+        result = real_run_git(repository, arguments, **kwargs)
+        if tuple(arguments) == ("cat-file", "tree", nested_tree):
+            return subprocess.CompletedProcess(
+                result.args,
+                result.returncode,
+                stdout=result.stdout + b"corrupt",
+                stderr=result.stderr,
+            )
+        return result
+
+    monkeypatch.setattr(audit_module, "_run_git", corrupt_nested_tree)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    assert not report.ok
+    messages = _messages(report)
+    assert "Git tree object hash verification failed at 'experiments'" in messages
+
+
 def test_every_audit_git_operation_disables_replace_objects(tmp_path, monkeypatch):
     root = _make_release(tmp_path / "release")
     monkeypatch.setenv("PATH", str(tmp_path / "attacker-bin"))
@@ -1988,7 +2173,7 @@ def test_coordinated_case_geometry_tampering_fails_benchmark_contract(tmp_path):
     report = audit_final_release(root, required_runs=1, required_cases=2)
 
     assert not report.ok
-    assert "angle differs from the resolved benchmark geometry" in _messages(report)
+    assert "angle differs from exact seeded benchmark replay" in _messages(report)
 
 
 def test_coordinated_line_endpoint_tampering_fails_geometry_contract(tmp_path):
@@ -2004,9 +2189,83 @@ def test_coordinated_line_endpoint_tampering_fails_geometry_contract(tmp_path):
     report = audit_final_release(root, required_runs=1, required_cases=2)
 
     assert not report.ok
-    assert "p_right[0] differs from the resolved benchmark geometry" in _messages(
-        report
+    assert "p_right[0] differs from exact seeded benchmark replay" in _messages(report)
+
+
+def test_coordinated_in_domain_line_sample_substitution_fails_seed_replay(tmp_path):
+    root = _make_release(tmp_path / "release")
+    for path in (
+        root / "diagnostics" / "case_geometry.jsonl",
+        root / "raw_runs" / SAVE_NAME / "metrics" / "case_geometry.jsonl",
+    ):
+        rows = [json.loads(line) for line in path.read_text().splitlines()]
+        rows[0]["p_left"] = [50.25, 50.75]
+        rows[0]["p_right"] = [50.45, 50.75]
+        _write_jsonl(path, rows)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    assert not report.ok
+    messages = _messages(report)
+    assert "p_left[0] differs from exact seeded benchmark replay" in messages
+    assert "p_right[0] differs from exact seeded benchmark replay" in messages
+
+
+def test_sub_float_decimal_geometry_substitution_fails_exact_seed_replay(tmp_path):
+    root = _make_release(tmp_path / "release")
+    original = "50.773956048555966"
+    substituted = f"{original}1"
+    for path in (
+        root / "diagnostics" / "case_geometry.jsonl",
+        root / "raw_runs" / SAVE_NAME / "metrics" / "case_geometry.jsonl",
+    ):
+        text = path.read_text(encoding="utf-8")
+        assert original in text
+        path.write_text(text.replace(original, substituted, 1), encoding="utf-8")
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    assert not report.ok
+    assert "p_left[0] differs from exact seeded benchmark replay" in _messages(report)
+
+
+def test_all_reviewed_benchmark_sampling_sequences_replay_from_exact_numpy_seeds():
+    config = _config()
+    config["benchmarks"].update(
+        {
+            "circles": {"radius": 10.0},
+            "ellipses": {},
+            "squares": {},
+            "zalesak": {
+                "radius": 15.0,
+                "slot_width": 5.0,
+                "slot_top_relative_to_center": 10.0,
+            },
+        }
     )
+
+    replayed = audit_module._replay_benchmark_case_geometries(config, 2)
+
+    assert replayed[("lines", 0)]["p_left"] == [
+        50.773956048555966,
+        50.43887843975205,
+    ]
+    assert replayed[("circles", 1)]["center"] == [
+        50.125970746788205,
+        50.82698808593074,
+    ]
+    assert replayed[("ellipses", 0)]["theta"] == 1.3486824587905384
+    assert replayed[("ellipses", 1)]["aspect_ratio"] == 3.0
+    assert replayed[("squares", 1)]["center"] == [
+        50.69736802905936,
+        50.09417734788765,
+    ]
+    assert replayed[("squares", 1)]["side_length"] == 30.0
+    assert replayed[("zalesak", 0)]["center"] == [
+        50.65229926270091,
+        50.043775323639,
+    ]
+    assert replayed[("zalesak", 1)]["theta"] == 0.3529661502154549
 
 
 def test_json_reconciliation_preserves_sub_float_decimal_distinctions(tmp_path):
@@ -2136,7 +2395,107 @@ def test_fallback_cell_geometry_must_match_saved_facet_metadata(tmp_path):
     report = audit_final_release(root, required_runs=1, required_cases=2)
 
     assert not report.ok
-    assert "saved facet metadata lacks fallback LVIRA geometry" in _messages(report)
+    assert "sidecar geometry differs from its exact merge component" in _messages(
+        report
+    )
+
+
+def test_two_same_case_fallback_components_bind_to_distinct_artifact_facets(tmp_path):
+    root = _make_release(tmp_path / "release")
+    _add_two_fallback_components(root)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    assert report.ok, _messages(report)
+
+
+@pytest.mark.parametrize("swap_kind", ["geometry", "components"])
+def test_same_case_valid_fallback_geometry_component_swaps_fail(tmp_path, swap_kind):
+    root = _make_release(tmp_path / "release")
+    _add_two_fallback_components(root)
+    for relative in (
+        "diagnostics/cell_metrics.csv",
+        f"raw_runs/{SAVE_NAME}/metrics/cell_metrics.csv",
+    ):
+        path = root / relative
+        fieldnames, rows = _read_csv(path)
+        if swap_kind == "geometry":
+            rows[0]["facet_geometry_json"], rows[1]["facet_geometry_json"] = (
+                rows[1]["facet_geometry_json"],
+                rows[0]["facet_geometry_json"],
+            )
+        else:
+            rows[0], rows[1] = rows[1], rows[0]
+        _write_csv(path, fieldnames, rows)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    assert not report.ok
+    assert "sidecar geometry differs from its exact merge component" in _messages(
+        report
+    )
+
+
+def test_coordinated_fallback_sidecar_substitution_still_fails_vtp_binding(tmp_path):
+    root = _make_release(tmp_path / "release")
+    _add_provenance_rows(root)
+    substituted_geometry = json.dumps(
+        {
+            "class": "linear",
+            "name": "LVIRA",
+            "p_left": [0, 0],
+            "p_right": [2, 2],
+        },
+        separators=(",", ":"),
+    )
+    _mutate_raw_and_consolidated_csv(
+        root, "cell_metrics.csv", "facet_geometry_json", substituted_geometry
+    )
+    metadata_path = (
+        root
+        / "raw_runs"
+        / SAVE_NAME
+        / "vtk"
+        / "reconstructed"
+        / "facets"
+        / "0.facet_metadata.json"
+    )
+    metadata = json.loads(metadata_path.read_text())
+    metadata["primitives"][0]["p_right"] = [2, 2]
+    _write_json(metadata_path, metadata)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    assert not report.ok
+    assert "reconstructed VTP endpoint" in _messages(report)
+
+
+def test_sub_tolerance_fallback_vtp_substitution_fails_exact_binding(tmp_path):
+    root = _make_release(tmp_path / "release")
+    _add_provenance_rows(root)
+    vtp_path = (
+        root / "raw_runs" / SAVE_NAME / "vtk" / "reconstructed" / "facets" / "0.vtp"
+    )
+    _write_line_vtp(vtp_path, [([0, 0], [1.000001, 1])])
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    assert not report.ok
+    assert "exact float32 component geometry" in _messages(report)
+
+
+def test_fallback_vtp_polyline_is_not_accepted_as_exact_line(tmp_path):
+    root = _make_release(tmp_path / "release")
+    _add_provenance_rows(root)
+    vtp_path = (
+        root / "raw_runs" / SAVE_NAME / "vtk" / "reconstructed" / "facets" / "0.vtp"
+    )
+    _write_line_vtp(vtp_path, [([0, 0], [0.5, 0.5], [1, 1])])
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    assert not report.ok
+    assert "reconstructed VTP cell is not a two-point line" in _messages(report)
 
 
 @pytest.mark.parametrize(
