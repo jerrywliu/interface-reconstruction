@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+import submission.package_submission as package_submission
 from submission.audit_final_release import AuditReport
 from submission.package_submission import (
     DEFAULT_PAPER_ENTRYPOINT,
@@ -48,6 +49,24 @@ def _tree_snapshot(root: Path) -> dict[str, str]:
         for path in sorted(root.rglob("*"))
         if path.is_file() and ".git" not in path.relative_to(root).parts
     }
+
+
+def _tree_state(root: Path) -> dict[str, tuple[str, int]]:
+    return {
+        path.relative_to(root).as_posix(): (_sha256(path), path.stat().st_mtime_ns)
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
+def _write_existing_package(root: Path) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "INVENTORY.json").write_text("{}\n", encoding="utf-8")
+    (root / "SHA256SUMS").write_text(f"{'0' * 64}  INVENTORY.json\n", encoding="utf-8")
+    (root / "published-sentinel.txt").write_text(
+        "existing package must remain unchanged\n", encoding="utf-8"
+    )
+    return root
 
 
 def _passing_audit(root: Path) -> AuditReport:
@@ -259,6 +278,7 @@ def _make_inputs(tmp_path: Path) -> tuple[Path, Path, Path, str, Path]:
 
 
 def _plan(tmp_path: Path, output: Path):
+    output.parent.mkdir(parents=True, exist_ok=True)
     release, paper, manifest, paper_commit, latexmk = _make_inputs(tmp_path)
     return plan_submission_package(
         release_root=release,
@@ -340,6 +360,85 @@ def test_committed_excluded_build_directory_is_not_packaged(tmp_path):
     )
 
 
+@pytest.mark.parametrize(
+    "relationship",
+    ("inside_package", "contains_package", "archive_contains_package"),
+)
+def test_plan_rejects_existing_package_namespace_overlap(tmp_path, relationship):
+    release, paper, manifest, paper_commit, latexmk = _make_inputs(tmp_path / "inputs")
+    destination_parent = tmp_path / "destinations"
+    destination_parent.mkdir()
+    if relationship == "inside_package":
+        existing = _write_existing_package(destination_parent / "bundle")
+        output = existing / "nested"
+    elif relationship == "contains_package":
+        output = destination_parent / "wrapper"
+        existing = _write_existing_package(output / "bundle")
+    else:
+        output = destination_parent / "bundle"
+        archive_path = output.with_suffix(".tar.gz")
+        existing = _write_existing_package(archive_path / "nested")
+    before = _tree_state(existing)
+
+    with pytest.raises(
+        SubmissionPackagingError,
+        match="inside existing package|contains existing package",
+    ):
+        plan_submission_package(
+            release_root=release,
+            paper_worktree_root=paper,
+            paper_commit=paper_commit,
+            approved_figures_manifest=manifest,
+            raw_data_deposition="https://doi.org/10.1234/interface.release",
+            raw_data_manifest_identifier=_manifest_identifier(release),
+            acknowledge_unverified_remote_deposit=True,
+            latexmk_executable=str(latexmk),
+            output_dir=output,
+            audit_runner=_passing_audit,
+            checksum_verifier=_checksums_pass,
+            pdf_inspector=_vector_pdf,
+        )
+
+    assert _tree_state(existing) == before
+    assert not list(destination_parent.rglob(".*.package_submission.lock"))
+    assert not list(destination_parent.rglob(".*.staging-*"))
+
+
+@pytest.mark.parametrize(
+    "relationship",
+    ("inside_package", "contains_package", "archive_contains_package"),
+)
+def test_stale_plan_rejects_package_overlap_before_writing(tmp_path, relationship):
+    destination_parent = tmp_path / "destinations"
+    destination_parent.mkdir()
+    if relationship == "inside_package":
+        plain_parent = destination_parent / "bundle"
+        plain_parent.mkdir()
+        output = plain_parent / "nested"
+    else:
+        output = destination_parent / "bundle"
+    plan = _plan(tmp_path / "inputs", output)
+
+    if relationship == "inside_package":
+        existing = _write_existing_package(output.parent)
+    elif relationship == "contains_package":
+        existing = _write_existing_package(output / "nested")
+    else:
+        existing = _write_existing_package(output.with_suffix(".tar.gz") / "nested")
+    before = _tree_state(existing)
+
+    with pytest.raises(
+        SubmissionPackagingError,
+        match="inside existing package|contains existing package",
+    ):
+        build_submission_package(plan)
+
+    assert _tree_state(existing) == before
+    assert not list(destination_parent.rglob(".*.package_submission.lock"))
+    assert not list(destination_parent.rglob(".*.staging-*"))
+    assert not list(destination_parent.rglob(".*.tmp-*"))
+
+
 def test_approved_figure_manifest_requires_approval_and_exact_checksum(tmp_path):
     _, paper, manifest, _, _ = _make_inputs(tmp_path)
     rows = list(csv.DictReader(manifest.open(encoding="utf-8")))
@@ -385,6 +484,49 @@ def test_plan_fails_closed_when_release_audit_fails(tmp_path):
     assert not output.exists()
 
 
+def test_plan_requires_existing_private_output_parent(tmp_path):
+    release, paper, manifest, paper_commit, latexmk = _make_inputs(tmp_path)
+    common = {
+        "release_root": release,
+        "paper_worktree_root": paper,
+        "paper_commit": paper_commit,
+        "approved_figures_manifest": manifest,
+        "raw_data_deposition": "https://doi.org/10.1234/interface.release",
+        "raw_data_manifest_identifier": _manifest_identifier(release),
+        "acknowledge_unverified_remote_deposit": True,
+        "latexmk_executable": str(latexmk),
+        "audit_runner": _passing_audit,
+        "checksum_verifier": _checksums_pass,
+        "pdf_inspector": _vector_pdf,
+    }
+
+    with pytest.raises(SubmissionPackagingError, match="parent must already exist"):
+        plan_submission_package(
+            output_dir=tmp_path / "missing-parent" / "bundle", **common
+        )
+
+    writable_parent = tmp_path / "writable-parent"
+    writable_parent.mkdir(mode=0o777)
+    writable_parent.chmod(0o777)
+    with pytest.raises(SubmissionPackagingError, match="group- or other-writable"):
+        plan_submission_package(output_dir=writable_parent / "bundle", **common)
+
+
+def test_build_rejects_replaced_output_parent_from_stale_plan(tmp_path):
+    output = tmp_path / "destinations" / "bundle"
+    plan = _plan(tmp_path / "inputs", output)
+    original_parent = output.parent.with_name("destinations-original")
+    output.parent.rename(original_parent)
+    output.parent.mkdir()
+
+    with pytest.raises(SubmissionPackagingError, match="parent changed after"):
+        build_submission_package(plan)
+
+    assert not output.exists()
+    assert not list(output.parent.glob(".*.package_submission.lock"))
+    assert not list(output.parent.glob(f".{output.name}.staging-*"))
+
+
 def test_plan_rejects_unapproved_manuscript_graphic(tmp_path):
     release, paper, manifest, paper_commit, latexmk = _make_inputs(tmp_path)
     entrypoint = paper / DEFAULT_PAPER_ENTRYPOINT
@@ -422,6 +564,13 @@ def test_build_stages_compact_payload_and_valid_checksums(tmp_path):
     assert package == output
     assert archive == output.with_suffix(".tar.gz")
     assert archive.is_file()
+    with tarfile.open(archive, "r:gz") as packaged_archive:
+        archive_names = packaged_archive.getnames()
+    assert archive_names[0] == output.name
+    assert all(
+        name == output.name or name.startswith(f"{output.name}/")
+        for name in archive_names
+    )
     assert (package / "code" / "source_snapshot.tar.gz").is_file()
     assert (package / "docs" / "PAPER_EXPERIMENT_MAP.md").is_file()
     assert (
@@ -576,6 +725,40 @@ def test_publish_collision_cleanup_preserves_unowned_sentinel(tmp_path):
     assert not list(output.parent.glob(".*.package_submission.lock"))
 
 
+def test_late_hostile_final_path_replacements_are_left_untouched(tmp_path, monkeypatch):
+    output = tmp_path / "deliverable" / "bundle"
+    plan = _plan(tmp_path / "inputs", output)
+    archive = output.with_suffix(".tar.gz")
+    displaced_output = output.with_name("displaced-owned-output")
+    displaced_archive = archive.with_name("displaced-owned-archive.tar.gz")
+    original_publish = package_submission._publish_archive
+
+    def publish_then_replace(temporary_owner, archive_path):
+        published = original_publish(temporary_owner, archive_path)
+        output.rename(displaced_output)
+        output.mkdir()
+        (output / "replacement-sentinel.txt").write_text(
+            "replacement output must survive\n", encoding="utf-8"
+        )
+        archive_path.rename(displaced_archive)
+        archive_path.write_text("replacement archive must survive\n", encoding="utf-8")
+        raise RuntimeError(f"hostile replacement after {published.path}")
+
+    monkeypatch.setattr(package_submission, "_publish_archive", publish_then_replace)
+
+    with pytest.raises(SubmissionPackagingError, match="left untouched"):
+        build_submission_package(plan)
+
+    assert (output / "replacement-sentinel.txt").read_text(encoding="utf-8") == (
+        "replacement output must survive\n"
+    )
+    assert archive.read_text(encoding="utf-8") == "replacement archive must survive\n"
+    assert (displaced_output / "INVENTORY.json").is_file()
+    assert displaced_archive.is_file()
+    assert not list(output.parent.glob(".*.package_submission.lock"))
+    assert not list(output.parent.glob(f".{archive.name}.tmp-*"))
+
+
 def test_plan_requires_exact_clean_paper_commit(tmp_path):
     release, paper, manifest, paper_commit, latexmk = _make_inputs(tmp_path)
     common = {
@@ -662,6 +845,7 @@ def test_build_fails_closed_when_extracted_manuscript_compile_fails(tmp_path):
     release, paper, manifest, paper_commit, latexmk = _make_inputs(inputs)
     _write_fake_latexmk(latexmk, fail_at=3)
     output = tmp_path / "deliverable" / "bundle"
+    output.parent.mkdir()
     plan = plan_submission_package(
         release_root=release,
         paper_worktree_root=paper,
@@ -872,6 +1056,11 @@ def test_dry_run_plan_does_not_mutate_release_paper_or_output(tmp_path):
     release_before = _tree_snapshot(release)
     paper_before = _tree_snapshot(paper)
     output = tmp_path / "deliverable" / "bundle"
+    output.parent.mkdir()
+    output_parent_before = (
+        output.parent.stat().st_mtime_ns,
+        tuple(sorted(path.name for path in output.parent.iterdir())),
+    )
 
     plan_submission_package(
         release_root=release,
@@ -896,6 +1085,10 @@ def test_dry_run_plan_does_not_mutate_release_paper_or_output(tmp_path):
     assert not output.with_suffix(".tar.gz").exists()
     assert not list(output.parent.glob(f".{output.name}.staging-*"))
     assert not list(output.parent.glob(".*.package_submission.lock"))
+    assert (
+        output.parent.stat().st_mtime_ns,
+        tuple(sorted(path.name for path in output.parent.iterdir())),
+    ) == output_parent_before
 
 
 @pytest.mark.parametrize("member_kind", ("traversal", "symlink", "special"))
@@ -928,6 +1121,7 @@ def test_deterministic_archives_match_for_identical_inputs(tmp_path):
 
     archives = []
     for parent in (tmp_path / "first", tmp_path / "second"):
+        parent.mkdir()
         output = parent / "bundle"
         plan = plan_submission_package(
             release_root=release,

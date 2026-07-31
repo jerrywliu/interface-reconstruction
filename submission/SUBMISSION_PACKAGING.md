@@ -17,6 +17,8 @@ It does not modify the release, the paper source, or Overleaf.
    complete release.
 8. Either a locally downloaded/fetched copy of the deposited `SHA256SUMS`, or an
    explicit acknowledgment that remote deposit contents remain a manual gate.
+9. A pre-existing output parent owned by the current user, represented by a real
+   directory, and not writable by group or other users.
 
 The packager reruns the full release audit and verifies every entry in the release
 checksum manifest. A stale audit claim, incomplete sweep, failed run, changed raw
@@ -26,7 +28,7 @@ compile, rasterized figure, unembedded figure font, unapproved
 Every compact release payload is checked again after it is copied into staging,
 using the digest frozen in the release `SHA256SUMS`. This closes the interval
 between planning and materialization; mutating either a payload or the manifest
-after planning aborts packaging and removes partial outputs.
+after planning aborts before final publication.
 
 Generate and verify the complete-release checksum manifest after all final release
 artifacts have been installed:
@@ -120,6 +122,14 @@ paper Git-state check, manuscript import check, vector-PDF inspection, deposit
 binding, and a disposable manuscript compile, but writes nothing:
 
 ```sh
+export PACKAGE_PARENT=/path/to/private-submission-output
+install -d -m 700 "$PACKAGE_PARENT"
+export PACKAGE="$PACKAGE_PARENT/interface-reconstruction-submission"
+```
+
+The exact parent must exist before planning; the packager never creates it.
+
+```sh
 python submission/package_submission.py \
   --release-root "$RELEASE" \
   --paper-worktree-root "$PAPER_WORKTREE" \
@@ -137,14 +147,31 @@ Remove `--dry-run` to create both `$PACKAGE/` and a deterministic
 `$PACKAGE.tar.gz`. Existing destinations are never overwritten. Use `--no-archive`
 only when a staged directory without the outer archive is required.
 
+An existing package is identified by regular top-level `INVENTORY.json` and
+`SHA256SUMS` markers. Neither the output directory nor archive destination may be
+inside such a package or contain one. This namespace check runs during planning,
+before staging in a real build, and immediately before publication. A plan therefore
+fails safely if a conflicting package appears after the plan was created; attempts
+to build `bundle/nested`, wrap an existing `bundle`, or use an archive path that
+contains a package do not modify the existing package.
+
 A real build atomically reserves the output directory and, when requested, archive
 destination with exclusive sidecar lock files. A concurrent invocation targeting
-either path fails before staging. Locks are held through extracted-archive
-verification. Archive construction uses a unique sibling temporary and exclusive
-publication, so concurrent builds cannot share or overwrite a temporary. Failure
-cleanup records device/inode ownership and removes only staging, output, or archive
-paths still owned by that invocation; it never removes a colliding invocation's
-published path.
+either exact path fails before staging. Locks are held through archive verification.
+Archive construction uses a unique sibling temporary and exclusive hard-link
+publication, so concurrent builds cannot share or overwrite a temporary or archive.
+The deterministic archive and its extracted manuscript are fully verified before
+either final destination is created.
+
+Portable Python does not provide atomic no-replace directory publication on every
+supported platform. The security boundary is therefore the pre-existing output
+parent: it must remain the same non-symlink directory, owned by the current user,
+without group/other write permission, and must not be modified by hostile same-user
+processes or permissive ACLs during the build. Planning records its device/inode and
+the build rechecks ownership, mode, and identity before staging and publication.
+Failure cleanup removes only unchanged, inode-owned staging/archive temporaries.
+Once any final path has been created, failure cleanup never removes it; uncertain or
+replaced paths and partial publication are left for manual inspection.
 
 A process killed outside normal exception handling can leave a sidecar lock. Its
 JSON payload records the PID, target, and random owner token. Inspect the named
@@ -170,6 +197,7 @@ All Git inspection and blob materialization commands set `GIT_OPTIONAL_LOCKS=0`.
 Dry-run writes only to temporary directories: it does not change paper index bytes
 or mtime, create `.git/index.lock`, or create the output directory, archive,
 reservation, staging sibling, TeX product in the paper checkout, or release artifact.
+It only reads and validates the required pre-existing output parent.
 
 ## Package Layout
 

@@ -36,6 +36,7 @@ from submission.pdf_vector_qa import PdfQaReport, inspect_pdf
 
 PACKAGE_SCHEMA_VERSION = 3
 RELEASE_SHA256_MANIFEST = "SHA256SUMS"
+PACKAGE_ROOT_MARKERS = ("INVENTORY.json", "SHA256SUMS")
 DEFAULT_PAPER_SOURCE_SUBDIR = "interface-reconstruction-paper"
 DEFAULT_PAPER_ENTRYPOINT = "interface-reconstruction-paper/interface-reconstruction.tex"
 DEFAULT_MANUSCRIPT_COMPILE_TIMEOUT_SECONDS = 300
@@ -196,6 +197,8 @@ class PackagePlan:
     paper_tracked_file_count: int
     latexmk_executable: str
     output_dir: Path
+    output_parent_device: int
+    output_parent_inode: int
     files: tuple[PlannedFile, ...]
     approved_figures: tuple[ApprovedFigure, ...]
     figure_qa: tuple[PdfQaReport, ...]
@@ -219,6 +222,13 @@ class _OwnedPath:
 
     def moved_to(self, path: Path) -> "_OwnedPath":
         return _OwnedPath(path=Path(path), device=self.device, inode=self.inode)
+
+    def matches(self) -> bool:
+        try:
+            metadata = os.lstat(self.path)
+        except FileNotFoundError:
+            return False
+        return metadata.st_dev == self.device and metadata.st_ino == self.inode
 
     def remove(self) -> bool:
         """Remove the path only while it still names this invocation's inode."""
@@ -363,6 +373,105 @@ def _safe_relative_path(value: str, label: str) -> str:
     if normalized in {".", ""}:
         raise SubmissionPackagingError(f"{label} is empty")
     return normalized
+
+
+def _resolve_output_destination(value: Path) -> Path:
+    raw = Path(value).expanduser()
+    absolute = raw if raw.is_absolute() else Path.cwd() / raw
+    ancestors = tuple(reversed(absolute.parent.parents)) + (absolute.parent,)
+    for ancestor in ancestors:
+        if ancestor.is_symlink():
+            raise SubmissionPackagingError(
+                f"output path cannot traverse a symbolic-link directory: {ancestor}"
+            )
+    return absolute.resolve()
+
+
+def _validate_private_output_parent(
+    output_dir: Path,
+    *,
+    expected_device: int | None = None,
+    expected_inode: int | None = None,
+) -> _OwnedPath:
+    parent = output_dir.parent
+    try:
+        metadata = os.lstat(parent)
+    except FileNotFoundError as exc:
+        raise SubmissionPackagingError(
+            f"output parent must already exist: {parent}"
+        ) from exc
+    if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+        raise SubmissionPackagingError(
+            f"output parent must be a real directory: {parent}"
+        )
+    if hasattr(os, "geteuid") and metadata.st_uid != os.geteuid():
+        raise SubmissionPackagingError(
+            f"output parent must be owned by the current user: {parent}"
+        )
+    if metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        raise SubmissionPackagingError(
+            f"output parent cannot be group- or other-writable: {parent}"
+        )
+    if expected_device is not None and expected_inode is not None:
+        if metadata.st_dev != expected_device or metadata.st_ino != expected_inode:
+            raise SubmissionPackagingError(
+                f"output parent changed after package planning: {parent}"
+            )
+    return _OwnedPath(parent, metadata.st_dev, metadata.st_ino)
+
+
+def _is_package_root(path: Path) -> bool:
+    try:
+        metadata = os.lstat(path)
+    except FileNotFoundError:
+        return False
+    if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+        return False
+    for marker in PACKAGE_ROOT_MARKERS:
+        try:
+            marker_metadata = os.lstat(path / marker)
+        except FileNotFoundError:
+            return False
+        if not stat.S_ISREG(marker_metadata.st_mode):
+            return False
+    return True
+
+
+def _find_contained_package_root(destination: Path) -> Path | None:
+    try:
+        metadata = os.lstat(destination)
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+        return None
+    for root, directory_names, file_names in os.walk(
+        destination, topdown=True, followlinks=False
+    ):
+        root_path = Path(root)
+        directory_names[:] = [
+            name for name in directory_names if not (root_path / name).is_symlink()
+        ]
+        if set(PACKAGE_ROOT_MARKERS).issubset(file_names) and _is_package_root(
+            root_path
+        ):
+            return root_path
+    return None
+
+
+def _reject_package_destination_conflicts(destinations: Sequence[Path]) -> None:
+    for destination in destinations:
+        for ancestor in (destination, *destination.parents):
+            if _is_package_root(ancestor):
+                raise SubmissionPackagingError(
+                    f"submission destination {destination} is inside existing "
+                    f"package {ancestor}"
+                )
+        contained = _find_contained_package_root(destination)
+        if contained is not None:
+            raise SubmissionPackagingError(
+                f"submission destination {destination} contains existing package "
+                f"{contained}"
+            )
 
 
 def _require_regular_file(path: Path, label: str) -> Path:
@@ -1186,7 +1295,8 @@ def plan_submission_package(
 ) -> PackagePlan:
     """Validate every input and return the exact package plan without writing it."""
     release_root = Path(release_root).resolve()
-    output_dir = Path(output_dir).resolve()
+    output_dir = _resolve_output_destination(output_dir)
+    output_parent = _validate_private_output_parent(output_dir)
     if not release_root.is_dir():
         raise SubmissionPackagingError(
             f"release root is not a directory: {release_root}"
@@ -1205,9 +1315,10 @@ def plan_submission_package(
         acknowledge_unverified_remote_deposit=(acknowledge_unverified_remote_deposit),
     )
     archive_path = output_dir.with_suffix(output_dir.suffix + ".tar.gz")
-    if output_dir.exists():
+    _reject_package_destination_conflicts((output_dir, archive_path))
+    if os.path.lexists(output_dir):
         raise SubmissionPackagingError(f"output directory already exists: {output_dir}")
-    if archive_path.exists():
+    if os.path.lexists(archive_path):
         raise SubmissionPackagingError(f"output archive already exists: {archive_path}")
     for protected_root, label in (
         (release_root, "release root"),
@@ -1340,6 +1451,8 @@ def plan_submission_package(
         paper_tracked_file_count=len(paper_state.tracked_paths),
         latexmk_executable=latexmk_executable,
         output_dir=output_dir,
+        output_parent_device=output_parent.device,
+        output_parent_inode=output_parent.inode,
         files=planned_files,
         approved_figures=figures,
         figure_qa=tuple(figure_qa),
@@ -1731,14 +1844,25 @@ def _normalize_directories(root: Path) -> None:
     os.utime(root, (0, 0), follow_symlinks=False)
 
 
-def _write_deterministic_tar_gz(root: Path, archive_path: Path) -> _OwnedPath:
+def _write_deterministic_tar_gz_temporary(
+    root: Path,
+    archive_path: Path,
+    *,
+    archive_root_name: str,
+) -> _OwnedPath:
+    archive_root = PurePosixPath(
+        _safe_relative_path(archive_root_name, "archive root name")
+    )
+    if len(archive_root.parts) != 1:
+        raise SubmissionPackagingError(
+            f"archive root name must have one path component: {archive_root_name}"
+        )
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{archive_path.name}.tmp-",
         dir=archive_path.parent,
     )
     temporary = Path(temporary_name)
     temporary_owner = _OwnedPath.capture(temporary)
-    published_owner: _OwnedPath | None = None
     try:
         os.fchmod(descriptor, 0o644)
         raw_stream = os.fdopen(descriptor, "wb")
@@ -1755,7 +1879,7 @@ def _write_deterministic_tar_gz(root: Path, archive_path: Path) -> _OwnedPath:
                     paths = (root,) + tuple(
                         sorted(
                             root.rglob("*"),
-                            key=lambda path: path.relative_to(root.parent).as_posix(),
+                            key=lambda path: path.relative_to(root).as_posix(),
                         )
                     )
                     for path in paths:
@@ -1763,7 +1887,12 @@ def _write_deterministic_tar_gz(root: Path, archive_path: Path) -> _OwnedPath:
                             raise SubmissionPackagingError(
                                 f"cannot archive symbolic link: {path}"
                             )
-                        relative = path.relative_to(root.parent).as_posix()
+                        if path == root:
+                            relative = archive_root.as_posix()
+                        else:
+                            relative = (
+                                archive_root / path.relative_to(root).as_posix()
+                            ).as_posix()
                         info = tarfile.TarInfo(relative)
                         info.uid = 0
                         info.gid = 0
@@ -1781,25 +1910,34 @@ def _write_deterministic_tar_gz(root: Path, archive_path: Path) -> _OwnedPath:
                                 archive.addfile(info, stream)
             raw_stream.flush()
             os.fsync(raw_stream.fileno())
-        try:
-            os.link(temporary, archive_path)
-        except FileExistsError as exc:
-            raise SubmissionPackagingError(
-                f"output archive already exists: {archive_path}"
-            ) from exc
-        published_owner = temporary_owner.moved_to(archive_path)
-        if not temporary_owner.remove():
-            raise SubmissionPackagingError(
-                f"lost ownership of archive temporary: {temporary}"
-            )
-        return published_owner
+        return temporary_owner
     except Exception:
         if descriptor >= 0:
             os.close(descriptor)
-        if published_owner is not None:
-            published_owner.remove()
         temporary_owner.remove()
         raise
+
+
+def _publish_archive(temporary_owner: _OwnedPath, archive_path: Path) -> _OwnedPath:
+    try:
+        metadata = os.lstat(temporary_owner.path)
+    except FileNotFoundError:
+        metadata = None
+    if (
+        metadata is None
+        or not stat.S_ISREG(metadata.st_mode)
+        or not temporary_owner.matches()
+    ):
+        raise SubmissionPackagingError(
+            f"archive temporary is unavailable: {temporary_owner.path}"
+        )
+    try:
+        os.link(temporary_owner.path, archive_path)
+    except FileExistsError as exc:
+        raise SubmissionPackagingError(
+            f"output archive already exists: {archive_path}"
+        ) from exc
+    return temporary_owner.moved_to(archive_path)
 
 
 def _extract_archive_safely(archive_path: Path, destination: Path) -> Path:
@@ -1881,11 +2019,22 @@ def build_submission_package(
         )
     output_dir = plan.output_dir
     archive_path = output_dir.with_suffix(output_dir.suffix + ".tar.gz")
-    output_dir.parent.mkdir(parents=True, exist_ok=True)
     reservation_targets = [output_dir]
     if create_archive:
         reservation_targets.append(archive_path)
+    _validate_private_output_parent(
+        output_dir,
+        expected_device=plan.output_parent_device,
+        expected_inode=plan.output_parent_inode,
+    )
+    _reject_package_destination_conflicts(reservation_targets)
     with _DestinationReservations.acquire(reservation_targets) as reservations:
+        _validate_private_output_parent(
+            output_dir,
+            expected_device=plan.output_parent_device,
+            expected_inode=plan.output_parent_inode,
+        )
+        _reject_package_destination_conflicts(reservation_targets)
         if os.path.lexists(output_dir):
             raise SubmissionPackagingError(
                 f"output directory already exists: {output_dir}"
@@ -1901,6 +2050,7 @@ def build_submission_package(
             )
         )
         staging_owner: _OwnedPath | None = _OwnedPath.capture(staging)
+        archive_temporary: _OwnedPath | None = None
         published_output: _OwnedPath | None = None
         published_archive: _OwnedPath | None = None
         try:
@@ -1974,28 +2124,52 @@ def build_submission_package(
                     + "; ".join(checksum_errors[:5])
                 )
             _normalize_directories(staging)
+            if create_archive:
+                archive_temporary = _write_deterministic_tar_gz_temporary(
+                    staging,
+                    archive_path,
+                    archive_root_name=output_dir.name,
+                )
+                _verify_extracted_archive(archive_temporary.path, plan)
+
             reservations.assert_owned()
+            _validate_private_output_parent(
+                output_dir,
+                expected_device=plan.output_parent_device,
+                expected_inode=plan.output_parent_inode,
+            )
+            _reject_package_destination_conflicts(reservation_targets)
             if os.path.lexists(output_dir):
                 raise SubmissionPackagingError(
                     f"output directory appeared during packaging: {output_dir}"
+                )
+            if create_archive and os.path.lexists(archive_path):
+                raise SubmissionPackagingError(
+                    f"output archive appeared during packaging: {archive_path}"
                 )
             staging.rename(output_dir)
             published_output = staging_owner.moved_to(output_dir)
             staging_owner = None
             if create_archive:
                 reservations.assert_owned()
-                published_archive = _write_deterministic_tar_gz(
-                    output_dir, archive_path
-                )
-                _verify_extracted_archive(archive_path, plan)
+                assert archive_temporary is not None
+                published_archive = _publish_archive(archive_temporary, archive_path)
+                if not archive_temporary.remove():
+                    raise SubmissionPackagingError(
+                        "archive temporary changed during publication"
+                    )
+                archive_temporary = None
             return output_dir, archive_path if create_archive else None
-        except Exception:
+        except Exception as exc:
             if staging_owner is not None:
                 staging_owner.remove()
-            if published_archive is not None:
-                published_archive.remove()
-            if published_output is not None:
-                published_output.remove()
+            if archive_temporary is not None:
+                archive_temporary.remove()
+            if published_output is not None or published_archive is not None:
+                raise SubmissionPackagingError(
+                    "submission publication failed after a final path was created; "
+                    "published paths were left untouched for manual inspection"
+                ) from exc
             raise
 
 
@@ -2006,6 +2180,11 @@ def _plan_payload(plan: PackagePlan) -> dict:
         "release_name": plan.release_root.name,
         "audit_summary": dict(sorted(plan.audit_summary.items())),
         "output_dir": str(plan.output_dir),
+        "output_parent": str(plan.output_dir.parent),
+        "output_parent_device": plan.output_parent_device,
+        "output_parent_inode": plan.output_parent_inode,
+        "private_output_parent_verified": True,
+        "package_namespace_conflict_check_passed": True,
         "raw_data_included": False,
         "raw_data_deposition": plan.raw_data_deposit.location,
         "raw_data_manifest_identifier": (plan.raw_data_deposit.manifest_identifier),
@@ -2082,7 +2261,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "deposit contents; required when no deposited manifest is supplied"
         ),
     )
-    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        required=True,
+        help=(
+            "new package path beneath a pre-existing, current-user-owned, "
+            "non-group/other-writable directory"
+        ),
+    )
     parser.add_argument(
         "--dry-run",
         action="store_true",
