@@ -21,9 +21,12 @@ producer inputs. The tables below map the resulting slots to the active manuscri
 | Completed source release | `results/static/submission_static_20260731_012430_505aefa45432/` | Original completed result set: 970 all-method runs and 24,250 cases. Preserve for comparison; do not use it as an immutable downstream input. |
 | Sealed final release | `results/static/submission_static_20260731_012430_505aefa45432.sealed/` | Canonical immutable numerical input. Its complete `SHA256SUMS` has digest `9b5cda54e469ee01bc6a9078bbe22b568ed1e211d16080be806dfe9458ff0b1e`. |
 
-The machine-readable specification is `submission/submission_config.json`.
-Figure promotion status and the paper filename contract are in
-`submission/figure_provenance.csv` and `submission/FIGURE_PROMOTION_PLAN.md`.
+`submission/submission_config.json` is the launcher input template; its
+`candidate_not_frozen` status and null target commit make it unsuitable as final
+provenance. The authoritative machine-readable specification is the sealed
+`$FINAL_ROOT/submission_config.resolved.json`. Figure promotion status and the
+paper filename contract are in `submission/figure_provenance.csv` and
+`submission/FIGURE_PROMOTION_PLAN.md`.
 
 Set these shell variables when a final release exists:
 
@@ -55,9 +58,15 @@ The equivalent controller dry run was verified at exactly 970 runs and 24,250
 cases. The launcher fixes:
 
 - perturbation magnitudes `0, 0.05, 0.1, 0.2, 0.3`;
-- seed `0` and 25 deterministic cases per setting;
+- mesh-perturbation seed `0` and 25 deterministic cases per setting;
 - `pre_f8_corner + exact_linear_support_only + LVIRA`;
 - five workers and pre-`C0` primary benchmark output.
+
+The seed above controls only mesh perturbations. Benchmark geometries use
+separate deterministic NumPy streams: seed `42` for lines, squares, and
+ellipses; seed `41` for circles; and seed `43` for Zalesak. Both seeds are
+recorded in each raw run manifest as `perturb_seed` and `random_seed`,
+respectively.
 
 Each final release has this contract:
 
@@ -383,13 +392,44 @@ python -m experiments.submission.zalesak_failure.diagnose_zalesak_failure \
   --artifact-root "$VALIDATION_ROOT/zalesak_failure"
 ```
 
+## Author-Drawn TikZ Figure Map
+
+These seven active figures are compiled directly by the manuscript and are not
+outputs of a numerical experiment. Accordingly, release-data and experiment
+provenance are not applicable. All seven depend on
+`interface-reconstruction.tex`, which loads `graphicx`, `tikz`, and the
+`arrows.meta`, `calc`, and `positioning` TikZ libraries.
+
+| Active figure | Manuscript include | Author-drawn source | Shared style dependency | Data provenance | Approval status |
+| --- | --- | --- | --- | --- | --- |
+| Regular topology cases (`fig:regular_cases`) | `new_sections/topology_identification.tex` | `figs/tikz/topology_regular_cases.tex` | `figs/tikz/topology_styles.tex` | Not applicable | **Open:** author visual and caption review. |
+| Merging cases (`fig:merging_ambiguous_cases`) | `new_sections/topology_identification.tex` | `figs/tikz/topology_merging_cases.tex` | `figs/tikz/topology_styles.tex` | Not applicable | **Open:** author visual and caption review. |
+| Orientation-dependency graph (`fig:orientation_dependencies`) | `new_sections/topology_identification.tex` | `figs/tikz/topology_orientation_dependencies.tex` | `figs/tikz/topology_styles.tex` | Not applicable | **Open:** author visual and caption review. |
+| Linear-facet fitting (`fig:linear_facet_fitting`) | `new_sections/appendix/algorithms/linear_facets.tex` | `figs/tikz/appendix_linear_facet_fitting.tex` | `figs/tikz/algorithm_styles.tex` | Not applicable | **Open:** blue-caption author review. |
+| Circular-facet fitting (`fig:circular_facet_fitting`) | `new_sections/appendix/algorithms/circular_facets.tex` | `figs/tikz/appendix_circular_facet_fitting.tex` | `figs/tikz/algorithm_styles.tex` | Not applicable | **Open:** blue-caption author review. |
+| Polygon-circle area decomposition (`fig:circle_quad_intersect`) | `new_sections/appendix/algorithms/circular_facets.tex` | `figs/tikz/appendix_circle_intersect_area.tex` | `figs/tikz/algorithm_styles.tex` | Not applicable | **Open:** blue-caption author review. |
+| Corner-facet fitting (`fig:corner_facet_fitting`) | `new_sections/appendix/algorithms/corner_facets.tex` | `figs/tikz/appendix_corner_facet_fitting.tex` | `figs/tikz/algorithm_styles.tex` | Not applicable | **Open:** blue-caption author review. |
+
 ## Manuscript Table Map
 
-| Active table | Manuscript source | Code/data provenance | Approval gate |
-| --- | --- | --- | --- |
-| Methods comparison (`tab:methods_compare`) | `new_sections/problem_setup.tex` | Literature-supported classification checked against the frozen method/fallback contract in `submission/submission_config.json` and the reconstruction implementation. It is author-curated, not generated from sweep metrics. | Recheck citations and ensure checkmarks remain conditional on the identifiable oriented path. |
-| Numerical parameters (`tab:reconstruction_parameters`) | `new_sections/appendix/algorithms.tex` | `config/static/base.yaml`, `main/structs/polys/base_polygon.py`, `main/structs/polys/neighbored_polygon.py`, `main/geoms/circular_facet.py`, and the exact source snapshot named by the final release. | Compare every displayed threshold against the pinned source commit before submission. |
-| Benchmark geometry and sampling (`tab:static_benchmark_definitions`) | `new_sections/appendix/static_benchmarks/overview.tex` | `experiments/static/{lines,squares,circles,ellipses,zalesak}.py`, `config/static/*.yaml`, and `submission/submission_config.json`; the final run manifests record the realized parameters. | Cross-check all geometry ranges, seed, and 25-case sampling against the sealed release. |
+Set `PAPER_ROOT` to the directory containing the active
+`interface-reconstruction.tex`; `FINAL_ROOT` remains the sealed release path
+defined above. The commands in the last column are the canonical executable
+checks for each table.
+
+| Active table | Manuscript source | Code/data provenance | Gate status | Canonical verification command |
+| --- | --- | --- | --- | --- |
+| Methods comparison (`tab:methods_compare`) | `new_sections/problem_setup.tex` | Literature-supported classification checked against the frozen method/fallback contract in `$FINAL_ROOT/submission_config.resolved.json` and the reconstruction implementation. It is author-curated, not generated from sweep metrics. | **Open:** automated contract check passes; authors must recheck citations and conditional checkmarks. | `PAPER_ROOT="$PAPER_ROOT" FINAL_ROOT="$FINAL_ROOT" python -m pytest -q test/submission/test_paper_experiment_map.py::test_methods_table_gate` |
+| Numerical parameters (`tab:reconstruction_parameters`) | `new_sections/appendix/algorithms.tex` | `$FINAL_ROOT/submission_config.resolved.json`, `config/static/base.yaml`, `main/structs/polys/base_polygon.py`, `main/structs/polys/neighbored_polygon.py`, `main/geoms/circular_facet.py`, and `main/geoms/linear_facet.py` at the pinned source commit. The final file is the source of the reported LVIRA angular-step tolerance (`step < 1e-6`). | **Passed:** displayed values match the sealed configuration and pinned sources; blue table/prose still requires author approval. | `PAPER_ROOT="$PAPER_ROOT" FINAL_ROOT="$FINAL_ROOT" python -m pytest -q test/submission/test_paper_experiment_map.py::test_numerical_parameters_table_gate` |
+| Benchmark geometry and sampling (`tab:static_benchmark_definitions`) | `new_sections/appendix/static_benchmarks/overview.tex` | `$FINAL_ROOT/submission_config.resolved.json`, `experiments/static/{lines,squares,circles,ellipses,zalesak}.py`, and `config/static/*.yaml`; final run manifests record realized parameters. Mesh perturbations use seed `0`; independent geometry streams use seeds `42` (lines/squares/ellipses), `41` (circles), and `43` (Zalesak). | **Passed:** geometry ranges and 25-case sampling match; the ambiguous seed sentence remains open for blue-text author review. | `PAPER_ROOT="$PAPER_ROOT" FINAL_ROOT="$FINAL_ROOT" python -m pytest -q test/submission/test_paper_experiment_map.py::test_benchmark_table_gate` |
+
+Run the complete map audit, including the active-manuscript PDF/TikZ inventory,
+with:
+
+```bash
+PAPER_ROOT="$PAPER_ROOT" FINAL_ROOT="$FINAL_ROOT" \
+  python -m pytest -q test/submission/test_paper_experiment_map.py
+```
 
 ## Author And Provenance Gates
 
@@ -405,6 +445,14 @@ python -m experiments.submission.zalesak_failure.diagnose_zalesak_failure \
   165 guarded settings, run the conservation validation above, and reconcile
   every reported median and continuity/conservation statement before promotion.
   Any manuscript change remains blue until approved.
+- **The reproducibility seed sentence is ambiguous.** It currently says only
+  that the perturbed-mesh experiments use seed `0`. A blue revision should state
+  that `0` is the mesh-perturbation seed and separately report geometry-stream
+  seeds `42` (lines/squares/ellipses), `41` (circles), and `43` (Zalesak).
+- **Author-drawn figure approval is open.** Explicitly approve the captions and
+  visual content of the seven TikZ figures inventoried above. The four appendix
+  captions are already blue; any needed changes to the three topology captions
+  must also remain blue until approved.
 - Record the exact paper commit audited for figures, tables, and prose in the
   review packet or approval ledger at review time using
   `git -C <paper-worktree> rev-parse HEAD`. Durable documentation must not pin a
