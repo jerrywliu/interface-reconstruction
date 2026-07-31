@@ -810,10 +810,10 @@ def _validate_deposition_location(value: str) -> str:
             "raw-data deposition must be an http(s) URL or a 'doi:10....' identifier"
         )
     lowered = value.lower()
-    placeholder_doi = re.search(
-        r"10\.(?:x{2,}|0{4,}|[0-9x.-]*x[0-9x.-]*)/", lowered
-    ) or re.search(
-        r"10\.[^/\s]+/(?:record|todo|tbd|placeholder|x{2,})(?:\b|$)", lowered
+    placeholder_doi = (
+        re.search(r"10\.(?:x{2,}|0{4,}|[0-9x.-]*x[0-9x.-]*)/", lowered)
+        or re.search(r"10\.[^/\s]+/(?:record|todo|tbd|placeholder)(?:\b|$)", lowered)
+        or re.search(r"10\.[^/\s]+/[^\s?#]*x{2,}", lowered)
     )
     if (
         any(token in lowered for token in ("pending", "placeholder", "example.com"))
@@ -2386,6 +2386,7 @@ def plan_submission_package(
     final_figure_root: Path,
     generator_worktree_root: Path,
     generator_commit: str,
+    documentation_commit: str,
     paper_worktree_root: Path,
     paper_commit: str,
     approved_figures_manifest: Path,
@@ -2398,12 +2399,13 @@ def plan_submission_package(
     paper_entrypoint: str = DEFAULT_PAPER_ENTRYPOINT,
     latexmk_executable: str = "latexmk",
     review_bundle: Path | None = None,
-    documentation_commit: str | None = None,
     audit_runner: Callable[[Path], AuditReport] = audit_final_release,
     checksum_verifier: Callable[[Path, str], list[str]] = verify_sha256_manifest,
     pdf_inspector: Callable[..., PdfQaReport] = inspect_pdf,
 ) -> PackagePlan:
     """Validate every input and return the exact package plan without writing it."""
+    if documentation_commit is None:
+        raise SubmissionPackagingError("documentation commit is required")
     release_root = Path(release_root).resolve()
     output_dir = _resolve_output_destination(output_dir)
     output_parent = _validate_private_output_parent(output_dir)
@@ -2417,7 +2419,7 @@ def plan_submission_package(
     )
     documentation_state = inspect_documentation_authority(
         generator_state.worktree_root,
-        documentation_commit or generator_state.commit,
+        documentation_commit,
         generator_commit=generator_state.commit,
     )
     paper_state = inspect_paper_worktree(

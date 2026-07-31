@@ -102,7 +102,9 @@ commit. It materializes the experiment map from a separate explicit documentatio
 commit so documentation-only repairs do not falsely appear to have produced the
 older figure packet. The documentation commit must descend from the generator
 commit; its commit, tree, map blob, original digest, and public digest are recorded.
-Worktree bytes cannot substitute either plotting or documentation content.
+Both the CLI and Python API require this commit explicitly and never substitute the
+generator commit. Worktree bytes cannot substitute either plotting or documentation
+content.
 
 ```sh
 export DOCUMENTATION_COMMIT=<reviewed-40-character-documentation-commit>

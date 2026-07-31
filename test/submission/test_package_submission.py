@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import inspect
 import io
 import json
 import multiprocessing
@@ -775,6 +776,7 @@ def _plan(tmp_path: Path, output: Path):
         final_figure_root=release.parent / "final-figures",
         generator_worktree_root=paper,
         generator_commit=paper_commit,
+        documentation_commit=paper_commit,
         paper_worktree_root=paper,
         paper_commit=paper_commit,
         approved_figures_manifest=manifest,
@@ -837,6 +839,7 @@ def test_committed_excluded_build_directory_is_not_packaged(tmp_path):
         final_figure_root=release.parent / "final-figures",
         generator_worktree_root=paper,
         generator_commit=paper_commit,
+        documentation_commit=paper_commit,
         paper_worktree_root=paper,
         paper_commit=paper_commit,
         approved_figures_manifest=manifest,
@@ -886,6 +889,7 @@ def test_plan_rejects_existing_package_namespace_overlap(tmp_path, relationship)
             final_figure_root=release.parent / "final-figures",
             generator_worktree_root=paper,
             generator_commit=paper_commit,
+            documentation_commit=paper_commit,
             paper_worktree_root=paper,
             paper_commit=paper_commit,
             approved_figures_manifest=manifest,
@@ -990,6 +994,7 @@ def test_approved_figures_require_exactly_one_candidate_per_slot(tmp_path):
             final_figure_root=release.parent / "final-figures",
             generator_worktree_root=paper,
             generator_commit=paper_commit,
+            documentation_commit=paper_commit,
             paper_worktree_root=paper,
             paper_commit=paper_commit,
             approved_figures_manifest=manifest,
@@ -1045,6 +1050,7 @@ def test_plan_rejects_final_figure_authority_mismatch(tmp_path, mismatch, messag
             final_figure_root=figure_root,
             generator_worktree_root=paper,
             generator_commit=paper_commit,
+            documentation_commit=paper_commit,
             paper_worktree_root=paper,
             paper_commit=paper_commit,
             approved_figures_manifest=manifest,
@@ -1094,6 +1100,7 @@ def test_plan_validates_complete_external_approval_snapshot(
             final_figure_root=figure_root,
             generator_worktree_root=paper,
             generator_commit=paper_commit,
+            documentation_commit=paper_commit,
             paper_worktree_root=paper,
             paper_commit=paper_commit,
             approved_figures_manifest=manifest,
@@ -1144,6 +1151,7 @@ def test_plan_rejects_candidate_hash_changed_in_published_source_map(tmp_path):
             final_figure_root=figure_root,
             generator_worktree_root=paper,
             generator_commit=paper_commit,
+            documentation_commit=paper_commit,
             paper_worktree_root=paper,
             paper_commit=paper_commit,
             approved_figures_manifest=manifest,
@@ -1165,6 +1173,9 @@ def test_plan_rejects_candidate_hash_changed_in_published_source_map(tmp_path):
         "doi:10.0000/interface-release",
         "https://doi.org/10.1234/record",
         "https://doi.org/10.1234/xxxx",
+        "https://doi.org/10.1234/xxxx_release",
+        "https://doi.org/10.1234/xxxxtest",
+        "https://doi.org/10.1234/XXXXTEST",
     ),
 )
 def test_plan_rejects_placeholder_doi_patterns(tmp_path, location):
@@ -1175,6 +1186,7 @@ def test_plan_rejects_placeholder_doi_patterns(tmp_path, location):
             final_figure_root=release.parent / "final-figures",
             generator_worktree_root=paper,
             generator_commit=paper_commit,
+            documentation_commit=paper_commit,
             paper_worktree_root=paper,
             paper_commit=paper_commit,
             approved_figures_manifest=manifest,
@@ -1189,6 +1201,17 @@ def test_plan_rejects_placeholder_doi_patterns(tmp_path, location):
         )
 
 
+@pytest.mark.parametrize(
+    "location",
+    (
+        "https://doi.org/10.1234/exact-interface",
+        "doi:10.1234/complex.dataset",
+    ),
+)
+def test_deposition_location_allows_ordinary_single_x(location):
+    assert package_submission._validate_deposition_location(location) == location
+
+
 def test_plan_fails_closed_when_release_audit_fails(tmp_path):
     release, paper, manifest, paper_commit, latexmk = _make_inputs(tmp_path)
     output = tmp_path / "package"
@@ -1199,6 +1222,7 @@ def test_plan_fails_closed_when_release_audit_fails(tmp_path):
             final_figure_root=release.parent / "final-figures",
             generator_worktree_root=paper,
             generator_commit=paper_commit,
+            documentation_commit=paper_commit,
             paper_worktree_root=paper,
             paper_commit=paper_commit,
             approved_figures_manifest=manifest,
@@ -1222,6 +1246,7 @@ def test_plan_requires_existing_private_output_parent(tmp_path):
         "final_figure_root": release.parent / "final-figures",
         "generator_worktree_root": paper,
         "generator_commit": paper_commit,
+        "documentation_commit": paper_commit,
         "paper_worktree_root": paper,
         "paper_commit": paper_commit,
         "approved_figures_manifest": manifest,
@@ -1279,6 +1304,7 @@ def test_plan_rejects_unapproved_manuscript_graphic(tmp_path):
             final_figure_root=release.parent / "final-figures",
             generator_worktree_root=paper,
             generator_commit=paper_commit,
+            documentation_commit=paper_commit,
             paper_worktree_root=paper,
             paper_commit=paper_commit,
             approved_figures_manifest=manifest,
@@ -1618,6 +1644,7 @@ def test_plan_requires_exact_clean_paper_commit(tmp_path):
         "final_figure_root": release.parent / "final-figures",
         "generator_worktree_root": paper,
         "generator_commit": paper_commit,
+        "documentation_commit": paper_commit,
         "paper_worktree_root": paper,
         "approved_figures_manifest": manifest,
         "raw_data_deposition": "https://doi.org/10.1234/interface.release",
@@ -1644,6 +1671,7 @@ def test_plan_requires_exact_clean_generator_commit(tmp_path):
         "release_root": release,
         "final_figure_root": release.parent / "final-figures",
         "generator_worktree_root": paper,
+        "documentation_commit": paper_commit,
         "paper_worktree_root": paper,
         "paper_commit": paper_commit,
         "approved_figures_manifest": manifest,
@@ -1667,6 +1695,36 @@ def test_plan_requires_exact_clean_generator_commit(tmp_path):
         SubmissionPackagingError, match="generator worktree is not clean"
     ):
         plan_submission_package(generator_commit=paper_commit, **common)
+
+
+def test_plan_requires_explicit_non_none_documentation_commit(tmp_path):
+    parameter = inspect.signature(plan_submission_package).parameters[
+        "documentation_commit"
+    ]
+    assert parameter.default is inspect.Parameter.empty
+
+    release, paper, manifest, paper_commit, latexmk = _make_inputs(tmp_path)
+    with pytest.raises(
+        SubmissionPackagingError, match="documentation commit is required"
+    ):
+        plan_submission_package(
+            release_root=release,
+            final_figure_root=release.parent / "final-figures",
+            generator_worktree_root=paper,
+            generator_commit=paper_commit,
+            documentation_commit=None,
+            paper_worktree_root=paper,
+            paper_commit=paper_commit,
+            approved_figures_manifest=manifest,
+            raw_data_deposition="https://doi.org/10.1234/interface.release",
+            raw_data_manifest_identifier=_manifest_identifier(release),
+            acknowledge_unverified_remote_deposit=True,
+            latexmk_executable=str(latexmk),
+            output_dir=tmp_path / "package",
+            audit_runner=_passing_audit,
+            checksum_verifier=_checksums_pass,
+            pdf_inspector=_vector_pdf,
+        )
 
 
 def test_build_rechecks_generator_worktree_after_planning(tmp_path):
@@ -1704,6 +1762,7 @@ def test_generator_bytes_come_from_commit_despite_hidden_worktree_edit(tmp_path)
         final_figure_root=release.parent / "final-figures",
         generator_worktree_root=paper,
         generator_commit=paper_commit,
+        documentation_commit=paper_commit,
         paper_worktree_root=paper,
         paper_commit=paper_commit,
         approved_figures_manifest=manifest,
@@ -1820,6 +1879,7 @@ def test_plan_rejects_inner_paper_directory_as_worktree_root(tmp_path):
             final_figure_root=release.parent / "final-figures",
             generator_worktree_root=paper,
             generator_commit=paper_commit,
+            documentation_commit=paper_commit,
             paper_worktree_root=paper / "interface-reconstruction-paper",
             paper_commit=paper_commit,
             approved_figures_manifest=manifest,
@@ -1842,6 +1902,7 @@ def test_plan_binds_deposit_to_exact_release_manifest(tmp_path):
             final_figure_root=release.parent / "final-figures",
             generator_worktree_root=paper,
             generator_commit=paper_commit,
+            documentation_commit=paper_commit,
             paper_worktree_root=paper,
             paper_commit=paper_commit,
             approved_figures_manifest=manifest,
@@ -1864,6 +1925,7 @@ def test_plan_fails_when_disposable_manuscript_compile_fails(tmp_path):
             final_figure_root=release.parent / "final-figures",
             generator_worktree_root=paper,
             generator_commit=paper_commit,
+            documentation_commit=paper_commit,
             paper_worktree_root=paper,
             paper_commit=paper_commit,
             approved_figures_manifest=manifest,
@@ -1889,6 +1951,7 @@ def test_build_fails_closed_when_extracted_manuscript_compile_fails(tmp_path):
         final_figure_root=release.parent / "final-figures",
         generator_worktree_root=paper,
         generator_commit=paper_commit,
+        documentation_commit=paper_commit,
         paper_worktree_root=paper,
         paper_commit=paper_commit,
         approved_figures_manifest=manifest,
@@ -1976,6 +2039,7 @@ def test_paper_bytes_come_from_commit_despite_hidden_worktree_edit(
         final_figure_root=release.parent / "final-figures",
         generator_worktree_root=paper,
         generator_commit=paper_commit,
+        documentation_commit=paper_commit,
         paper_worktree_root=paper,
         paper_commit=paper_commit,
         approved_figures_manifest=manifest,
@@ -2034,6 +2098,7 @@ def test_remote_deposit_requires_evidence_or_explicit_manual_acknowledgment(tmp_
         "final_figure_root": release.parent / "final-figures",
         "generator_worktree_root": paper,
         "generator_commit": paper_commit,
+        "documentation_commit": paper_commit,
         "paper_worktree_root": paper,
         "paper_commit": paper_commit,
         "approved_figures_manifest": manifest,
@@ -2067,6 +2132,7 @@ def test_supplied_deposit_manifest_is_checked_and_packaged(tmp_path):
         final_figure_root=release.parent / "final-figures",
         generator_worktree_root=paper,
         generator_commit=paper_commit,
+        documentation_commit=paper_commit,
         paper_worktree_root=paper,
         paper_commit=paper_commit,
         approved_figures_manifest=manifest,
@@ -2118,6 +2184,7 @@ def test_dry_run_plan_does_not_mutate_release_paper_or_output(tmp_path):
         final_figure_root=release.parent / "final-figures",
         generator_worktree_root=paper,
         generator_commit=paper_commit,
+        documentation_commit=paper_commit,
         paper_worktree_root=paper,
         paper_commit=paper_commit,
         approved_figures_manifest=manifest,
@@ -2183,6 +2250,7 @@ def test_deterministic_archives_match_for_identical_inputs(tmp_path):
             final_figure_root=release.parent / "final-figures",
             generator_worktree_root=paper,
             generator_commit=paper_commit,
+            documentation_commit=paper_commit,
             paper_worktree_root=paper,
             paper_commit=paper_commit,
             approved_figures_manifest=manifest,
