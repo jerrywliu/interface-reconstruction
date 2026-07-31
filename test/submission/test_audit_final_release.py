@@ -6,6 +6,8 @@ import json
 import tarfile
 from pathlib import Path
 
+import pytest
+
 from submission.audit_final_release import (
     RUN_CONTEXT_FIELDS,
     audit_final_release,
@@ -411,6 +413,48 @@ def _messages(report) -> str:
     return "\n".join(report.errors)
 
 
+def _read_csv(path: Path) -> tuple[list[str], list[dict[str, str]]]:
+    with path.open(newline="", encoding="utf-8") as stream:
+        reader = csv.DictReader(stream)
+        return list(reader.fieldnames or []), list(reader)
+
+
+def _mutate_csv(path: Path, row_index: int, field_name: str, value: str) -> None:
+    fieldnames, rows = _read_csv(path)
+    rows[row_index][field_name] = value
+    _write_csv(path, fieldnames, rows)
+
+
+def _add_provenance_rows(root: Path) -> None:
+    context = _run_context()
+    merge_fields = ["case_index", "event_order", "event_kind"]
+    raw_merge = {"case_index": 0, "event_order": 1, "event_kind": "facet_assignment"}
+    fallback_fields = ["case_index", "merge_id", "policy"]
+    raw_fallback = {"case_index": 0, "merge_id": 7, "policy": "LVIRA"}
+
+    _write_csv(
+        root / "diagnostics" / "merge_events.csv",
+        [*RUN_CONTEXT_FIELDS, *merge_fields],
+        [{**context, **raw_merge}],
+    )
+    _write_csv(
+        root / "diagnostics" / "unresolved_plic_fallbacks.csv",
+        [*RUN_CONTEXT_FIELDS, *fallback_fields],
+        [{**context, **raw_fallback}],
+    )
+    bundle = root / "raw_runs" / SAVE_NAME / "metrics"
+    _write_csv(bundle / "merge_events.csv", merge_fields, [raw_merge])
+    _write_csv(
+        bundle / "unresolved_plic_fallbacks.csv", fallback_fields, [raw_fallback]
+    )
+
+    inventory_path = root / "diagnostics" / "run_inventory.csv"
+    fieldnames, rows = _read_csv(inventory_path)
+    rows[0]["merge_events_rows"] = "1"
+    rows[0]["unresolved_plic_fallbacks_rows"] = "1"
+    _write_csv(inventory_path, fieldnames, rows)
+
+
 def test_complete_synthetic_release_passes(tmp_path):
     root = _make_release(tmp_path / "release")
 
@@ -553,6 +597,168 @@ def test_source_config_environment_and_run_commit_must_agree(tmp_path):
     assert "environment commit does not match" in messages
     assert "resolved config differs" in messages
     assert "raw run manifest commit mismatch" in messages
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "field_name", "tampered_value", "table_name"),
+    [
+        (
+            "diagnostics/case_metrics.csv",
+            "hausdorff",
+            "1.25",
+            "case_metrics.csv",
+        ),
+        (
+            "diagnostics/cell_metrics.csv",
+            "facet_geometry_json",
+            '{"class":"linear","tampered":true}',
+            "cell_metrics.csv",
+        ),
+        (
+            "diagnostics/merge_events.csv",
+            "event_kind",
+            "tampered_event",
+            "merge_events.csv",
+        ),
+        (
+            "diagnostics/unresolved_plic_fallbacks.csv",
+            "policy",
+            "ELVIRA",
+            "unresolved_plic_fallbacks.csv",
+        ),
+    ],
+)
+def test_value_level_reconciliation_rejects_consolidated_tampering(
+    tmp_path, relative_path, field_name, tampered_value, table_name
+):
+    root = _make_release(tmp_path / "release")
+    _add_provenance_rows(root)
+    _mutate_csv(root / relative_path, 0, field_name, tampered_value)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    messages = _messages(report)
+    assert not report.ok
+    assert "raw/consolidated value mismatch" in messages
+    assert table_name in messages
+    assert field_name in messages
+
+
+def test_value_level_reconciliation_rejects_raw_tampering(tmp_path):
+    root = _make_release(tmp_path / "release")
+    raw_path = root / "raw_runs" / SAVE_NAME / "metrics" / "case_metrics.csv"
+    _mutate_csv(raw_path, 0, "facet_gap", "2.5")
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    messages = _messages(report)
+    assert not report.ok
+    assert "raw/consolidated value mismatch" in messages
+    assert "case_metrics.csv/case_index=0 column facet_gap" in messages
+
+
+def test_reconciliation_reports_missing_and_unexpected_stable_keys(tmp_path):
+    root = _make_release(tmp_path / "release")
+    _mutate_csv(root / "diagnostics" / "cell_metrics.csv", 0, "cell_id", "99,99")
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    messages = _messages(report)
+    assert not report.ok
+    assert "missing consolidated row" in messages
+    assert "cell_id=0,0" in messages
+    assert "unexpected consolidated row" in messages
+    assert "cell_id=99,99" in messages
+
+
+def test_equivalent_decimal_serialization_reconciles_exactly(tmp_path):
+    root = _make_release(tmp_path / "release")
+    raw_path = root / "raw_runs" / SAVE_NAME / "metrics" / "case_metrics.csv"
+    _mutate_csv(raw_path, 0, "hausdorff", "1.0000000000000000")
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    assert report.ok, _messages(report)
+
+
+def test_expected_case_summary_repair_is_reproduced_before_reconciliation(tmp_path):
+    root = _make_release(tmp_path / "release")
+    raw_path = root / "raw_runs" / SAVE_NAME / "metrics" / "case_metrics.csv"
+    _mutate_csv(raw_path, 0, "num_mixed_cells", "999")
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    assert report.ok, _messages(report)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "inventory",
+        "case_metrics",
+        "case_geometry",
+        "cell_metrics",
+        "merge_events",
+        "fallback_events",
+        "run_manifest_context",
+        "nested_run_manifest",
+        "raw_run_manifest",
+    ],
+)
+def test_rescue_profile_is_enforced_across_all_provenance_layers(tmp_path, source):
+    root = _make_release(tmp_path / "release")
+    _add_provenance_rows(root)
+    if source == "inventory":
+        _mutate_csv(
+            root / "diagnostics" / "run_inventory.csv",
+            0,
+            "rescue_profile",
+            "different",
+        )
+    elif source == "case_geometry":
+        path = root / "diagnostics" / "case_geometry.jsonl"
+        rows = [json.loads(line) for line in path.read_text().splitlines()]
+        rows[0]["rescue_profile"] = "different"
+        _write_jsonl(path, rows)
+    elif source in {
+        "case_metrics",
+        "cell_metrics",
+        "merge_events",
+        "fallback_events",
+    }:
+        filename = {
+            "case_metrics": "case_metrics.csv",
+            "cell_metrics": "cell_metrics.csv",
+            "merge_events": "merge_events.csv",
+            "fallback_events": "unresolved_plic_fallbacks.csv",
+        }[source]
+        _mutate_csv(
+            root / "diagnostics" / filename,
+            0,
+            "rescue_profile",
+            "different",
+        )
+    elif source in {"run_manifest_context", "nested_run_manifest"}:
+        path = root / "diagnostics" / "run_manifests.jsonl"
+        row = json.loads(path.read_text())
+        if source == "run_manifest_context":
+            row["rescue_profile"] = "different"
+        else:
+            row["manifest"]["parameters"]["rescue_profile"] = "different"
+        _write_jsonl(path, [row])
+    else:
+        path = root / "raw_runs" / SAVE_NAME / "run_manifest.json"
+        manifest = json.loads(path.read_text())
+        manifest["parameters"]["rescue_profile"] = "different"
+        _write_json(path, manifest)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    messages = _messages(report)
+    assert not report.ok
+    assert "rescue_profile" in messages
+    assert "different" in messages
+    assert "exact_linear_support_only" in messages
 
 
 def test_sha256_manifest_is_sorted_complete_and_verifiable(tmp_path):

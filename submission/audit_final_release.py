@@ -87,6 +87,21 @@ METRICS_BY_EXPERIMENT = {
 
 AGGREGATE_STATS = ("mean", "median", "p25", "p75")
 
+PRODUCTION_CONTEXT_CONFIG_FIELDS = {
+    "plic_fallback": "unresolved_orientation_fallback",
+    "rescue_profile": "rescue_profile",
+    "corner_behavior_profile": "corner_behavior_profile",
+}
+
+RECONCILIATION_TABLES = (
+    ("cell_metrics.csv", ("case_index", "cell_id")),
+    ("case_metrics.csv", ("case_index",)),
+    ("merge_events.csv", ("case_index", "event_order")),
+    ("unresolved_plic_fallbacks.csv", ("case_index", "merge_id")),
+)
+
+INTEGER_KEY_FIELDS = frozenset({"case_index", "event_order", "merge_id"})
+
 
 class ReleaseAuditInputError(ValueError):
     """Raised when a manifest operation receives an unsafe input path."""
@@ -256,6 +271,37 @@ def _read_csv_rows(
     except (OSError, UnicodeError, csv.Error) as exc:
         report.add_error(f"could not read CSV {path}: {exc}")
         return [], []
+
+
+def _production_context(
+    production: Mapping[str, object], report: AuditReport
+) -> dict[str, str]:
+    expected: dict[str, str] = {}
+    for context_field, config_field in PRODUCTION_CONTEXT_CONFIG_FIELDS.items():
+        value = production.get(config_field)
+        if value in (None, ""):
+            report.add_error(
+                f"resolved config production_method.{config_field} is empty"
+            )
+            expected[context_field] = ""
+        else:
+            expected[context_field] = str(value)
+    return expected
+
+
+def _check_production_context(
+    row: Mapping[str, object],
+    production_context: Mapping[str, str],
+    label: str,
+    report: AuditReport,
+) -> None:
+    for field_name, expected in production_context.items():
+        actual = row.get(field_name)
+        if actual != expected:
+            report.add_error(
+                f"{label} {field_name} differs from production: "
+                f"{actual!r} != {expected!r}"
+            )
 
 
 def _iter_jsonl(path: Path, report: AuditReport) -> Iterator[tuple[int, dict]]:
@@ -600,7 +646,7 @@ def _check_inventory(
     trials: int,
     target_commit: str,
     target_branch: str,
-    production: Mapping[str, object],
+    production_context: Mapping[str, str],
     report: AuditReport,
 ) -> dict[RunKey, dict[str, str]]:
     path = root / "diagnostics" / "run_inventory.csv"
@@ -653,16 +699,9 @@ def _check_inventory(
             if not bundle.is_dir():
                 report.add_error(f"inventory raw bundle is missing: {bundle}")
         _check_context_source(row, target_commit, target_branch, label, report)
-        if row.get("plic_fallback") != production.get(
-            "unresolved_orientation_fallback"
-        ):
-            report.add_error(f"inventory fallback differs from production: {key.display()}")
-        if row.get("corner_behavior_profile") != production.get(
-            "corner_behavior_profile"
-        ):
-            report.add_error(
-                f"inventory corner profile differs from production: {key.display()}"
-            )
+        _check_production_context(
+            row, production_context, f"inventory {key.display()}", report
+        )
         for count_field in (
             "case_geometry_rows",
             "case_metrics_rows",
@@ -695,6 +734,7 @@ def _check_consolidated_run_manifests(
     inventory: Mapping[RunKey, Mapping[str, str]],
     target_commit: str,
     target_branch: str,
+    production_context: Mapping[str, str],
     report: AuditReport,
 ) -> None:
     path = root / "diagnostics" / "run_manifests.jsonl"
@@ -720,6 +760,12 @@ def _check_consolidated_run_manifests(
         if inventory_row and save_name != inventory_row.get("save_name"):
             report.add_error(f"run manifest save_name disagrees with inventory: {key.display()}")
         _check_context_source(row, target_commit, target_branch, label, report)
+        _check_production_context(
+            row,
+            production_context,
+            f"consolidated run manifest {key.display()}",
+            report,
+        )
         manifest = row.get("manifest")
         if not isinstance(manifest, dict):
             report.add_error(f"{label} has no nested manifest object")
@@ -734,6 +780,12 @@ def _check_consolidated_run_manifests(
         if not isinstance(parameters, dict):
             report.add_error(f"nested run manifest parameters missing: {key.display()}")
             continue
+        _check_production_context(
+            parameters,
+            production_context,
+            f"nested run manifest parameters {key.display()}",
+            report,
+        )
         try:
             nested_key = RunKey(
                 key.experiment,
@@ -767,6 +819,7 @@ def _check_case_metrics(
     trials: int,
     target_commit: str,
     target_branch: str,
+    production_context: Mapping[str, str],
     report: AuditReport,
 ) -> dict[tuple[RunKey, str], list[float]]:
     path = root / "diagnostics" / "case_metrics.csv"
@@ -798,6 +851,7 @@ def _check_case_metrics(
                 f"unexpected case key in case_metrics: {key.display()}/case={case_index}"
             )
         _check_context_source(row, target_commit, target_branch, label, report)
+        _check_production_context(row, production_context, label, report)
         try:
             mixed_cells = _parse_int(row.get("num_mixed_cells"), f"{label} num_mixed_cells")
             missing_cells = _parse_int(
@@ -837,6 +891,7 @@ def _check_case_geometry(
     trials: int,
     target_commit: str,
     target_branch: str,
+    production_context: Mapping[str, str],
     report: AuditReport,
 ) -> None:
     path = root / "diagnostics" / "case_geometry.jsonl"
@@ -863,6 +918,7 @@ def _check_case_geometry(
         if not row.get("geometry_type"):
             report.add_error(f"{label} has no geometry_type")
         _check_context_source(row, target_commit, target_branch, label, report)
+        _check_production_context(row, production_context, label, report)
     expected_cases = {
         (run_key, case_index)
         for run_key in expected_runs
@@ -964,6 +1020,445 @@ def _check_consolidated_table_counts(
         report.summaries[count_field] = actual
 
 
+def _diagnostic_value(value: object, limit: int = 160) -> str:
+    rendered = repr(value)
+    if len(rendered) <= limit:
+        return rendered
+    return rendered[: limit - 3] + "..."
+
+
+def _csv_values_equal(actual: object, expected: object) -> bool:
+    actual_text = str(actual)
+    expected_text = str(expected)
+    if actual_text == expected_text:
+        return True
+    # Consolidation copies CSV text verbatim except for recomputed case summaries.
+    # Accept equivalent decimal spellings, but no epsilon-sized scientific drift.
+    try:
+        return _canonical_number(actual_text) == _canonical_number(expected_text)
+    except ReleaseAuditInputError:
+        return False
+
+
+def _reconciliation_key(
+    row: Mapping[str, object],
+    key_fields: Sequence[str],
+    label: str,
+) -> tuple[object, ...]:
+    values: list[object] = []
+    for field_name in key_fields:
+        value = row.get(field_name)
+        if value in (None, ""):
+            raise ReleaseAuditInputError(f"{label} has empty key field {field_name}")
+        if field_name in INTEGER_KEY_FIELDS:
+            value = _parse_int(value, f"{label} {field_name}")
+        else:
+            value = str(value)
+        values.append(value)
+    return tuple(values)
+
+
+def _format_reconciliation_key(key_fields: Sequence[str], key: Sequence[object]) -> str:
+    return ",".join(
+        f"{field_name}={value}" for field_name, value in zip(key_fields, key)
+    )
+
+
+def _index_reconciliation_rows(
+    rows: Iterable[Mapping[str, object]],
+    key_fields: Sequence[str],
+    label: str,
+    report: AuditReport,
+) -> dict[tuple[object, ...], Mapping[str, object]]:
+    indexed: dict[tuple[object, ...], Mapping[str, object]] = {}
+    for row_number, row in enumerate(rows, start=1):
+        row_label = f"{label} row {row_number}"
+        try:
+            key = _reconciliation_key(row, key_fields, row_label)
+        except ReleaseAuditInputError as exc:
+            report.add_error(str(exc))
+            continue
+        if key in indexed:
+            report.add_error(
+                f"duplicate reconciliation key in {label}: "
+                f"{_format_reconciliation_key(key_fields, key)}"
+            )
+            continue
+        indexed[key] = row
+    return indexed
+
+
+def _diagnostic_numeric_value(value: object, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _cell_row_priority(row: Mapping[str, object]) -> tuple[bool, bool, int, int]:
+    return (
+        row.get("construction_path") == "plic_fallback",
+        row.get("final_facet_class") not in (None, "", "missing"),
+        _diagnostic_numeric_value(row.get("event_count")),
+        _diagnostic_numeric_value(row.get("merge_id"), default=-1),
+    )
+
+
+def _deduplicate_raw_cell_rows(
+    rows: Iterable[Mapping[str, object]],
+) -> list[Mapping[str, object]]:
+    selected: dict[tuple[object, object], Mapping[str, object]] = {}
+    for row in rows:
+        key = (row.get("case_index", ""), row.get("cell_id", ""))
+        current = selected.get(key)
+        if current is None or _cell_row_priority(row) > _cell_row_priority(current):
+            selected[key] = row
+    return list(selected.values())
+
+
+def _cell_summary(rows: Sequence[Mapping[str, object]]) -> dict[str, int | float]:
+    class_counts: dict[str, int] = defaultdict(int)
+    merge_ids: set[object] = set()
+    merged_ids: set[object] = set()
+    for row in rows:
+        class_counts[str(row.get("final_facet_class", ""))] += 1
+        merge_id = row.get("merge_id", "")
+        merge_ids.add(merge_id)
+        if _diagnostic_numeric_value(row.get("is_merged")):
+            merged_ids.add(merge_id)
+
+    def count(field_name: str) -> int:
+        return sum(_diagnostic_numeric_value(row.get(field_name)) for row in rows)
+
+    def fraction(value: int) -> float:
+        return value / len(rows) if rows else 0.0
+
+    merged_cells = count("is_merged")
+    fallback_cells = sum(
+        row.get("construction_path") == "plic_fallback" for row in rows
+    )
+    used_circular = count("used_circular")
+    used_linear_corner = count("used_linear_corner")
+    used_curved_corner = count("used_curved_corner")
+    used_curved_corner_rescue = count("used_curved_corner_rescue")
+    return {
+        "num_mixed_cells": len(rows),
+        "num_merge_components": len(merge_ids),
+        "num_merged_cells": merged_cells,
+        "num_merged_components": len(merged_ids),
+        "num_plic_fallback_cells": fallback_cells,
+        "num_used_circular_cells": used_circular,
+        "num_used_linear_corner_cells": used_linear_corner,
+        "num_used_curved_corner_cells": used_curved_corner,
+        "num_used_curved_corner_rescue_cells": used_curved_corner_rescue,
+        "num_final_linear_cells": class_counts["linear"],
+        "num_final_circular_cells": class_counts["circular"],
+        "num_final_linear_corner_cells": class_counts["linear_corner"],
+        "num_final_curved_corner_cells": class_counts["curved_corner"],
+        "num_final_missing_cells": class_counts["missing"],
+        "fraction_merged_cells": fraction(merged_cells),
+        "fraction_plic_fallback_cells": fraction(fallback_cells),
+        "fraction_used_circular_cells": fraction(used_circular),
+        "fraction_used_linear_corner_cells": fraction(used_linear_corner),
+        "fraction_used_curved_corner_cells": fraction(used_curved_corner),
+        "fraction_used_curved_corner_rescue_cells": fraction(used_curved_corner_rescue),
+        "fraction_final_linear_cells": fraction(class_counts["linear"]),
+        "fraction_final_circular_cells": fraction(class_counts["circular"]),
+        "fraction_final_linear_corner_cells": fraction(class_counts["linear_corner"]),
+        "fraction_final_curved_corner_cells": fraction(class_counts["curved_corner"]),
+    }
+
+
+def _summaries_from_cell_rows(
+    key: RunKey,
+    rows: Sequence[Mapping[str, object]],
+    report: AuditReport,
+) -> dict[tuple[RunKey, int], dict[str, int | float]]:
+    rows_by_case: dict[int, list[Mapping[str, object]]] = defaultdict(list)
+    for row_number, row in enumerate(rows, start=1):
+        try:
+            case_index = _parse_int(
+                row.get("case_index"),
+                f"raw cell row {row_number} for {key.display()} case_index",
+            )
+        except ReleaseAuditInputError as exc:
+            report.add_error(str(exc))
+            continue
+        rows_by_case[case_index].append(row)
+    return {
+        (key, case_index): _cell_summary(case_rows)
+        for case_index, case_rows in rows_by_case.items()
+    }
+
+
+def _repair_raw_case_rows(
+    key: RunKey,
+    rows: Sequence[Mapping[str, object]],
+    summaries: Mapping[tuple[RunKey, int], Mapping[str, int | float]],
+    report: AuditReport,
+) -> list[Mapping[str, object]]:
+    repaired: list[Mapping[str, object]] = []
+    for row_number, row in enumerate(rows, start=1):
+        copied = dict(row)
+        try:
+            case_index = _parse_int(
+                row.get("case_index"),
+                f"raw case row {row_number} for {key.display()} case_index",
+            )
+        except ReleaseAuditInputError as exc:
+            report.add_error(str(exc))
+            repaired.append(copied)
+            continue
+        summary = summaries.get((key, case_index))
+        if summary is None:
+            report.add_error(
+                f"raw case row has no reconciled cell summary: "
+                f"{key.display()}/case={case_index}"
+            )
+        else:
+            for field_name, value in summary.items():
+                if field_name in copied:
+                    copied[field_name] = value
+        repaired.append(copied)
+    return repaired
+
+
+def _check_consolidated_row_context(
+    row: Mapping[str, object],
+    key: RunKey,
+    inventory_row: Mapping[str, str],
+    production_context: Mapping[str, str],
+    table_name: str,
+    reported: set[tuple[RunKey, str, str]],
+    report: AuditReport,
+) -> None:
+    for field_name in RUN_CONTEXT_FIELDS:
+        expected = production_context.get(field_name, inventory_row.get(field_name, ""))
+        actual = row.get(field_name)
+        if actual == expected:
+            continue
+        token = (key, field_name, str(actual))
+        if token in reported:
+            continue
+        reported.add(token)
+        report.add_error(
+            f"consolidated {table_name} context mismatch for {key.display()}: "
+            f"{field_name}={actual!r}, expected {expected!r}"
+        )
+
+
+def _reconcile_run_rows(
+    root: Path,
+    table_name: str,
+    key_fields: Sequence[str],
+    consolidated_fields: Sequence[str],
+    consolidated_rows: Sequence[Mapping[str, object]],
+    key: RunKey,
+    inventory_row: Mapping[str, str],
+    case_summaries: dict[tuple[RunKey, int], dict[str, int | float]],
+    report: AuditReport,
+) -> int:
+    try:
+        bundle = _safe_release_path(
+            root,
+            inventory_row.get("run_bundle"),
+            f"inventory bundle for {key.display()}",
+        )
+    except ReleaseAuditInputError as exc:
+        report.add_error(str(exc))
+        return 0
+    raw_path = bundle / "metrics" / table_name
+    raw_fields, raw_rows = _read_csv_rows(raw_path, key_fields, report)
+    data_fields = [
+        field_name
+        for field_name in consolidated_fields
+        if field_name not in RUN_CONTEXT_FIELDS
+    ]
+    if raw_fields != data_fields:
+        report.add_error(
+            f"raw/consolidated schema mismatch for {key.display()}/{table_name}: "
+            f"raw={raw_fields!r}, consolidated={data_fields!r}"
+        )
+
+    expected_rows: Sequence[Mapping[str, object]] = raw_rows
+    if table_name == "cell_metrics.csv":
+        expected_rows = _deduplicate_raw_cell_rows(raw_rows)
+        case_summaries.update(_summaries_from_cell_rows(key, expected_rows, report))
+    elif table_name == "case_metrics.csv":
+        expected_rows = _repair_raw_case_rows(key, raw_rows, case_summaries, report)
+
+    consolidated_index = _index_reconciliation_rows(
+        consolidated_rows,
+        key_fields,
+        f"consolidated {key.display()}/{table_name}",
+        report,
+    )
+    raw_index = _index_reconciliation_rows(
+        expected_rows,
+        key_fields,
+        f"raw {key.display()}/{table_name}",
+        report,
+    )
+    for row_key in sorted(raw_index.keys() - consolidated_index.keys()):
+        report.add_error(
+            f"missing consolidated row for {key.display()}/{table_name}/"
+            f"{_format_reconciliation_key(key_fields, row_key)}"
+        )
+    for row_key in sorted(consolidated_index.keys() - raw_index.keys()):
+        report.add_error(
+            f"unexpected consolidated row for {key.display()}/{table_name}/"
+            f"{_format_reconciliation_key(key_fields, row_key)}"
+        )
+
+    shared_fields = [
+        field_name for field_name in data_fields if field_name in raw_fields
+    ]
+    for row_key in sorted(consolidated_index.keys() & raw_index.keys()):
+        actual = consolidated_index[row_key]
+        expected = raw_index[row_key]
+        for field_name in shared_fields:
+            if _csv_values_equal(
+                actual.get(field_name, ""), expected.get(field_name, "")
+            ):
+                continue
+            report.add_error(
+                f"raw/consolidated value mismatch for {key.display()}/{table_name}/"
+                f"{_format_reconciliation_key(key_fields, row_key)} column "
+                f"{field_name}: consolidated="
+                f"{_diagnostic_value(actual.get(field_name, ''))}, raw="
+                f"{_diagnostic_value(expected.get(field_name, ''))}"
+            )
+    return len(consolidated_rows)
+
+
+def _reconcile_consolidated_table(
+    root: Path,
+    table_name: str,
+    key_fields: Sequence[str],
+    expected_runs: set[RunKey],
+    inventory: Mapping[RunKey, Mapping[str, str]],
+    production_context: Mapping[str, str],
+    case_summaries: dict[tuple[RunKey, int], dict[str, int | float]],
+    report: AuditReport,
+) -> None:
+    path = root / "diagnostics" / table_name
+    if not path.is_file():
+        report.add_error(f"missing required CSV file: {path}")
+        return
+    seen_groups: set[RunKey] = set()
+    reported_context: set[tuple[RunKey, str, str]] = set()
+    total_rows = 0
+
+    def reconcile_group(
+        key: RunKey | None,
+        rows: list[Mapping[str, object]],
+        fieldnames: Sequence[str],
+    ) -> None:
+        nonlocal total_rows
+        if key is None or not rows:
+            return
+        total_rows += len(rows)
+        if key in seen_groups:
+            report.add_error(
+                f"consolidated {table_name} contains noncontiguous blocks for "
+                f"{key.display()}"
+            )
+        seen_groups.add(key)
+        inventory_row = inventory.get(key)
+        if inventory_row is None:
+            report.add_error(
+                f"consolidated {table_name} has rows for an unindexed run: "
+                f"{key.display()}"
+            )
+            return
+        for row in rows:
+            _check_consolidated_row_context(
+                row,
+                key,
+                inventory_row,
+                production_context,
+                table_name,
+                reported_context,
+                report,
+            )
+        _reconcile_run_rows(
+            root,
+            table_name,
+            key_fields,
+            fieldnames,
+            rows,
+            key,
+            inventory_row,
+            case_summaries,
+            report,
+        )
+
+    try:
+        with path.open(newline="", encoding="utf-8") as stream:
+            reader = csv.DictReader(stream)
+            fieldnames = list(reader.fieldnames or [])
+            required = set(RUN_CONTEXT_FIELDS) | set(key_fields)
+            if not _require_headers(fieldnames, required, path, report):
+                return
+            current_key: RunKey | None = None
+            current_rows: list[Mapping[str, object]] = []
+            for row_number, row in enumerate(reader, start=2):
+                label = f"{path}:{row_number}"
+                try:
+                    key = _run_key(row, label)
+                except ReleaseAuditInputError as exc:
+                    report.add_error(str(exc))
+                    continue
+                if current_key is not None and key != current_key:
+                    reconcile_group(current_key, current_rows, fieldnames)
+                    current_rows = []
+                current_key = key
+                current_rows.append(row)
+            reconcile_group(current_key, current_rows, fieldnames)
+    except (OSError, UnicodeError, csv.Error) as exc:
+        report.add_error(f"could not reconcile CSV {path}: {exc}")
+        return
+
+    count_field = table_name.removesuffix(".csv") + "_rows"
+    for key in sorted(expected_runs):
+        row = inventory.get(key)
+        if row is None:
+            continue
+        try:
+            expected_count = _parse_int(
+                row.get(count_field), f"{key.display()} {count_field}"
+            )
+        except ReleaseAuditInputError:
+            continue
+        if expected_count and key not in seen_groups:
+            report.add_error(
+                f"consolidated {table_name} is missing the run block for "
+                f"{key.display()}"
+            )
+    report.summaries[f"reconciled_{table_name.removesuffix('.csv')}_rows"] = total_rows
+
+
+def _reconcile_consolidated_tables(
+    root: Path,
+    expected_runs: set[RunKey],
+    inventory: Mapping[RunKey, Mapping[str, str]],
+    production_context: Mapping[str, str],
+    report: AuditReport,
+) -> None:
+    case_summaries: dict[tuple[RunKey, int], dict[str, int | float]] = {}
+    for table_name, key_fields in RECONCILIATION_TABLES:
+        _reconcile_consolidated_table(
+            root,
+            table_name,
+            key_fields,
+            expected_runs,
+            inventory,
+            production_context,
+            case_summaries,
+            report,
+        )
+
+
 def _check_raw_case_rows(
     bundle: Path,
     key: RunKey,
@@ -1048,6 +1543,7 @@ def _check_raw_bundle(
     trials: int,
     target_commit: str,
     target_branch: str,
+    production_context: Mapping[str, str],
     report: AuditReport,
 ) -> None:
     for path in bundle.rglob("*"):
@@ -1069,6 +1565,12 @@ def _check_raw_bundle(
         if not isinstance(parameters, dict):
             report.add_error(f"raw run manifest parameters missing: {key.display()}")
         else:
+            _check_production_context(
+                parameters,
+                production_context,
+                f"raw run manifest parameters {key.display()}",
+                report,
+            )
             try:
                 manifest_key = RunKey(
                     key.experiment,
@@ -1183,6 +1685,7 @@ def _check_raw_bundles(
     trials: int,
     target_commit: str,
     target_branch: str,
+    production_context: Mapping[str, str],
     report: AuditReport,
 ) -> None:
     raw_root = root / "raw_runs"
@@ -1230,6 +1733,7 @@ def _check_raw_bundles(
             trials,
             target_commit,
             target_branch,
+            production_context,
             report,
         )
     report.summaries["raw_bundles"] = len(raw_dirs)
@@ -1373,6 +1877,7 @@ def audit_final_release(
     if not isinstance(production, dict):
         report.add_error("resolved config production_method is not an object")
         production = {}
+    production_context = _production_context(production, report)
 
     _check_controller(root, required_runs, required_cases, report)
     inventory = _check_inventory(
@@ -1381,7 +1886,7 @@ def audit_final_release(
         trials,
         target_commit,
         target_branch,
-        production,
+        production_context,
         report,
     )
     _check_consolidated_run_manifests(
@@ -1390,6 +1895,7 @@ def audit_final_release(
         inventory,
         target_commit,
         target_branch,
+        production_context,
         report,
     )
     case_values = _check_case_metrics(
@@ -1398,6 +1904,7 @@ def audit_final_release(
         trials,
         target_commit,
         target_branch,
+        production_context,
         report,
     )
     _check_case_geometry(
@@ -1406,6 +1913,7 @@ def audit_final_release(
         trials,
         target_commit,
         target_branch,
+        production_context,
         report,
     )
     _check_consolidated_table_counts(root, inventory, report)
@@ -1416,6 +1924,14 @@ def audit_final_release(
         trials,
         target_commit,
         target_branch,
+        production_context,
+        report,
+    )
+    _reconcile_consolidated_tables(
+        root,
+        expected_runs,
+        inventory,
+        production_context,
         report,
     )
     _check_aggregate_metrics(root, expected_runs, case_values, report)
