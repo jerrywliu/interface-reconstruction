@@ -5,6 +5,7 @@ import numpy as np
 from matplotlib.collections import PathCollection
 
 from experiments.static import figure_generation_provenance as provenance
+from experiments.static import generate_plic_baseline_stencil_figure as plic_figure
 from experiments.static import generate_section6_maintext_figures as maintext_figs
 from experiments.static import run_appendix_c0_study as c0_study
 from experiments.static import run_appendix_resolution_visuals as resolution_visuals
@@ -54,6 +55,34 @@ def test_generation_provenance_filters_generated_roots(monkeypatch):
     assert record["source_dirty"] is True
     assert record["source_status"] == [" M experiments/static/example.py"]
     assert record["reconstruction_profile"]["plic_fallback"] == "LVIRA"
+
+
+def test_plic_stencil_figure_renders_without_external_latex(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        plic_figure,
+        "generation_provenance",
+        lambda **_kwargs: {
+            "source_commit": "a" * 40,
+            "source_dirty": False,
+            "source_status": [],
+        },
+    )
+    monkeypatch.setitem(plt.rcParams, "text.usetex", False)
+
+    metadata = plic_figure.build_figure(
+        tmp_path / "plic_stencil",
+        case_index=4,
+        cell_x=14,
+        cell_y=13,
+        resolution=0.32,
+        wiggle=0.3,
+        seed=0,
+    )
+
+    assert metadata["center_cell_hausdorff_over_h"]["LVIRA"] < 1.0e-6
+    assert (tmp_path / "plic_stencil.pdf").is_file()
+    assert (tmp_path / "plic_stencil.svg").is_file()
+    assert (tmp_path / "plic_stencil.png").is_file()
 
 
 def test_resolution_runner_generates_paired_vector_artifacts(tmp_path, monkeypatch):

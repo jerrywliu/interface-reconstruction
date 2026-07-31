@@ -40,9 +40,6 @@ METHOD_COLORS = {
 
 plt.rcParams.update(
     {
-        "text.usetex": True,
-        "font.family": "serif",
-        "text.latex.preamble": r"\usepackage{txfonts}",
         "pdf.fonttype": 42,
         "ps.fonttype": 42,
         "svg.fonttype": "none",
@@ -79,9 +76,7 @@ def _extract_stencil(
         perturb_wiggle=wiggle,
         perturb_seed=seed,
     )
-    mesh = MergeMesh(
-        make_points_from_config(mesh_config), config["GEOMS"]["THRESHOLD"]
-    )
+    mesh = MergeMesh(make_points_from_config(mesh_config), config["GEOMS"]["THRESHOLD"])
     p1, p2, angle = _line_case_params(case_index)
     mesh.initializeFractions(initializeLine(mesh, p1, p2))
 
@@ -101,8 +96,7 @@ def _extract_stencil(
 def _mix_with_white(color, fraction: float):
     fraction = max(0.0, min(1.0, float(fraction)))
     return tuple(
-        (1.0 - fraction) * WHITE[index] + fraction * color[index]
-        for index in range(3)
+        (1.0 - fraction) * WHITE[index] + fraction * color[index] for index in range(3)
     )
 
 
@@ -196,10 +190,11 @@ def _plot_panel(
     for spine in ax.spines.values():
         spine.set_visible(False)
     ax.set_title(
-        rf"\textbf{{({panel_label}) {method}}}"
+        f"({panel_label}) {method}"
         + "\n"
         + rf"$d_H/h={_scientific_tex(normalized_error)}$",
         fontsize=10.5,
+        fontweight="bold",
         pad=5,
     )
 
@@ -237,9 +232,7 @@ def build_figure(
         for method, facet in facets.items()
     }
     nominal_h = 1.0 / resolution
-    normalized_errors = {
-        method: error / nominal_h for method, error in errors.items()
-    }
+    normalized_errors = {method: error / nominal_h for method, error in errors.items()}
 
     xs = [point[0] for row in stencil for poly in row for point in poly.points]
     ys = [point[1] for row in stencil for poly in row for point in poly.points]
@@ -315,8 +308,7 @@ def build_figure(
         "line_points": [p1, p2],
         "center_fraction": float(center.getFraction()),
         "stencil_fractions": [
-            [float(stencil[i][j].getFraction()) for j in range(3)]
-            for i in range(3)
+            [float(stencil[i][j].getFraction()) for j in range(3)] for i in range(3)
         ],
         "center_cell_hausdorff": errors,
         "center_cell_hausdorff_over_h": normalized_errors,

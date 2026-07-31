@@ -733,8 +733,12 @@ def run_command(
             command, cwd=cwd, env=dict(env), stdout=log, stderr=subprocess.STDOUT
         )
     if result.returncode != 0:
+        try:
+            log_tail = log_path.read_text(encoding="utf-8", errors="replace")[-4000:]
+        except OSError:
+            log_tail = "<generator log unavailable>"
         raise FinalFigureOrchestrationError(
-            f"Generator failed ({result.returncode}); see {log_path}"
+            f"Generator failed ({result.returncode}); {log_path}\n{log_tail}"
         )
 
 
@@ -1116,6 +1120,129 @@ def orchestrate_final_figures(
                 }
             )
 
+        # Run the cheap deterministic generators before any companion sweep so
+        # runtime/font incompatibilities fail before the expensive studies.
+        deterministic = generated / "deterministic"
+        plic_base = deterministic / "perfect_reconstruction_plic_stencil"
+        plic_cmd = [
+            python,
+            "-B",
+            "-m",
+            "experiments.static.generate_plic_baseline_stencil_figure",
+            "--out",
+            str(plic_base),
+            "--case-index",
+            "4",
+            "--cell-x",
+            "14",
+            "--cell-y",
+            "13",
+            "--resolution",
+            "0.32",
+            "--wiggle",
+            "0.3",
+            "--seed",
+            "0",
+        ]
+        _require(
+            not deterministic.exists(), "Deterministic generator root already exists"
+        )
+        run_approved_command(plic_cmd, execution, env, logs / "deterministic_plic.log")
+        contracts["deterministic_plic"] = validate_plic_metadata(
+            plic_base.with_name(f"{plic_base.name}_data.json"),
+            approved_generator_commit,
+        )
+        candidates.append(
+            _stage_candidate(
+                plic_base.with_suffix(".pdf"),
+                staging,
+                by_id["perfect_reconstruction_plic_stencil"],
+                "deterministic_plic_stencil",
+            )
+        )
+        _copy_manifest(
+            plic_base.with_name(f"{plic_base.name}_data.json"),
+            staging,
+            "provenance/deterministic/perfect_reconstruction_plic_stencil_data.json",
+            "deterministic_producer_manifest",
+            snapshot_artifacts,
+        )
+        _copy_manifest(
+            _write_command_record(
+                execution / "plic_command.json",
+                plic_cmd,
+                approved_generator_commit,
+                staging_root=staging,
+                execution_root=execution,
+            ),
+            staging,
+            "provenance/deterministic/plic_command.json",
+            "generator_command",
+            snapshot_artifacts,
+        )
+
+        staged_out = deterministic / "staged"
+        staged_cmd = [
+            python,
+            "-B",
+            "-m",
+            "experiments.static.generate_staged_reconstruction_figure",
+            "--case-index",
+            "22",
+            "--resolution",
+            "1.0",
+            "--wiggle",
+            "0.1",
+            "--seed",
+            "0",
+            "--radius",
+            "15.0",
+            "--slot-width",
+            "5.0",
+            "--slot-top-rel",
+            "10.0",
+            "--output-dir",
+            str(staged_out),
+            "--prefix",
+            "staged_reconstruction_zalesak",
+        ]
+        _require(not staged_out.exists(), "Staged generator root already exists")
+        run_approved_command(
+            staged_cmd, execution, env, logs / "deterministic_staged.log"
+        )
+        staged_data = staged_out / "staged_reconstruction_zalesak_data.json"
+        contracts["deterministic_staged"] = validate_staged_metadata(
+            staged_data, approved_generator_commit
+        )
+        candidates.append(
+            _stage_candidate(
+                staged_out / "staged_reconstruction_zalesak.pdf",
+                staging,
+                by_id["staged_reconstruction_zalesak"],
+                "deterministic_staged_reconstruction",
+            )
+        )
+        _copy_manifest(
+            staged_data,
+            staging,
+            "provenance/deterministic/staged_reconstruction_zalesak_data.json",
+            "deterministic_producer_manifest",
+            snapshot_artifacts,
+        )
+        _copy_manifest(
+            _write_command_record(
+                execution / "staged_command.json",
+                staged_cmd,
+                approved_generator_commit,
+                staging_root=staging,
+                execution_root=execution,
+            ),
+            staging,
+            "provenance/deterministic/staged_command.json",
+            "generator_command",
+            snapshot_artifacts,
+        )
+
         resolution_contract = {
             "status": "validated",
             "resolutions": list(RESOLUTION_VALUES),
@@ -1402,127 +1529,6 @@ def orchestrate_final_figures(
                 "guarded_c0_companion_run_manifest",
                 snapshot_artifacts,
             )
-
-        deterministic = generated / "deterministic"
-        plic_base = deterministic / "perfect_reconstruction_plic_stencil"
-        plic_cmd = [
-            python,
-            "-B",
-            "-m",
-            "experiments.static.generate_plic_baseline_stencil_figure",
-            "--out",
-            str(plic_base),
-            "--case-index",
-            "4",
-            "--cell-x",
-            "14",
-            "--cell-y",
-            "13",
-            "--resolution",
-            "0.32",
-            "--wiggle",
-            "0.3",
-            "--seed",
-            "0",
-        ]
-        _require(
-            not deterministic.exists(), "Deterministic generator root already exists"
-        )
-        run_approved_command(plic_cmd, execution, env, logs / "deterministic_plic.log")
-        contracts["deterministic_plic"] = validate_plic_metadata(
-            plic_base.with_name(f"{plic_base.name}_data.json"),
-            approved_generator_commit,
-        )
-        candidates.append(
-            _stage_candidate(
-                plic_base.with_suffix(".pdf"),
-                staging,
-                by_id["perfect_reconstruction_plic_stencil"],
-                "deterministic_plic_stencil",
-            )
-        )
-        _copy_manifest(
-            plic_base.with_name(f"{plic_base.name}_data.json"),
-            staging,
-            "provenance/deterministic/perfect_reconstruction_plic_stencil_data.json",
-            "deterministic_producer_manifest",
-            snapshot_artifacts,
-        )
-        _copy_manifest(
-            _write_command_record(
-                execution / "plic_command.json",
-                plic_cmd,
-                approved_generator_commit,
-                staging_root=staging,
-                execution_root=execution,
-            ),
-            staging,
-            "provenance/deterministic/plic_command.json",
-            "generator_command",
-            snapshot_artifacts,
-        )
-
-        staged_out = deterministic / "staged"
-        staged_cmd = [
-            python,
-            "-B",
-            "-m",
-            "experiments.static.generate_staged_reconstruction_figure",
-            "--case-index",
-            "22",
-            "--resolution",
-            "1.0",
-            "--wiggle",
-            "0.1",
-            "--seed",
-            "0",
-            "--radius",
-            "15.0",
-            "--slot-width",
-            "5.0",
-            "--slot-top-rel",
-            "10.0",
-            "--output-dir",
-            str(staged_out),
-            "--prefix",
-            "staged_reconstruction_zalesak",
-        ]
-        _require(not staged_out.exists(), "Staged generator root already exists")
-        run_approved_command(
-            staged_cmd, execution, env, logs / "deterministic_staged.log"
-        )
-        staged_data = staged_out / "staged_reconstruction_zalesak_data.json"
-        contracts["deterministic_staged"] = validate_staged_metadata(
-            staged_data, approved_generator_commit
-        )
-        candidates.append(
-            _stage_candidate(
-                staged_out / "staged_reconstruction_zalesak.pdf",
-                staging,
-                by_id["staged_reconstruction_zalesak"],
-                "deterministic_staged_reconstruction",
-            )
-        )
-        _copy_manifest(
-            staged_data,
-            staging,
-            "provenance/deterministic/staged_reconstruction_zalesak_data.json",
-            "deterministic_producer_manifest",
-            snapshot_artifacts,
-        )
-        _copy_manifest(
-            _write_command_record(
-                execution / "staged_command.json",
-                staged_cmd,
-                approved_generator_commit,
-                staging_root=staging,
-                execution_root=execution,
-            ),
-            staging,
-            "provenance/deterministic/staged_command.json",
-            "generator_command",
-            snapshot_artifacts,
-        )
 
         _require(
             len(candidates) == 38
