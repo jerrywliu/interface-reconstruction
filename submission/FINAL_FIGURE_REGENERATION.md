@@ -44,7 +44,8 @@ export PLOTS_VIEW="$FIGURE_ROOT/final_plots_view"
 mkdir -p "$FIGURE_ROOT"
 ```
 
-Poppler's `pdfimages` and `pdffonts` must be on `PATH` for final QA.
+Poppler's `pdfimages`, `pdffonts`, `pdfinfo`, `pdfunite`, and `pdftocairo` must
+be on `PATH` for final QA and review-packet construction.
 
 ## Release Gate
 
@@ -83,7 +84,14 @@ print(f"READY: {root}")
 PY
 ```
 
-Do not continue after any failed assertion.
+Do not continue after any failed assertion. Then write and verify the immutable
+release checksum ledger used by every figure provenance manifest:
+
+```bash
+python submission/audit_final_release.py "$FINAL_ROOT" \
+  --write-sha256-manifest \
+  --verify-sha256-manifest
+```
 
 Every dedicated companion generator below (resolution, guarded `C0`, PLIC, and
 staged reconstruction) must also be preceded immediately by this source gate:
@@ -142,7 +150,7 @@ PY
 
 ## Regeneration Commands
 
-### Main Metrics
+### Main Metrics And Representatives
 
 Source: `FINAL_ROOT/perturbed_sweep.csv`. Driver:
 `experiments/static/generate_section6_maintext_figures.py`.
@@ -152,29 +160,16 @@ python -m experiments.static.generate_section6_maintext_figures \
   --csv "$FINAL_ROOT/perturbed_sweep.csv" \
   --plots_root "$PLOTS_VIEW" \
   --out_dir "$FIGURE_ROOT/section6" \
-  --figure_groups quantitative \
-  --experiments all
+  --figure_groups quantitative,representative \
+  --endpoint_variants paired \
+  --case_overrides lines=6,squares=24,circles=12,ellipses=12,zalesak=12 \
+  --experiments all \
+  --release_root "$FINAL_ROOT"
 ```
 
 Authoritative outputs are
 `section6/summary_plots/{lines,squares,circles,ellipses,zalesak}_maintext_metrics.pdf`.
 The same stems ending in `.png` are review previews.
-
-### Representatives
-
-Source: selected VTK and facet metadata inside `PLOTS_VIEW`; the final CSV supplies
-the exact immutable bundle mapping. The current proposed cases are lines `6`,
-squares `24`, circles `12`, ellipses `12`, and Zalesak `12`.
-
-```bash
-python -m experiments.static.generate_section6_maintext_figures \
-  --csv "$FINAL_ROOT/perturbed_sweep.csv" \
-  --plots_root "$PLOTS_VIEW" \
-  --out_dir "$FIGURE_ROOT/section6" \
-  --figure_groups representative \
-  --endpoint_variants paired \
-  --case_overrides lines=6,squares=24,circles=12,ellipses=12,zalesak=12
-```
 
 Outputs are
 `section6/representative_cases/<experiment>_maintext_representative_{with_endpoints,clean}.pdf`.
@@ -182,9 +177,10 @@ Do not choose or rename a variant until author review.
 
 ### Resolution Studies
 
-These are dedicated final-commit companion runs at `N=16,32,64`, not rows in
-the primary sweep. Current proposed cases are lines `0`, squares `22`, circles
-`12`, ellipses `12`, and Zalesak `20`.
+These are dedicated release-anchored companion runs at `N=16,32,64`, not rows
+in the primary sweep. Their manifests record the actual clean generator commit
+separately from the frozen release commit. Current proposed cases are lines `0`,
+squares `22`, circles `12`, ellipses `12`, and Zalesak `20`.
 
 ```bash
 test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
@@ -193,23 +189,28 @@ python submission/check_submission_freeze.py --source-only
 python -m experiments.static.run_appendix_resolution_visuals --only lines \
   --case_index 0 --resolutions 0.16,0.32,0.64 --wiggles 0,0.1 \
   --save_prefix "final_resolution_${SOURCE_COMMIT:0:12}_lines" \
-  --endpoint_variants paired --out_dir "$FIGURE_ROOT/resolution/lines"
+  --endpoint_variants paired --out_dir "$FIGURE_ROOT/resolution/lines" \
+  --release_root "$FINAL_ROOT"
 python -m experiments.static.run_appendix_resolution_visuals --only squares \
   --case_index 22 --resolutions 0.16,0.32,0.64 --wiggles 0,0.1 \
   --save_prefix "final_resolution_${SOURCE_COMMIT:0:12}_squares" \
-  --endpoint_variants paired --out_dir "$FIGURE_ROOT/resolution/squares"
+  --endpoint_variants paired --out_dir "$FIGURE_ROOT/resolution/squares" \
+  --release_root "$FINAL_ROOT"
 python -m experiments.static.run_appendix_resolution_visuals --only circles \
   --case_index 12 --resolutions 0.16,0.32,0.64 --wiggles 0,0.1 \
   --save_prefix "final_resolution_${SOURCE_COMMIT:0:12}_circles" \
-  --endpoint_variants paired --out_dir "$FIGURE_ROOT/resolution/circles"
+  --endpoint_variants paired --out_dir "$FIGURE_ROOT/resolution/circles" \
+  --release_root "$FINAL_ROOT"
 python -m experiments.static.run_appendix_resolution_visuals --only ellipses \
   --case_index 12 --resolutions 0.16,0.32,0.64 --wiggles 0,0.1 \
   --save_prefix "final_resolution_${SOURCE_COMMIT:0:12}_ellipses" \
-  --endpoint_variants paired --out_dir "$FIGURE_ROOT/resolution/ellipses"
+  --endpoint_variants paired --out_dir "$FIGURE_ROOT/resolution/ellipses" \
+  --release_root "$FINAL_ROOT"
 python -m experiments.static.run_appendix_resolution_visuals --only zalesak \
   --case_index 20 --resolutions 0.16,0.32,0.64 --wiggles 0,0.1 \
   --save_prefix "final_resolution_${SOURCE_COMMIT:0:12}_zalesak" \
-  --endpoint_variants paired --out_dir "$FIGURE_ROOT/resolution/zalesak"
+  --endpoint_variants paired --out_dir "$FIGURE_ROOT/resolution/zalesak" \
+  --release_root "$FINAL_ROOT"
 ```
 
 Outputs are
@@ -225,6 +226,7 @@ Source: `FINAL_ROOT/perturbed_sweep.csv`. Driver:
 python -m experiments.static.run_perturbed_sweeps \
   --plot_from_csv "$FINAL_ROOT/perturbed_sweep.csv" \
   --summary_dir "$FIGURE_ROOT/all_method_summary_plots" \
+  --release_root "$FINAL_ROOT" \
   --no-notify
 ```
 
@@ -256,7 +258,8 @@ python -m experiments.static.run_appendix_c0_study \
   --seeds 0 \
   --ellipses 25 \
   --zalesak 25 \
-  --endpoint_variants paired
+  --endpoint_variants paired \
+  --release_root "$FINAL_ROOT"
 ```
 
 Before accepting the plots, verify the complete `165`-setting study and all raw
@@ -299,7 +302,8 @@ mkdir -p "$FIGURE_ROOT/deterministic"
 python -m experiments.static.generate_plic_baseline_stencil_figure \
   --out "$FIGURE_ROOT/deterministic/perfect_reconstruction_plic_stencil" \
   --case-index 4 --cell-x 14 --cell-y 13 \
-  --resolution 0.32 --wiggle 0.3 --seed 0
+  --resolution 0.32 --wiggle 0.3 --seed 0 \
+  --release-root "$FINAL_ROOT"
 ```
 
 The PDF is authoritative; the SVG is an auxiliary vector export and the 300-DPI
@@ -318,7 +322,8 @@ python submission/check_submission_freeze.py --source-only
 python -m experiments.static.generate_staged_reconstruction_figure \
   --output-dir "$FIGURE_ROOT/deterministic" \
   --prefix staged_reconstruction_zalesak \
-  --case-index 22 --resolution 1.0 --wiggle 0.1 --seed 0
+  --case-index 22 --resolution 1.0 --wiggle 0.1 --seed 0 \
+  --release-root "$FINAL_ROOT"
 ```
 
 The PDF is authoritative. The 300-DPI PNG is only for review. The currently
@@ -348,6 +353,26 @@ must be replaced by this regenerated vector output.
 
 `<approved>` is either `with_endpoints` or `clean`. Record that choice and the
 final release path in `submission/figure_provenance.csv` before installation.
+
+## Fail-Closed Review Packet
+
+The exact generator-manifest interface and trust chain are documented in
+`submission/FINAL_FIGURE_PROVENANCE_CONTRACT.md`. After all ten required
+provenance manifests exist, build the review packet in a new destination:
+
+```bash
+export C0_ROOT="$PWD/results/static/final_guarded_c0_${SOURCE_COMMIT:0:12}"
+export REVIEW_ROOT="$PWD/results/submission/final_figure_review_${SOURCE_COMMIT:0:12}"
+python submission/accept_figure_candidates.py \
+  --release-root "$FINAL_ROOT" \
+  --figure-root "$FIGURE_ROOT" \
+  --c0-root "$C0_ROOT" \
+  --output-dir "$REVIEW_ROOT"
+```
+
+The command ignores existing PNG siblings and renders all 38 previews directly
+from the accepted one-page PDFs at 300 DPI. It publishes only after provenance,
+vector QA, merged page count, review page mapping, and all source-map writes pass.
 
 ## Vector And Visual QA
 

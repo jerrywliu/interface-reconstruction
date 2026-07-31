@@ -24,9 +24,11 @@ candidate figure packet, and the selected endpoint variants have been approved.
    passes the release audit, use its CSV and raw bundles for metrics, all-method
    panels, and main representatives. July 2026 remains comparison/recovery
    provenance only; March/May assets remain layout references only.
-3. **Dedicated post-sweep runs inherit the final source commit.** The low-
+3. **Dedicated post-sweep runs preserve both source identities.** The low-
    resolution, guarded-`C0`, PLIC-stencil, and staged-reconstruction figures are
-   generated from that exact commit and preserve their own manifests/data JSON.
+   anchored to the final release and preserve the actual clean generator commit
+   in their own manifests/data JSON. A later tooling-only commit is therefore
+   distinguishable from the frozen scientific-release commit.
 4. **Paired variants are required for qualitative review.** Main
    representatives, resolution panels, and guarded-`C0` representatives need
    both `with_endpoints` and `clean` PDFs. Clean main panels retain endpoint and
@@ -93,30 +95,26 @@ Before any figure command:
   test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
   python submission/check_submission_freeze.py --source-only
   ```
+- verify every dedicated-run producer manifest records the actual clean checkout
+  and the same frozen reconstruction profile as `FINAL_ROOT`.
 
 ## Command Catalog
 
-### M: Main Metrics
+### M/P: Main Metrics And Paired Representatives
+
+Generate both groups together so one authoritative manifest covers the complete
+15-candidate main-text family:
 
 ```bash
 python -m experiments.static.generate_section6_maintext_figures \
   --csv "$FINAL_ROOT/perturbed_sweep.csv" \
   --plots_root "$PLOTS_VIEW" \
   --out_dir "$FIGURE_ROOT/section6" \
-  --figure_groups quantitative \
-  --experiments all
-```
-
-### P: Paired Main Representatives
-
-```bash
-python -m experiments.static.generate_section6_maintext_figures \
-  --csv "$FINAL_ROOT/perturbed_sweep.csv" \
-  --plots_root "$PLOTS_VIEW" \
-  --out_dir "$FIGURE_ROOT/section6" \
-  --figure_groups representative \
+  --figure_groups quantitative,representative \
   --endpoint_variants paired \
-  --case_overrides lines=6,squares=24,circles=12,ellipses=12,zalesak=12
+  --case_overrides lines=6,squares=24,circles=12,ellipses=12,zalesak=12 \
+  --experiments all \
+  --release_root "$FINAL_ROOT"
 ```
 
 ### A: All-Method Panels
@@ -125,6 +123,7 @@ python -m experiments.static.generate_section6_maintext_figures \
 python -m experiments.static.run_perturbed_sweeps \
   --plot_from_csv "$FINAL_ROOT/perturbed_sweep.csv" \
   --summary_dir "$FIGURE_ROOT/all_method_summary_plots" \
+  --release_root "$FINAL_ROOT" \
   --no-notify
 ```
 
@@ -139,23 +138,28 @@ python submission/check_submission_freeze.py --source-only
 python -m experiments.static.run_appendix_resolution_visuals --only lines \
   --case_index 0 --resolutions 0.16,0.32,0.64 --wiggles 0,0.1 \
   --save_prefix "final_resolution_${SOURCE_COMMIT:0:12}_lines" \
-  --endpoint_variants paired --out_dir "$FIGURE_ROOT/resolution/lines"
+  --endpoint_variants paired --out_dir "$FIGURE_ROOT/resolution/lines" \
+  --release_root "$FINAL_ROOT"
 python -m experiments.static.run_appendix_resolution_visuals --only squares \
   --case_index 22 --resolutions 0.16,0.32,0.64 --wiggles 0,0.1 \
   --save_prefix "final_resolution_${SOURCE_COMMIT:0:12}_squares" \
-  --endpoint_variants paired --out_dir "$FIGURE_ROOT/resolution/squares"
+  --endpoint_variants paired --out_dir "$FIGURE_ROOT/resolution/squares" \
+  --release_root "$FINAL_ROOT"
 python -m experiments.static.run_appendix_resolution_visuals --only circles \
   --case_index 12 --resolutions 0.16,0.32,0.64 --wiggles 0,0.1 \
   --save_prefix "final_resolution_${SOURCE_COMMIT:0:12}_circles" \
-  --endpoint_variants paired --out_dir "$FIGURE_ROOT/resolution/circles"
+  --endpoint_variants paired --out_dir "$FIGURE_ROOT/resolution/circles" \
+  --release_root "$FINAL_ROOT"
 python -m experiments.static.run_appendix_resolution_visuals --only ellipses \
   --case_index 12 --resolutions 0.16,0.32,0.64 --wiggles 0,0.1 \
   --save_prefix "final_resolution_${SOURCE_COMMIT:0:12}_ellipses" \
-  --endpoint_variants paired --out_dir "$FIGURE_ROOT/resolution/ellipses"
+  --endpoint_variants paired --out_dir "$FIGURE_ROOT/resolution/ellipses" \
+  --release_root "$FINAL_ROOT"
 python -m experiments.static.run_appendix_resolution_visuals --only zalesak \
   --case_index 20 --resolutions 0.16,0.32,0.64 --wiggles 0,0.1 \
   --save_prefix "final_resolution_${SOURCE_COMMIT:0:12}_zalesak" \
-  --endpoint_variants paired --out_dir "$FIGURE_ROOT/resolution/zalesak"
+  --endpoint_variants paired --out_dir "$FIGURE_ROOT/resolution/zalesak" \
+  --release_root "$FINAL_ROOT"
 ```
 
 Each benchmark requires six one-case raw runs: three resolutions times
@@ -176,7 +180,8 @@ python -m experiments.static.run_appendix_c0_study \
   --log_dir "$C0_ROOT/logs" \
   --save_prefix "final_guarded_c0_${SOURCE_COMMIT:0:12}" \
   --seeds 0 --ellipses 25 --zalesak 25 \
-  --endpoint_variants paired
+  --endpoint_variants paired \
+  --release_root "$FINAL_ROOT"
 ```
 
 Require all 165 settings and their raw bundles. Confirm the guarded behavior in
@@ -193,7 +198,8 @@ mkdir -p "$FIGURE_ROOT/deterministic"
 python -m experiments.static.generate_plic_baseline_stencil_figure \
   --out "$FIGURE_ROOT/deterministic/perfect_reconstruction_plic_stencil" \
   --case-index 4 --cell-x 14 --cell-y 13 \
-  --resolution 0.32 --wiggle 0.3 --seed 0
+  --resolution 0.32 --wiggle 0.3 --seed 0 \
+  --release-root "$FINAL_ROOT"
 ```
 
 Preserve `perfect_reconstruction_plic_stencil_data.json` and the SVG sibling.
@@ -207,7 +213,8 @@ python submission/check_submission_freeze.py --source-only
 python -m experiments.static.generate_staged_reconstruction_figure \
   --output-dir "$FIGURE_ROOT/deterministic" \
   --prefix staged_reconstruction_zalesak \
-  --case-index 22 --resolution 1.0 --wiggle 0.1 --seed 0
+  --case-index 22 --resolution 1.0 --wiggle 0.1 --seed 0 \
+  --release-root "$FINAL_ROOT"
 ```
 
 Preserve `staged_reconstruction_zalesak_data.json` and the SVG sibling. This

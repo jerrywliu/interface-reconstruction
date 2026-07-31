@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -54,6 +55,77 @@ def test_generation_provenance_filters_generated_roots(monkeypatch):
     assert record["source_dirty"] is True
     assert record["source_status"] == [" M experiments/static/example.py"]
     assert record["reconstruction_profile"]["plic_fallback"] == "LVIRA"
+
+
+def test_authoritative_figure_manifest_binds_release_inputs_and_outputs(tmp_path):
+    release = tmp_path / "release"
+    release.mkdir()
+    profile = provenance.frozen_reconstruction_profile()
+    (release / "submission_config.resolved.json").write_text(
+        json.dumps(
+            {
+                "source": {"target_commit": "a" * 40},
+                "production_method": {
+                    "unresolved_orientation_fallback": profile["plic_fallback"],
+                    "corner_behavior_profile": profile["corner_behavior_profile"],
+                    "rescue_profile": profile["rescue_profile"],
+                },
+            }
+        )
+    )
+    (release / "sweep_manifest.json").write_text(json.dumps({"status": "completed"}))
+    metrics = release / "perturbed_sweep.csv"
+    metrics.write_text("metric,value\nhausdorff,0\n")
+    release_files = sorted(path for path in release.iterdir() if path.is_file())
+    (release / "SHA256SUMS").write_text(
+        "".join(
+            f"{provenance.file_sha256(path)}  {path.name}\n"
+            for path in release_files
+        )
+    )
+
+    generation = {
+        "source_commit": "a" * 40,
+        "source_dirty": False,
+        "source_status": [],
+        "reconstruction_profile": profile,
+    }
+    producer = tmp_path / "producer.json"
+    producer.write_text(
+        json.dumps(
+            {"status": "completed", "generation_provenance": generation}
+        )
+    )
+    output = tmp_path / "candidate.pdf"
+    output.write_bytes(b"%PDF-1.4\n%%EOF\n")
+    manifest_path = tmp_path / "figure_provenance.json"
+
+    manifest = provenance.write_authoritative_figure_provenance(
+        manifest_path,
+        generator="test_generator",
+        release_root=release,
+        generation=generation,
+        producer_manifest=producer,
+        inputs=[("final_release_metrics", metrics)],
+        outputs={"candidate": output},
+    )
+
+    assert manifest["release"]["source_commit"] == "a" * 40
+    assert manifest["inputs"][1]["release_relative_path"] == "perturbed_sweep.csv"
+    assert manifest["outputs"][0]["sha256"] == provenance.file_sha256(output)
+    assert json.loads(manifest_path.read_text()) == manifest
+
+
+def test_ellipse_representative_provenance_uses_analytic_truth(tmp_path, monkeypatch):
+    monkeypatch.setattr(maintext_figs, "PLOTS_ROOT", tmp_path)
+    paths = maintext_figs._representative_provenance_inputs(
+        "ellipses",
+        maintext_figs.REPRESENTATIVE_CASES["ellipses"],
+        save_prefix=None,
+    )
+
+    assert paths
+    assert not any("/vtk/true/" in path.as_posix() for path in paths)
 
 
 def test_resolution_runner_generates_paired_vector_artifacts(tmp_path, monkeypatch):

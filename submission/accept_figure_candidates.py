@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Fail-closed acceptance gate for the 38 final paper-figure candidates.
 
-The command validates the explicit candidate allowlist, matching 300-DPI PNG
-previews, vector PDF properties, and provenance before creating an indexed
-review packet. The packet concatenates source PDF pages directly, preserving
-their vector content.
+The command validates the explicit candidate allowlist, authoritative source
+provenance, and vector PDF properties. It then renders fresh 300-DPI previews
+and creates an indexed review packet by concatenating source PDF pages directly.
 """
 
 from __future__ import annotations
@@ -16,6 +15,7 @@ import json
 import math
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -30,6 +30,15 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from experiments.static.figure_generation_provenance import (
+    file_sha256,
+    release_figure_anchor,
+)
+from submission.audit_final_release import (
+    AuditReport,
+    audit_final_release,
+    verify_sha256_manifest,
+)
 from submission.pdf_vector_qa import PdfQaError, PdfQaReport, inspect_pdf
 
 
@@ -43,7 +52,6 @@ EXPECTED_COUNTS = {
 ROOT_KEYS = ("figure_root", "c0_root")
 VARIANTS = ("unpaired", "with_endpoints", "clean")
 INDEX_ROWS_PER_PAGE = 14
-SOURCE_COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 
 SOURCE_MAP_JSON = "figure_candidate_source_map.json"
 SOURCE_MAP_CSV = "figure_candidate_source_map.csv"
@@ -77,14 +85,32 @@ class PreviewRecord:
 
 
 @dataclass(frozen=True)
+class PdfPageInfo:
+    page_count: int
+    width_points: float
+    height_points: float
+
+
+@dataclass(frozen=True)
+class ProvenanceEvidence:
+    manifest_path: Path
+    manifest_sha256: str
+    generator: str
+    generator_source_commit: str
+
+
+@dataclass(frozen=True)
 class AcceptedCandidate:
     order: int
     spec: CandidateSpec
     pdf_path: Path
     pdf_sha256: str
     pdf_page_count: int
+    pdf_width_points: float
+    pdf_height_points: float
     preview: PreviewRecord
     pdf_qa: PdfQaReport
+    provenance: ProvenanceEvidence
     review_page_start: int = 0
     review_page_end: int = 0
 
@@ -95,6 +121,96 @@ class AcceptanceOutputs:
     source_map_json: Path
     source_map_csv: Path
     vector_qa_json: Path
+
+
+@dataclass(frozen=True)
+class ProvenanceManifestSpec:
+    root: str
+    path: str
+    generator: str
+    candidate_ids: Tuple[str, ...]
+    required_input_roles: Tuple[str, ...]
+
+
+_EXPERIMENTS = ("lines", "squares", "circles", "ellipses", "zalesak")
+PROVENANCE_MANIFEST_SPECS = (
+    ProvenanceManifestSpec(
+        root="figure_root",
+        path="section6/figure_provenance.json",
+        generator="section6_maintext",
+        candidate_ids=tuple(
+            [f"{experiment}_maintext_metrics" for experiment in _EXPERIMENTS]
+            + [
+                f"{experiment}_maintext_representative_{variant}"
+                for experiment in _EXPERIMENTS
+                for variant in ("with_endpoints", "clean")
+            ]
+        ),
+        required_input_roles=(
+            "producer_manifest",
+            "final_release_metrics",
+            "final_release_plot_artifact",
+        ),
+    ),
+    ProvenanceManifestSpec(
+        root="figure_root",
+        path="all_method_summary_plots/figure_provenance.json",
+        generator="all_method_summary_plots",
+        candidate_ids=tuple(f"{experiment}_all_methods" for experiment in _EXPERIMENTS),
+        required_input_roles=("producer_manifest", "final_release_metrics"),
+    ),
+    *tuple(
+        ProvenanceManifestSpec(
+            root="figure_root",
+            path=f"resolution/{experiment}/figure_provenance.json",
+            generator="appendix_resolution",
+            candidate_ids=tuple(
+                f"{experiment}_resolution_{variant}"
+                for variant in ("with_endpoints", "clean")
+            ),
+            required_input_roles=(
+                "producer_manifest",
+                "dedicated_resolution_artifact",
+            ),
+        )
+        for experiment in _EXPERIMENTS
+    ),
+    ProvenanceManifestSpec(
+        root="c0_root",
+        path="figure_provenance.json",
+        generator="appendix_guarded_c0",
+        candidate_ids=(
+            "ellipses_appendix_c0_metrics",
+            "ellipses_appendix_c0_representative_with_endpoints",
+            "ellipses_appendix_c0_representative_clean",
+            "zalesak_appendix_c0_metrics",
+            "zalesak_appendix_c0_representative_with_endpoints",
+            "zalesak_appendix_c0_representative_clean",
+        ),
+        required_input_roles=(
+            "producer_manifest",
+            "guarded_c0_metrics",
+            "guarded_c0_plot_artifact",
+        ),
+    ),
+    ProvenanceManifestSpec(
+        root="figure_root",
+        path=(
+            "deterministic/"
+            "perfect_reconstruction_plic_stencil_figure_provenance.json"
+        ),
+        generator="deterministic_plic_stencil",
+        candidate_ids=("perfect_reconstruction_plic_stencil",),
+        required_input_roles=("producer_manifest",),
+    ),
+    ProvenanceManifestSpec(
+        root="figure_root",
+        path="deterministic/staged_reconstruction_zalesak_figure_provenance.json",
+        generator="deterministic_staged_reconstruction",
+        candidate_ids=("staged_reconstruction_zalesak",),
+        required_input_roles=("producer_manifest",),
+    ),
+)
 
 
 def _safe_relative_path(raw: object, *, field: str) -> str:
@@ -286,37 +402,290 @@ def verify_candidate_inventory(
         raise FigureAcceptanceError("\n".join(errors))
 
 
-def inspect_png_preview(path: Path, *, required_dpi: float = 300.0) -> PreviewRecord:
-    path = Path(path).resolve()
-    if not path.is_file():
-        raise FigureAcceptanceError(f"Missing matching PNG preview: {path}")
+def _load_json_object(path: Path) -> dict:
     try:
-        with Image.open(path) as image:
-            image.load()
-            image_format = image.format
-            width, height = image.size
-            dpi = image.info.get("dpi")
-    except (OSError, UnidentifiedImageError) as exc:
-        raise FigureAcceptanceError(f"Unreadable PNG preview {path}: {exc}") from exc
-    if image_format != "PNG":
-        raise FigureAcceptanceError(f"Preview is not encoded as PNG: {path}")
-    if width <= 0 or height <= 0:
-        raise FigureAcceptanceError(f"Preview has invalid dimensions: {path}")
-    if not isinstance(dpi, (tuple, list)) or len(dpi) < 2:
-        raise FigureAcceptanceError(f"Preview does not record DPI metadata: {path}")
-    dpi_x, dpi_y = float(dpi[0]), float(dpi[1])
-    if abs(dpi_x - required_dpi) > 0.5 or abs(dpi_y - required_dpi) > 0.5:
+        value = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise FigureAcceptanceError(
-            f"Preview is not 300 DPI: {path} records {dpi_x:.3f} x {dpi_y:.3f}"
+            f"Could not read JSON object {path}: {exc}"
+        ) from exc
+    if not isinstance(value, dict):
+        raise FigureAcceptanceError(f"JSON root must be an object: {path}")
+    return value
+
+
+def _release_checksum_entries(release_root: Path) -> dict[str, str]:
+    path = Path(release_root) / "SHA256SUMS"
+    entries = {}
+    for line_number, line in enumerate(
+        path.read_text(encoding="utf-8").splitlines(), start=1
+    ):
+        if not line:
+            continue
+        parts = line.split("  ", 1)
+        if len(parts) != 2 or len(parts[0]) != 64:
+            raise FigureAcceptanceError(f"Malformed SHA256SUMS line {line_number}")
+        digest, relative = parts
+        if relative in entries:
+            raise FigureAcceptanceError(f"Duplicate SHA256SUMS path: {relative}")
+        entries[relative] = digest
+    return entries
+
+
+def _producer_generation(payload: Mapping[str, object]) -> Optional[dict]:
+    direct = payload.get("generation_provenance")
+    if isinstance(direct, dict):
+        return direct
+    metadata = payload.get("metadata")
+    if isinstance(metadata, dict):
+        nested = metadata.get("generation_provenance")
+        if isinstance(nested, dict):
+            return nested
+    return None
+
+
+def _validate_generation_record(
+    generation: object,
+    *,
+    expected_source_commit: Optional[str],
+    profile: Mapping[str, str],
+    label: str,
+) -> str:
+    if not isinstance(generation, dict):
+        raise FigureAcceptanceError(f"{label} lacks generation_provenance")
+    source_commit = generation.get("source_commit")
+    if (
+        not isinstance(source_commit, str)
+        or not re.fullmatch(r"[0-9a-fA-F]{40}", source_commit)
+        or (
+            expected_source_commit is not None
+            and source_commit != expected_source_commit
         )
-    return PreviewRecord(
-        path=path,
-        sha256=_sha256(path),
-        width_px=width,
-        height_px=height,
-        dpi_x=dpi_x,
-        dpi_y=dpi_y,
-    )
+    ):
+        raise FigureAcceptanceError(f"{label} source commit is not authoritative")
+    if generation.get("source_dirty") is not False or generation.get("source_status"):
+        raise FigureAcceptanceError(f"{label} was generated from a dirty source tree")
+    if generation.get("reconstruction_profile") != dict(profile):
+        raise FigureAcceptanceError(
+            f"{label} reconstruction profile does not match release"
+        )
+    return source_commit
+
+
+def _validate_release_anchor(
+    recorded: object,
+    actual: Mapping[str, object],
+    *,
+    label: str,
+) -> None:
+    if not isinstance(recorded, dict):
+        raise FigureAcceptanceError(f"{label} lacks final-release provenance")
+    for key in ("root", "name", "source_commit", "reconstruction_profile"):
+        if recorded.get(key) != actual.get(key):
+            raise FigureAcceptanceError(f"{label} release {key} does not match")
+    recorded_artifacts = recorded.get("artifacts")
+    actual_artifacts = actual.get("artifacts")
+    if recorded_artifacts != actual_artifacts:
+        raise FigureAcceptanceError(f"{label} release artifact checksums do not match")
+
+
+def verify_authoritative_provenance(
+    specs: Sequence[CandidateSpec],
+    roots: Mapping[str, Path],
+    release_root: Path,
+    *,
+    release_auditor: Callable[[Path], AuditReport] = audit_final_release,
+    checksum_verifier: Callable[[Path], List[str]] = verify_sha256_manifest,
+) -> tuple[dict, Dict[str, ProvenanceEvidence]]:
+    release_root = Path(release_root).resolve()
+    report = release_auditor(release_root)
+    if not report.ok:
+        detail = "; ".join(report.errors) or f"{report.total_errors} audit errors"
+        raise FigureAcceptanceError(f"Final release audit failed: {detail}")
+    checksum_errors = checksum_verifier(release_root)
+    if checksum_errors:
+        raise FigureAcceptanceError(
+            "Final release checksum verification failed: " + "; ".join(checksum_errors)
+        )
+    try:
+        anchor = release_figure_anchor(release_root)
+    except ValueError as exc:
+        raise FigureAcceptanceError(str(exc)) from exc
+    source_commit = anchor["source_commit"]
+    profile = anchor["reconstruction_profile"]
+    release_checksums = _release_checksum_entries(release_root)
+    candidate_paths = {
+        spec.candidate_id: (roots[spec.root] / spec.pdf).resolve() for spec in specs
+    }
+
+    expected_manifest_paths = {
+        (manifest_spec.root, manifest_spec.path)
+        for manifest_spec in PROVENANCE_MANIFEST_SPECS
+    }
+    actual_manifest_paths = {
+        (root_key, path.relative_to(root).as_posix())
+        for root_key, root in roots.items()
+        for path in root.rglob("*figure_provenance.json")
+        if path.is_file()
+    }
+    missing_manifests = sorted(expected_manifest_paths - actual_manifest_paths)
+    unexpected_manifests = sorted(actual_manifest_paths - expected_manifest_paths)
+    if missing_manifests or unexpected_manifests:
+        parts = []
+        if missing_manifests:
+            parts.append(f"missing provenance manifests: {missing_manifests}")
+        if unexpected_manifests:
+            parts.append(f"unexpected provenance manifests: {unexpected_manifests}")
+        raise FigureAcceptanceError("; ".join(parts))
+
+    evidence: Dict[str, ProvenanceEvidence] = {}
+    for manifest_spec in PROVENANCE_MANIFEST_SPECS:
+        manifest_path = (roots[manifest_spec.root] / manifest_spec.path).resolve()
+        manifest = _load_json_object(manifest_path)
+        label = str(manifest_path)
+        if manifest.get("schema_version") != 1:
+            raise FigureAcceptanceError(f"{label} has an unsupported schema")
+        if manifest.get("manifest_type") != "final_figure_generation":
+            raise FigureAcceptanceError(f"{label} has the wrong manifest type")
+        if manifest.get("status") != "completed":
+            raise FigureAcceptanceError(f"{label} is not completed")
+        if manifest.get("generator") != manifest_spec.generator:
+            raise FigureAcceptanceError(f"{label} has the wrong generator identity")
+        generator_source_commit = _validate_generation_record(
+            manifest.get("generation_provenance"),
+            expected_source_commit=None,
+            profile=profile,
+            label=label,
+        )
+        _validate_release_anchor(manifest.get("release"), anchor, label=label)
+
+        raw_inputs = manifest.get("inputs")
+        if not isinstance(raw_inputs, list):
+            raise FigureAcceptanceError(f"{label} inputs must be a list")
+        roles = []
+        producer_payload = None
+        for raw_input in raw_inputs:
+            if not isinstance(raw_input, dict):
+                raise FigureAcceptanceError(f"{label} has a malformed input record")
+            role = raw_input.get("role")
+            path_value = raw_input.get("path")
+            digest = raw_input.get("sha256")
+            if not isinstance(role, str) or not isinstance(path_value, str):
+                raise FigureAcceptanceError(f"{label} has an incomplete input record")
+            input_path = Path(path_value).resolve()
+            if not input_path.is_file() or digest != _sha256(input_path):
+                raise FigureAcceptanceError(
+                    f"{label} input checksum failed for {input_path}"
+                )
+            roles.append(role)
+            release_relative = raw_input.get("release_relative_path")
+            if release_relative is not None:
+                if not isinstance(release_relative, str):
+                    raise FigureAcceptanceError(f"{label} has an invalid release path")
+                expected_path = (release_root / release_relative).resolve()
+                if input_path != expected_path:
+                    raise FigureAcceptanceError(
+                        f"{label} release input path does not resolve inside final release"
+                    )
+                if release_checksums.get(release_relative) != digest:
+                    raise FigureAcceptanceError(
+                        f"{label} release checksum ledger does not prove {release_relative}"
+                    )
+            if role == "producer_manifest":
+                if producer_payload is not None:
+                    raise FigureAcceptanceError(
+                        f"{label} has multiple producer manifests"
+                    )
+                producer_payload = _load_json_object(input_path)
+
+        missing_roles = set(manifest_spec.required_input_roles) - set(roles)
+        if missing_roles:
+            raise FigureAcceptanceError(
+                f"{label} lacks required inputs: {', '.join(sorted(missing_roles))}"
+            )
+        unexpected_roles = set(roles) - set(manifest_spec.required_input_roles)
+        if unexpected_roles:
+            raise FigureAcceptanceError(
+                f"{label} has unexpected inputs: {', '.join(sorted(unexpected_roles))}"
+            )
+        if "final_release_metrics" in roles:
+            metrics_inputs = [
+                raw_input
+                for raw_input in raw_inputs
+                if raw_input.get("role") == "final_release_metrics"
+            ]
+            if (
+                len(metrics_inputs) != 1
+                or Path(metrics_inputs[0]["path"]).resolve()
+                != (release_root / "perturbed_sweep.csv").resolve()
+            ):
+                raise FigureAcceptanceError(
+                    f"{label} does not use the authoritative final release CSV"
+                )
+        if "final_release_plot_artifact" in roles:
+            plot_inputs = [
+                raw_input
+                for raw_input in raw_inputs
+                if raw_input.get("role") == "final_release_plot_artifact"
+            ]
+            if any(
+                raw_input.get("release_relative_path") is None
+                for raw_input in plot_inputs
+            ):
+                raise FigureAcceptanceError(
+                    f"{label} uses plot geometry outside the final release checksum ledger"
+                )
+        if producer_payload is None:
+            raise FigureAcceptanceError(f"{label} lacks a producer manifest")
+        producer_status = producer_payload.get("status")
+        if producer_status is not None and producer_status != "completed":
+            raise FigureAcceptanceError(f"{label} producer manifest is not completed")
+        _validate_generation_record(
+            _producer_generation(producer_payload),
+            expected_source_commit=generator_source_commit,
+            profile=profile,
+            label=f"{label} producer manifest",
+        )
+
+        raw_outputs = manifest.get("outputs")
+        if not isinstance(raw_outputs, list):
+            raise FigureAcceptanceError(f"{label} outputs must be a list")
+        output_ids = []
+        for raw_output in raw_outputs:
+            if not isinstance(raw_output, dict):
+                raise FigureAcceptanceError(f"{label} has a malformed output record")
+            candidate_id = raw_output.get("candidate_id")
+            path_value = raw_output.get("path")
+            digest = raw_output.get("sha256")
+            if candidate_id not in candidate_paths or not isinstance(path_value, str):
+                raise FigureAcceptanceError(f"{label} has an unknown candidate output")
+            output_path = Path(path_value).resolve()
+            if output_path != candidate_paths[candidate_id]:
+                raise FigureAcceptanceError(
+                    f"{label} candidate path mismatch for {candidate_id}"
+                )
+            if digest != _sha256(output_path):
+                raise FigureAcceptanceError(
+                    f"{label} candidate checksum mismatch for {candidate_id}"
+                )
+            if candidate_id in evidence:
+                raise FigureAcceptanceError(
+                    f"Candidate {candidate_id} appears in multiple provenance manifests"
+                )
+            output_ids.append(candidate_id)
+            evidence[candidate_id] = ProvenanceEvidence(
+                manifest_path=manifest_path,
+                manifest_sha256=_sha256(manifest_path),
+                generator=manifest_spec.generator,
+                generator_source_commit=generator_source_commit,
+            )
+        if set(output_ids) != set(manifest_spec.candidate_ids):
+            raise FigureAcceptanceError(f"{label} candidate output set is incomplete")
+
+    expected_ids = {spec.candidate_id for spec in specs}
+    if set(evidence) != expected_ids:
+        raise FigureAcceptanceError("Provenance does not cover exactly 38 candidates")
+    return anchor, evidence
 
 
 def _run_text_tool(command: Sequence[str]) -> str:
@@ -340,15 +709,94 @@ def _run_text_tool(command: Sequence[str]) -> str:
     return completed.stdout
 
 
-def pdf_page_count(path: Path) -> int:
+def pdf_page_info(path: Path) -> PdfPageInfo:
     output = _run_text_tool(("pdfinfo", str(Path(path).resolve())))
-    match = re.search(r"^Pages:\s+(\d+)\s*$", output, flags=re.MULTILINE)
-    if not match:
-        raise FigureAcceptanceError(f"pdfinfo did not report a page count for {path}")
-    pages = int(match.group(1))
+    page_match = re.search(r"^Pages:\s+(\d+)\s*$", output, flags=re.MULTILINE)
+    size_match = re.search(
+        r"^Page size:\s+([0-9.]+) x ([0-9.]+) pts", output, flags=re.MULTILINE
+    )
+    if not page_match or not size_match:
+        raise FigureAcceptanceError(f"pdfinfo did not report pages and size for {path}")
+    pages = int(page_match.group(1))
     if pages < 1:
         raise FigureAcceptanceError(f"PDF has no pages: {path}")
-    return pages
+    return PdfPageInfo(
+        page_count=pages,
+        width_points=float(size_match.group(1)),
+        height_points=float(size_match.group(2)),
+    )
+
+
+def render_pdf_preview(
+    pdf_path: Path,
+    output_path: Path,
+    *,
+    dpi: int = 300,
+    page: int = 1,
+) -> None:
+    output_path = Path(output_path).resolve()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    prefix = output_path.with_suffix("")
+    _run_text_tool(
+        (
+            "pdftocairo",
+            "-png",
+            "-singlefile",
+            "-r",
+            str(dpi),
+            "-f",
+            str(page),
+            "-l",
+            str(page),
+            str(Path(pdf_path).resolve()),
+            str(prefix),
+        )
+    )
+    if not output_path.is_file():
+        raise FigureAcceptanceError(f"PDF renderer did not produce {output_path}")
+
+
+def inspect_generated_preview(
+    path: Path,
+    page_info: PdfPageInfo,
+    *,
+    required_dpi: float = 300.0,
+    logical_path: Optional[Path] = None,
+) -> PreviewRecord:
+    path = Path(path).resolve()
+    if not path.is_file():
+        raise FigureAcceptanceError(f"Missing generated PNG preview: {path}")
+    try:
+        with Image.open(path) as image:
+            image.load()
+            image_format = image.format
+            width, height = image.size
+    except (OSError, UnidentifiedImageError) as exc:
+        raise FigureAcceptanceError(f"Unreadable generated PNG {path}: {exc}") from exc
+    if image_format != "PNG":
+        raise FigureAcceptanceError(f"Generated preview is not PNG: {path}")
+    expected_width = page_info.width_points * required_dpi / 72.0
+    expected_height = page_info.height_points * required_dpi / 72.0
+    if min(width, height) < 250:
+        raise FigureAcceptanceError(f"Generated preview is implausibly tiny: {path}")
+    if abs(width - expected_width) > 2.0 or abs(height - expected_height) > 2.0:
+        raise FigureAcceptanceError(
+            f"Generated preview dimensions do not match PDF page: {path} is "
+            f"{width}x{height}, expected about {expected_width:.1f}x{expected_height:.1f}"
+        )
+    if (
+        abs((width / height) - (page_info.width_points / page_info.height_points))
+        > 0.002
+    ):
+        raise FigureAcceptanceError(f"Generated preview aspect ratio is stale: {path}")
+    return PreviewRecord(
+        path=(logical_path or path).resolve(),
+        sha256=_sha256(path),
+        width_px=width,
+        height_px=height,
+        dpi_x=required_dpi,
+        dpi_y=required_dpi,
+    )
 
 
 def _truncate(text: str, *, font: str, size: float, max_width: float) -> str:
@@ -476,6 +924,44 @@ def build_vector_review_pdf(
         os.replace(merged_pdf, output)
 
 
+def _png_pixels_equal(first: Path, second: Path) -> bool:
+    with Image.open(first) as left, Image.open(second) as right:
+        left.load()
+        right.load()
+        return (
+            left.mode == right.mode
+            and left.size == right.size
+            and left.tobytes() == right.tobytes()
+        )
+
+
+def verify_review_page_map(
+    records: Sequence[AcceptedCandidate],
+    review_pdf: Path,
+    candidate_previews: Mapping[str, Path],
+    *,
+    renderer: Callable[..., None] = render_pdf_preview,
+) -> None:
+    with tempfile.TemporaryDirectory(
+        prefix="review-page-map-", dir=str(Path(review_pdf).resolve().parent)
+    ) as raw:
+        scratch = Path(raw)
+        for record in records:
+            rendered = scratch / f"{record.spec.candidate_id}.png"
+            renderer(
+                review_pdf,
+                rendered,
+                dpi=300,
+                page=record.review_page_start,
+            )
+            source_preview = candidate_previews[record.spec.candidate_id]
+            if not _png_pixels_equal(source_preview, rendered):
+                raise FigureAcceptanceError(
+                    f"Review page map mismatch for {record.spec.candidate_id} at "
+                    f"page {record.review_page_start}"
+                )
+
+
 def _qa_dict(report: PdfQaReport) -> dict:
     return asdict(report) | {"passed": report.passed}
 
@@ -489,12 +975,12 @@ def _root_contains(root: Path, candidate: Path) -> bool:
 
 
 def _validate_invocation(
-    roots: Mapping[str, Path], output_dir: Path, source_commit: str
+    roots: Mapping[str, Path], release_root: Path, output_dir: Path
 ) -> None:
-    if not SOURCE_COMMIT_PATTERN.fullmatch(source_commit):
-        raise FigureAcceptanceError("source_commit must be a full 40-character SHA-1")
     if roots["figure_root"] == roots["c0_root"]:
         raise FigureAcceptanceError("figure_root and c0_root must be distinct")
+    if not release_root.is_dir():
+        raise FigureAcceptanceError(f"release_root is not a directory: {release_root}")
     for key, root in roots.items():
         if not root.is_dir():
             raise FigureAcceptanceError(f"{key} is not a directory: {root}")
@@ -502,8 +988,8 @@ def _validate_invocation(
             raise FigureAcceptanceError(
                 f"output_dir must be outside {key} so review outputs cannot contaminate the candidate inventory"
             )
-    if output_dir.exists() and any(output_dir.iterdir()):
-        raise FigureAcceptanceError(f"output_dir must be new or empty: {output_dir}")
+    if output_dir.exists():
+        raise FigureAcceptanceError(f"output_dir must not exist: {output_dir}")
 
 
 def _write_csv(
@@ -521,6 +1007,8 @@ def _write_csv(
         "pdf_relative_path",
         "pdf_sha256",
         "pdf_page_count",
+        "pdf_width_points",
+        "pdf_height_points",
         "png_relative_path",
         "png_sha256",
         "png_width_px",
@@ -529,6 +1017,10 @@ def _write_csv(
         "png_dpi_y",
         "pdf_image_objects",
         "pdf_font_count",
+        "provenance_manifest",
+        "provenance_manifest_sha256",
+        "provenance_generator",
+        "generator_source_commit",
         "review_page_start",
         "review_page_end",
     )
@@ -549,9 +1041,9 @@ def _write_csv(
                     "pdf_relative_path": record.spec.pdf,
                     "pdf_sha256": record.pdf_sha256,
                     "pdf_page_count": record.pdf_page_count,
-                    "png_relative_path": PurePosixPath(record.spec.pdf)
-                    .with_suffix(".png")
-                    .as_posix(),
+                    "pdf_width_points": f"{record.pdf_width_points:.3f}",
+                    "pdf_height_points": f"{record.pdf_height_points:.3f}",
+                    "png_relative_path": f"previews/{record.spec.candidate_id}.png",
                     "png_sha256": record.preview.sha256,
                     "png_width_px": record.preview.width_px,
                     "png_height_px": record.preview.height_px,
@@ -559,6 +1051,12 @@ def _write_csv(
                     "png_dpi_y": f"{record.preview.dpi_y:.3f}",
                     "pdf_image_objects": record.pdf_qa.image_objects,
                     "pdf_font_count": len(record.pdf_qa.fonts),
+                    "provenance_manifest": str(record.provenance.manifest_path),
+                    "provenance_manifest_sha256": record.provenance.manifest_sha256,
+                    "provenance_generator": record.provenance.generator,
+                    "generator_source_commit": (
+                        record.provenance.generator_source_commit
+                    ),
                     "review_page_start": record.review_page_start,
                     "review_page_end": record.review_page_end,
                 }
@@ -569,33 +1067,39 @@ def accept_figure_candidates(
     *,
     figure_root: Path,
     c0_root: Path,
+    release_root: Path,
     output_dir: Path,
-    source_commit: str,
     allowlist_path: Path = DEFAULT_ALLOWLIST,
     pdf_inspector: Callable[..., PdfQaReport] = inspect_pdf,
-    page_counter: Callable[[Path], int] = pdf_page_count,
+    page_inspector: Callable[[Path], PdfPageInfo] = pdf_page_info,
+    preview_renderer: Callable[..., None] = render_pdf_preview,
     review_builder: Callable[..., None] = build_vector_review_pdf,
+    review_map_verifier: Callable[..., None] = verify_review_page_map,
+    release_auditor: Callable[[Path], AuditReport] = audit_final_release,
+    checksum_verifier: Callable[[Path], List[str]] = verify_sha256_manifest,
 ) -> AcceptanceOutputs:
     roots = {
         "figure_root": Path(figure_root).resolve(),
         "c0_root": Path(c0_root).resolve(),
     }
+    release_root = Path(release_root).resolve()
     output_dir = Path(output_dir).resolve()
-    source_commit = source_commit.lower()
-    _validate_invocation(roots, output_dir, source_commit)
+    _validate_invocation(roots, release_root, output_dir)
     specs = load_candidate_allowlist(allowlist_path)
     verify_candidate_inventory(specs, roots)
+    anchor, provenance = verify_authoritative_provenance(
+        specs,
+        roots,
+        release_root,
+        release_auditor=release_auditor,
+        checksum_verifier=checksum_verifier,
+    )
+    source_commit = anchor["source_commit"]
 
-    records: List[AcceptedCandidate] = []
+    candidate_audits = []
     errors: List[str] = []
     for order, spec in enumerate(specs, start=1):
         pdf_path = roots[spec.root] / spec.pdf
-        preview_path = pdf_path.with_suffix(".png")
-        try:
-            preview = inspect_png_preview(preview_path)
-        except FigureAcceptanceError as exc:
-            errors.append(str(exc))
-            continue
         try:
             report = pdf_inspector(pdf_path, require_fonts=True)
         except PdfQaError as exc:
@@ -605,118 +1109,199 @@ def accept_figure_candidates(
             errors.append(f"PDF QA failed for {pdf_path}: " + "; ".join(report.issues))
             continue
         try:
-            pages = page_counter(pdf_path)
+            page_info = page_inspector(pdf_path)
         except FigureAcceptanceError as exc:
             errors.append(str(exc))
             continue
-        if pages < 1:
-            errors.append(f"PDF has no pages: {pdf_path}")
-            continue
-        records.append(
-            AcceptedCandidate(
-                order=order,
-                spec=spec,
-                pdf_path=pdf_path,
-                pdf_sha256=_sha256(pdf_path),
-                pdf_page_count=pages,
-                preview=preview,
-                pdf_qa=report,
+        if page_info.page_count != 1:
+            errors.append(
+                f"Candidate PDF must contain exactly one page: {pdf_path} has "
+                f"{page_info.page_count}"
             )
+            continue
+        candidate_audits.append(
+            (order, spec, pdf_path, _sha256(pdf_path), page_info, report)
         )
     if errors:
         raise FigureAcceptanceError("\n".join(errors))
-    if len(records) != EXPECTED_COUNTS["candidate_pdfs"]:
+    if len(candidate_audits) != EXPECTED_COUNTS["candidate_pdfs"]:
         raise FigureAcceptanceError(
-            f"Internal error: accepted {len(records)} of 38 candidate records"
+            f"Internal error: audited {len(candidate_audits)} of 38 candidates"
         )
 
-    index_pages = max(1, math.ceil(len(records) / INDEX_ROWS_PER_PAGE))
-    review_page = index_pages + 1
-    numbered_records: List[AcceptedCandidate] = []
-    for record in records:
-        numbered_records.append(
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    staging_dir = Path(
+        tempfile.mkdtemp(
+            prefix=f".{output_dir.name}.staging-", dir=str(output_dir.parent)
+        )
+    )
+    try:
+        preview_dir = staging_dir / "previews"
+        preview_dir.mkdir()
+        records: List[AcceptedCandidate] = []
+        actual_preview_paths = {}
+        for order, spec, pdf_path, digest, page_info, report in candidate_audits:
+            staged_preview = preview_dir / f"{spec.candidate_id}.png"
+            preview_renderer(pdf_path, staged_preview, dpi=300, page=1)
+            logical_preview = output_dir / "previews" / staged_preview.name
+            preview = inspect_generated_preview(
+                staged_preview,
+                page_info,
+                required_dpi=300.0,
+                logical_path=logical_preview,
+            )
+            actual_preview_paths[spec.candidate_id] = staged_preview
+            records.append(
+                AcceptedCandidate(
+                    order=order,
+                    spec=spec,
+                    pdf_path=pdf_path,
+                    pdf_sha256=digest,
+                    pdf_page_count=1,
+                    pdf_width_points=page_info.width_points,
+                    pdf_height_points=page_info.height_points,
+                    preview=preview,
+                    pdf_qa=report,
+                    provenance=provenance[spec.candidate_id],
+                )
+            )
+
+        index_pages = max(1, math.ceil(len(records) / INDEX_ROWS_PER_PAGE))
+        numbered_records = [
             replace(
                 record,
-                review_page_start=review_page,
-                review_page_end=review_page + record.pdf_page_count - 1,
+                review_page_start=index_pages + record.order,
+                review_page_end=index_pages + record.order,
             )
+            for record in records
+        ]
+        staged_review_pdf = staging_dir / REVIEW_PDF
+        review_builder(numbered_records, staged_review_pdf, source_commit=source_commit)
+        review_report = pdf_inspector(staged_review_pdf, require_fonts=True)
+        if not review_report.passed:
+            raise FigureAcceptanceError(
+                "Review PDF QA failed: " + "; ".join(review_report.issues)
+            )
+        review_info = page_inspector(staged_review_pdf)
+        expected_review_pages = index_pages + len(numbered_records)
+        if review_info.page_count != expected_review_pages:
+            raise FigureAcceptanceError(
+                f"Merged review page count is {review_info.page_count}; expected "
+                f"{expected_review_pages}"
+            )
+        review_map_verifier(
+            numbered_records,
+            staged_review_pdf,
+            actual_preview_paths,
+            renderer=preview_renderer,
         )
-        review_page += record.pdf_page_count
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    review_pdf = output_dir / REVIEW_PDF
-    try:
-        review_builder(numbered_records, review_pdf, source_commit=source_commit)
-        review_report = pdf_inspector(review_pdf, require_fonts=True)
-    except (FigureAcceptanceError, PdfQaError):
-        review_pdf.unlink(missing_ok=True)
-        raise
-    if not review_report.passed:
-        review_pdf.unlink(missing_ok=True)
-        raise FigureAcceptanceError(
-            "Review PDF QA failed: " + "; ".join(review_report.issues)
+        staged_qa = staging_dir / VECTOR_QA_JSON
+        logical_qa = output_dir / VECTOR_QA_JSON
+        qa_payload = {
+            "schema_version": 2,
+            "passed": True,
+            "candidate_pdf_count": len(numbered_records),
+            "candidate_reports": [
+                _qa_dict(record.pdf_qa) for record in numbered_records
+            ],
+            "review_report": _qa_dict(review_report),
+            "measured_review_page_count": review_info.page_count,
+            "review_page_map_verified": True,
+        }
+        staged_qa.write_text(json.dumps(qa_payload, indent=2) + "\n", encoding="utf-8")
+
+        staged_source_map_json = staging_dir / SOURCE_MAP_JSON
+        staged_source_map_csv = staging_dir / SOURCE_MAP_CSV
+        source_payload = {
+            "schema_version": 2,
+            "passed": True,
+            "source_commit": source_commit,
+            "release_source_commit": source_commit,
+            "release": anchor,
+            "allowlist": {
+                "path": str(Path(allowlist_path).resolve()),
+                "sha256": _sha256(Path(allowlist_path).resolve()),
+                "expected_counts": EXPECTED_COUNTS,
+            },
+            "roots": {key: str(path) for key, path in roots.items()},
+            "review": {
+                "path": str(output_dir / REVIEW_PDF),
+                "sha256": _sha256(staged_review_pdf),
+                "index_pages": index_pages,
+                "page_count": review_info.page_count,
+                "page_map_verified": True,
+            },
+            "vector_qa": {
+                "path": str(logical_qa),
+                "sha256": _sha256(staged_qa),
+            },
+            "candidates": [
+                {
+                    "order": record.order,
+                    **asdict(record.spec),
+                    "pdf_path": str(record.pdf_path),
+                    "pdf_sha256": record.pdf_sha256,
+                    "pdf_page_count": record.pdf_page_count,
+                    "pdf_width_points": record.pdf_width_points,
+                    "pdf_height_points": record.pdf_height_points,
+                    "png_path": str(record.preview.path),
+                    "png_sha256": record.preview.sha256,
+                    "png_width_px": record.preview.width_px,
+                    "png_height_px": record.preview.height_px,
+                    "png_dpi_x": record.preview.dpi_x,
+                    "png_dpi_y": record.preview.dpi_y,
+                    "provenance_manifest": str(record.provenance.manifest_path),
+                    "provenance_manifest_sha256": (record.provenance.manifest_sha256),
+                    "provenance_generator": record.provenance.generator,
+                    "generator_source_commit": (
+                        record.provenance.generator_source_commit
+                    ),
+                    "review_page_start": record.review_page_start,
+                    "review_page_end": record.review_page_end,
+                }
+                for record in numbered_records
+            ],
+        }
+        staged_source_map_json.write_text(
+            json.dumps(source_payload, indent=2) + "\n", encoding="utf-8"
         )
+        _write_csv(staged_source_map_csv, numbered_records, source_commit)
 
-    qa_path = output_dir / VECTOR_QA_JSON
-    qa_payload = {
-        "schema_version": 1,
-        "passed": True,
-        "candidate_pdf_count": len(numbered_records),
-        "candidate_reports": [_qa_dict(record.pdf_qa) for record in numbered_records],
-        "review_report": _qa_dict(review_report),
-    }
-    qa_path.write_text(json.dumps(qa_payload, indent=2) + "\n", encoding="utf-8")
+        expected_files = {
+            REVIEW_PDF,
+            SOURCE_MAP_JSON,
+            SOURCE_MAP_CSV,
+            VECTOR_QA_JSON,
+            *{
+                f"previews/{record.spec.candidate_id}.png"
+                for record in numbered_records
+            },
+        }
+        actual_files = {
+            path.relative_to(staging_dir).as_posix()
+            for path in staging_dir.rglob("*")
+            if path.is_file()
+        }
+        if actual_files != expected_files:
+            raise FigureAcceptanceError(
+                "Staged acceptance artifact inventory is incomplete or contaminated"
+            )
+        os.replace(staging_dir, output_dir)
+    except Exception as exc:
+        if staging_dir.exists():
+            shutil.rmtree(staging_dir)
+        if isinstance(exc, FigureAcceptanceError):
+            raise
+        if isinstance(exc, PdfQaError):
+            raise FigureAcceptanceError(str(exc)) from exc
+        raise FigureAcceptanceError(f"Acceptance staging failed: {exc}") from exc
 
-    source_map_json = output_dir / SOURCE_MAP_JSON
-    source_map_csv = output_dir / SOURCE_MAP_CSV
-    source_payload = {
-        "schema_version": 1,
-        "passed": True,
-        "source_commit": source_commit,
-        "allowlist": {
-            "path": str(Path(allowlist_path).resolve()),
-            "sha256": _sha256(Path(allowlist_path).resolve()),
-            "expected_counts": EXPECTED_COUNTS,
-        },
-        "roots": {key: str(path) for key, path in roots.items()},
-        "review": {
-            "path": str(review_pdf),
-            "sha256": _sha256(review_pdf),
-            "index_pages": index_pages,
-            "page_count": review_page - 1,
-        },
-        "vector_qa": {
-            "path": str(qa_path),
-            "sha256": _sha256(qa_path),
-        },
-        "candidates": [
-            {
-                "order": record.order,
-                **asdict(record.spec),
-                "pdf_path": str(record.pdf_path),
-                "pdf_sha256": record.pdf_sha256,
-                "pdf_page_count": record.pdf_page_count,
-                "png_path": str(record.preview.path),
-                "png_sha256": record.preview.sha256,
-                "png_width_px": record.preview.width_px,
-                "png_height_px": record.preview.height_px,
-                "png_dpi_x": record.preview.dpi_x,
-                "png_dpi_y": record.preview.dpi_y,
-                "review_page_start": record.review_page_start,
-                "review_page_end": record.review_page_end,
-            }
-            for record in numbered_records
-        ],
-    }
-    source_map_json.write_text(
-        json.dumps(source_payload, indent=2) + "\n", encoding="utf-8"
-    )
-    _write_csv(source_map_csv, numbered_records, source_commit)
     return AcceptanceOutputs(
-        review_pdf=review_pdf,
-        source_map_json=source_map_json,
-        source_map_csv=source_map_csv,
-        vector_qa_json=qa_path,
+        review_pdf=output_dir / REVIEW_PDF,
+        source_map_json=output_dir / SOURCE_MAP_JSON,
+        source_map_csv=output_dir / SOURCE_MAP_CSV,
+        vector_qa_json=output_dir / VECTOR_QA_JSON,
     )
 
 
@@ -725,15 +1310,16 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--figure-root", type=Path, required=True)
     parser.add_argument("--c0-root", type=Path, required=True)
     parser.add_argument(
+        "--release-root",
+        type=Path,
+        required=True,
+        help="audited final release root that anchors source/profile/input provenance",
+    )
+    parser.add_argument(
         "--output-dir",
         type=Path,
         required=True,
-        help="new or empty directory outside both candidate roots",
-    )
-    parser.add_argument(
-        "--source-commit",
-        required=True,
-        help="full 40-character source commit shared by all candidate generators",
+        help="new, nonexistent directory outside both candidate roots",
     )
     parser.add_argument(
         "--allowlist",
@@ -750,8 +1336,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         outputs = accept_figure_candidates(
             figure_root=args.figure_root,
             c0_root=args.c0_root,
+            release_root=args.release_root,
             output_dir=args.output_dir,
-            source_commit=args.source_commit,
             allowlist_path=args.allowlist,
         )
     except FigureAcceptanceError as exc:

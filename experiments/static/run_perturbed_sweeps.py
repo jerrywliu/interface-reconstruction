@@ -29,6 +29,11 @@ from experiments.static.sweep_diagnostics import (
     prepare_diagnostic_bundle,
     remove_archived_run_source,
 )
+from experiments.static.figure_generation_provenance import (
+    frozen_reconstruction_profile,
+    generation_provenance,
+    write_authoritative_figure_provenance,
+)
 from main.structs.meshes.merge_mesh import MergeMesh
 from util.io.slack import load_slack_env, send_results_to_slack
 
@@ -70,6 +75,14 @@ DEFAULT_RESOLUTIONS = [0.32, 0.50, 0.64, 1.00, 1.28, 1.50]
 DEFAULT_RESOLUTIONS_SHORT = [0.50, 0.64, 1.00, 1.28, 1.50]
 DEFAULT_WIGGLES = [0.0, 0.05, 0.1, 0.2, 0.3]
 DEFAULT_SEEDS = [0]
+
+ALL_METHOD_CANDIDATES = {
+    "lines_all_methods": "lines_all_methods_2x2.pdf",
+    "squares_all_methods": "squares_all_methods_2x2.pdf",
+    "circles_all_methods": "circles_all_methods_5x2_axes.pdf",
+    "ellipses_all_methods": "ellipses_all_methods_5x2_axes.pdf",
+    "zalesak_all_methods": "zalesak_all_methods_2x2.pdf",
+}
 
 DISPLAY_LABELS = {
     "Youngs": "Youngs",
@@ -1851,6 +1864,12 @@ def main():
         help="skip sweep execution and generate summary plots from an existing CSV",
     )
     parser.add_argument(
+        "--release_root",
+        type=Path,
+        default=None,
+        help="completed audited final release required by plot-only provenance",
+    )
+    parser.add_argument(
         "--collect_existing",
         action="store_true",
         help="skip execution and collect metrics from existing plots/perturb_sweep_* outputs",
@@ -1870,10 +1889,45 @@ def main():
     ).resolve()
 
     if args.plot_from_csv:
-        csv_path = Path(args.plot_from_csv)
+        if args.release_root is None:
+            parser.error("--release_root is required with --plot_from_csv")
+        csv_path = Path(args.plot_from_csv).resolve()
         if not csv_path.exists():
             raise FileNotFoundError(f"CSV not found: {csv_path}")
         plots_by_exp = _generate_summary_plots(str(csv_path), summary_dir)
+        profile = frozen_reconstruction_profile()
+        generation = generation_provenance(
+            profile=profile,
+            profile_application="context_and_final_release_aggregate_metrics",
+        )
+        plot_manifest_path = summary_dir / "plot_manifest.json"
+        plot_manifest_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "status": "completed",
+                    "generation_provenance": generation,
+                    "aggregate_metrics": str(csv_path),
+                    "plots_by_experiment": plots_by_exp,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        write_authoritative_figure_provenance(
+            summary_dir / "figure_provenance.json",
+            generator="all_method_summary_plots",
+            release_root=args.release_root,
+            generation=generation,
+            producer_manifest=plot_manifest_path,
+            inputs=[("final_release_metrics", csv_path)],
+            outputs={
+                candidate_id: summary_dir / filename
+                for candidate_id, filename in ALL_METHOD_CANDIDATES.items()
+            },
+        )
         print(f"Generated perturbed summary plots from {csv_path}")
         if notify:
             for exp, plot_paths in plots_by_exp.items():
