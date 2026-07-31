@@ -1,6 +1,6 @@
 # Paper Experiment and Figure Map
 
-Updated: 2026-07-30
+Updated: 2026-07-31
 
 This is the paper-to-code index for the static reconstruction results in
 Section 6 and its appendix. Run commands from the repository root. The target
@@ -25,10 +25,15 @@ Figure promotion status and the paper filename contract are in
 Set these shell variables when a final release exists:
 
 ```bash
-RELEASE=results/static/submission_static_<UTC>_<12-char-commit>
-FIGURES="$RELEASE/figures"
-PLOTS_VIEW="$FIGURES/final_plots_view"
+export FINAL_ROOT="$PWD/results/static/submission_static_<UTC>_<12-char-commit>"
+export SOURCE_COMMIT="$(python -c 'import json,os; print(json.load(open(os.environ["FINAL_ROOT"] + "/submission_config.resolved.json"))["source"]["target_commit"])')"
+export FIGURE_ROOT="$PWD/results/submission/final_figures_${SOURCE_COMMIT:0:12}"
+export PLOTS_VIEW="$FIGURE_ROOT/final_plots_view"
 ```
+
+`FINAL_ROOT` contains the immutable numerical release. All regenerated figure
+candidates live separately under the authoritative
+`results/submission/final_figures_<commit>/` root.
 
 ## Final Sweep
 
@@ -52,7 +57,7 @@ cases. The launcher fixes:
 Each final release has this contract:
 
 ```text
-$RELEASE/
+$FINAL_ROOT/
   submission_config.resolved.json
   sweep_manifest.json
   failures.csv
@@ -115,7 +120,7 @@ python -m experiments.static.zalesak \
 ```
 
 The raw result is `plots/<unique-save-name>/`; final sweeps additionally copy
-it to `$RELEASE/raw_runs/<unique-save-name>/`.
+it to `$FINAL_ROOT/raw_runs/<unique-save-name>/`.
 
 ## Figure Regeneration
 
@@ -130,9 +135,9 @@ the release audit and view construction must fail instead.
 
 ```bash
 python -m experiments.static.generate_section6_maintext_figures \
-  --csv "$RELEASE/perturbed_sweep.csv" \
+  --csv "$FINAL_ROOT/perturbed_sweep.csv" \
   --plots_root "$PLOTS_VIEW" \
-  --out_dir "$FIGURES/section6" \
+  --out_dir "$FIGURE_ROOT/section6" \
   --figure_groups quantitative,representative \
   --endpoint_variants paired
 ```
@@ -150,7 +155,7 @@ python -m experiments.static.generate_section6_maintext_figures \
 | Zalesak metrics | `section6/summary_plots/zalesak_maintext_metrics.pdf` | `zalesak_reconstruction_maintext_metrics.pdf` |
 | Zalesak representative | `section6/representative_cases/zalesak_maintext_representative_{with_endpoints,clean}.pdf` | `zalesak_reconstruction_maintext_representative.pdf` |
 
-The generator writes `$FIGURES/section6/maintext_manifest.json`, including the
+The generator writes `$FIGURE_ROOT/section6/maintext_manifest.json`, including the
 case and method selections. Current representative candidates are lines 6,
 squares 24, circles 12, ellipses 12, and Zalesak 12.
 
@@ -158,8 +163,8 @@ squares 24, circles 12, ellipses 12, and Zalesak 12.
 
 ```bash
 python -m experiments.static.run_perturbed_sweeps \
-  --plot_from_csv "$RELEASE/perturbed_sweep.csv" \
-  --summary_dir "$FIGURES/all_methods" \
+  --plot_from_csv "$FINAL_ROOT/perturbed_sweep.csv" \
+  --summary_dir "$FIGURE_ROOT/all_methods" \
   --no-notify
 ```
 
@@ -177,13 +182,17 @@ These are deterministic companion runs at `N=16,32,64`, not rows in the
 970-run release. Run each benchmark separately so its manifest remains intact:
 
 ```bash
+test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+python submission/check_submission_freeze.py --source-only
+
 python -m experiments.static.run_appendix_resolution_visuals \
   --only <benchmark> \
   --case_index <case> \
   --resolutions 0.16,0.32,0.64 \
   --wiggles 0,0.1 \
+  --save_prefix "final_resolution_${SOURCE_COMMIT:0:12}_<benchmark>" \
   --endpoint_variants paired \
-  --out_dir "$FIGURES/resolution/<benchmark>"
+  --out_dir "$FIGURE_ROOT/resolution/<benchmark>"
 ```
 
 | Benchmark / candidate case | Generated and paper asset |
@@ -197,20 +206,58 @@ python -m experiments.static.run_appendix_resolution_visuals \
 These case choices remain an author-approval gate. Preserve each generated
 `manifest.json`, logs, and the associated `plots/<save-prefix>_*` geometry.
 
+### Guarded `C0` appendix panels
+
+All four guarded-`C0` figures are active manuscript assets. They come from a
+dedicated final-commit study because the primary 970-run sweep has `C0`
+disabled:
+
+```bash
+test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+python submission/check_submission_freeze.py --source-only
+
+export C0_ROOT="$PWD/results/static/final_guarded_c0_${SOURCE_COMMIT:0:12}"
+test ! -e "$C0_ROOT"
+python -m experiments.static.run_appendix_c0_study \
+  --out_dir "$C0_ROOT" \
+  --out_csv "$C0_ROOT/csv/appendix_c0_sweep.csv" \
+  --log_dir "$C0_ROOT/logs" \
+  --save_prefix "final_guarded_c0_${SOURCE_COMMIT:0:12}" \
+  --seeds 0 --ellipses 25 --zalesak 25 \
+  --endpoint_variants paired
+```
+
+| Active paper asset | Generated vector candidate |
+| --- | --- |
+| `ellipses_appendix_c0_2x2.pdf` | `$C0_ROOT/summary_plots/ellipses_appendix_c0_2x2.pdf` |
+| `ellipses_appendix_c0_representative.pdf` | `$C0_ROOT/representative_cases/ellipses_appendix_c0_representative_{with_endpoints,clean}.pdf` |
+| `zalesak_appendix_c0_2x2.pdf` | `$C0_ROOT/summary_plots/zalesak_appendix_c0_2x2.pdf` |
+| `zalesak_appendix_c0_representative.pdf` | `$C0_ROOT/representative_cases/zalesak_appendix_c0_representative_{with_endpoints,clean}.pdf` |
+
+The representative variants require author selection; the two metric panels do
+not. Historical pre-guard `C0` assets are ineligible.
+
 ### Deterministic explanatory figures
 
 ```bash
+test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+python submission/check_submission_freeze.py --source-only
+
 python -m experiments.static.generate_plic_baseline_stencil_figure \
-  --out "$FIGURES/deterministic/perfect_reconstruction_plic_stencil"
+  --out "$FIGURE_ROOT/deterministic/perfect_reconstruction_plic_stencil"
+
+test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+python submission/check_submission_freeze.py --source-only
 
 python -m experiments.static.generate_staged_reconstruction_figure \
-  --output-dir "$FIGURES/deterministic" \
+  --output-dir "$FIGURE_ROOT/deterministic" \
   --prefix staged_reconstruction_zalesak
 ```
 
 The paper assets are `perfect_reconstruction_plic_stencil.pdf` and
 `staged_reconstruction_zalesak.pdf`. Their sibling JSON/SVG outputs are the
-important provenance files.
+important provenance files. The currently installed staged-Zalesak PDF contains
+a raster color key and must be replaced by this regenerated vector PDF.
 
 ## Representative Variant Contract
 
@@ -228,19 +275,17 @@ Record the choice in the figure approval CSV and `submission/figure_provenance.c
 
 | Claim / experiment | Entry point and command | Data and provenance |
 | --- | --- | --- |
-| Ellipse empirical orders | `python -m experiments.submission.analyze_ellipse_convergence --case-metrics "$RELEASE/diagnostics/case_metrics.csv" --output-dir "$RELEASE/validation/convergence"` | `ellipse_convergence_{points,fits}.csv`, report JSON, vector PDF |
-| Shared-vertex incidence | `python -m experiments.submission.topology_consistency_diagnostics --full --cell-metrics "$RELEASE/diagnostics/cell_metrics.csv" --run-inventory "$RELEASE/diagnostics/run_inventory.csv" --output-dir "$RELEASE/validation/topology"` | paper table, tolerance table, case/conflict CSVs, compressed vertex rows, manifest |
-| Exact conflict diagnosis | `python -m experiments.submission.diagnose_topology_conflicts --source-dir "$RELEASE/validation/topology" --output-dir "$RELEASE/validation/topology_diagnosis"` | taxonomy, incident facets, case counts, manifest, vector examples |
-| Independent cells vs topology+merging | `python -m experiments.submission.run_topology_merging_ablation --output-dir "$RELEASE/validation/topology_merging"` | 10 jobs / 250 Zalesak cases; case/summary CSVs, manifest, vector PDF |
-| Guarded optional `C0` | `python -m experiments.submission.c0_conservation_validation --num-cases 25 --output "$RELEASE/validation/c0_conservation"` | matched 100-case off/on data, eligible joins, regressions, report, manifest |
-| Five-benchmark conservation smoke | `python -m experiments.submission.conservation_analyzer --selection <final-selection.json> --output "$RELEASE/validation/conservation"` | per-case global, merged-zone, and constituent-cell residuals. The checked-in selection JSON points to July and must be rewritten to final raw bundles. |
-| Zalesak remote-corner tail | `python -m experiments.submission.zalesak_failure.diagnose_zalesak_failure --run-root <release-or-July-root> --artifact-root "$RELEASE/validation/zalesak_failure"` | archive-only case-23 diagnostic PDF/SVG, entities/comparison CSVs, provenance JSON, README |
+| Ellipse empirical orders | `python -m experiments.submission.analyze_ellipse_convergence --case-metrics "$FINAL_ROOT/diagnostics/case_metrics.csv" --output-dir "$FINAL_ROOT/validation/convergence"` | `ellipse_convergence_{points,fits}.csv`, report JSON, vector PDF |
+| Shared-vertex incidence | `python -m experiments.submission.topology_consistency_diagnostics --full --cell-metrics "$FINAL_ROOT/diagnostics/cell_metrics.csv" --run-inventory "$FINAL_ROOT/diagnostics/run_inventory.csv" --output-dir "$FINAL_ROOT/validation/topology"` | paper table, tolerance table, case/conflict CSVs, compressed vertex rows, manifest |
+| Exact conflict diagnosis | `python -m experiments.submission.diagnose_topology_conflicts --source-dir "$FINAL_ROOT/validation/topology" --output-dir "$FINAL_ROOT/validation/topology_diagnosis"` | taxonomy, incident facets, case counts, manifest, vector examples |
+| Independent cells vs topology+merging | `python -m experiments.submission.run_topology_merging_ablation --output-dir "$FINAL_ROOT/validation/topology_merging"` | 10 jobs / 250 Zalesak cases; case/summary CSVs, manifest, vector PDF |
+| Guarded optional `C0` | `python -m experiments.submission.c0_conservation_validation --num-cases 25 --output "$FINAL_ROOT/validation/c0_conservation"` | matched 100-case off/on data, eligible joins, regressions, report, manifest |
+| Five-benchmark conservation smoke | `python -m experiments.submission.conservation_analyzer --selection <final-selection.json> --output "$FINAL_ROOT/validation/conservation"` | per-case global, merged-zone, and constituent-cell residuals. The checked-in selection JSON points to July and must be rewritten to final raw bundles. |
+| Zalesak remote-corner tail | `python -m experiments.submission.zalesak_failure.diagnose_zalesak_failure --run-root <release-or-July-root> --artifact-root "$FINAL_ROOT/validation/zalesak_failure"` | archive-only case-23 diagnostic PDF/SVG, entities/comparison CSVs, provenance JSON, README |
 
-The blue review manuscript intentionally reports guarded `C0` as text only.
-The four older assets `ellipses_appendix_c0_2x2.pdf`,
-`ellipses_appendix_c0_representative.pdf`, `zalesak_appendix_c0_2x2.pdf`, and
-`zalesak_appendix_c0_representative.pdf` are historical and must not return
-unless regenerated from the guarded implementation.
+The four guarded-`C0` assets listed above are active. They must be regenerated
+from the guarded implementation at `SOURCE_COMMIT`; historical versions are
+not eligible for promotion.
 
 ## Verification Notes
 

@@ -1,6 +1,6 @@
 # Final Figure Regeneration
 
-Updated: 2026-07-30
+Updated: 2026-07-31
 
 For the audited mapping of all 26 active manuscript PDF includes, including the
 `N=16,32,64` companion-run decision and paired-variant contract, follow
@@ -18,6 +18,9 @@ For the audited mapping of all 26 active manuscript PDF includes, including the
   circles in the annotated version, and clean main panels in the clean version.
   Both retain endpoint/cell-crossing markers in spyglasses and semantic corner
   diamonds everywhere.
+- Generate and audit exactly 38 review PDFs: 14 unpaired figures and two
+  candidates for each of 12 qualitative slots. After author selection, install
+  exactly 26 unsuffixed manuscript PDFs.
 - Do not regenerate from a partial release. The earlier
   `submission_static_20260730_201510_df31a8d5f9b3` namespace was an aborted
   storage-layout attempt and is never an eligible source.
@@ -81,6 +84,14 @@ PY
 ```
 
 Do not continue after any failed assertion.
+
+Every dedicated companion generator below (resolution, guarded `C0`, PLIC, and
+staged reconstruction) must also be preceded immediately by this source gate:
+
+```bash
+test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+python submission/check_submission_freeze.py --source-only
+```
 
 ## Canonical Raw-Bundle View
 
@@ -176,20 +187,28 @@ the primary sweep. Current proposed cases are lines `0`, squares `22`, circles
 `12`, ellipses `12`, and Zalesak `20`.
 
 ```bash
+test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+python submission/check_submission_freeze.py --source-only
+
 python -m experiments.static.run_appendix_resolution_visuals --only lines \
   --case_index 0 --resolutions 0.16,0.32,0.64 --wiggles 0,0.1 \
+  --save_prefix "final_resolution_${SOURCE_COMMIT:0:12}_lines" \
   --endpoint_variants paired --out_dir "$FIGURE_ROOT/resolution/lines"
 python -m experiments.static.run_appendix_resolution_visuals --only squares \
   --case_index 22 --resolutions 0.16,0.32,0.64 --wiggles 0,0.1 \
+  --save_prefix "final_resolution_${SOURCE_COMMIT:0:12}_squares" \
   --endpoint_variants paired --out_dir "$FIGURE_ROOT/resolution/squares"
 python -m experiments.static.run_appendix_resolution_visuals --only circles \
   --case_index 12 --resolutions 0.16,0.32,0.64 --wiggles 0,0.1 \
+  --save_prefix "final_resolution_${SOURCE_COMMIT:0:12}_circles" \
   --endpoint_variants paired --out_dir "$FIGURE_ROOT/resolution/circles"
 python -m experiments.static.run_appendix_resolution_visuals --only ellipses \
   --case_index 12 --resolutions 0.16,0.32,0.64 --wiggles 0,0.1 \
+  --save_prefix "final_resolution_${SOURCE_COMMIT:0:12}_ellipses" \
   --endpoint_variants paired --out_dir "$FIGURE_ROOT/resolution/ellipses"
 python -m experiments.static.run_appendix_resolution_visuals --only zalesak \
   --case_index 20 --resolutions 0.16,0.32,0.64 --wiggles 0,0.1 \
+  --save_prefix "final_resolution_${SOURCE_COMMIT:0:12}_zalesak" \
   --endpoint_variants paired --out_dir "$FIGURE_ROOT/resolution/zalesak"
 ```
 
@@ -224,6 +243,9 @@ not use the March/May or pre-guard C0 bundles. Run the dedicated study from the
 same frozen source commit after the primary release passes its audit:
 
 ```bash
+test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+python submission/check_submission_freeze.py --source-only
+
 export C0_ROOT="$PWD/results/static/final_guarded_c0_${SOURCE_COMMIT:0:12}"
 test ! -e "$C0_ROOT"
 python -m experiments.static.run_appendix_c0_study \
@@ -270,6 +292,9 @@ magnitude `0.3`, seed `0`. Driver:
 `experiments/static/generate_plic_baseline_stencil_figure.py`.
 
 ```bash
+test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+python submission/check_submission_freeze.py --source-only
+
 mkdir -p "$FIGURE_ROOT/deterministic"
 python -m experiments.static.generate_plic_baseline_stencil_figure \
   --out "$FIGURE_ROOT/deterministic/perfect_reconstruction_plic_stencil" \
@@ -287,13 +312,18 @@ seed `0`, with the final frozen defaults. Driver:
 `experiments/static/generate_staged_reconstruction_figure.py`.
 
 ```bash
+test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+python submission/check_submission_freeze.py --source-only
+
 python -m experiments.static.generate_staged_reconstruction_figure \
   --output-dir "$FIGURE_ROOT/deterministic" \
   --prefix staged_reconstruction_zalesak \
   --case-index 22 --resolution 1.0 --wiggle 0.1 --seed 0
 ```
 
-The PDF is authoritative. The 300-DPI PNG is only for review.
+The PDF is authoritative. The 300-DPI PNG is only for review. The currently
+installed `staged_reconstruction_zalesak.pdf` contains a raster color key and
+must be replaced by this regenerated vector output.
 
 ## Manuscript Asset Map
 
@@ -321,8 +351,10 @@ final release path in `submission/figure_provenance.csv` before installation.
 
 ## Vector And Visual QA
 
-Audit only candidate submission assets, not the indexed review packet. The latter
-may rasterize pages for convenient review and is not a manuscript asset.
+Audit only candidate submission assets, not the indexed review packet. Before
+selection, require exactly 38 PDFs: 14 unpaired figures plus 24 PDFs for the 12
+paired qualitative slots. The indexed packet may rasterize pages for convenient
+review and is not a manuscript asset.
 
 ```bash
 python submission/pdf_vector_qa.py \
@@ -339,7 +371,8 @@ python submission/pdf_vector_qa.py \
   --json "$C0_ROOT/pdf_vector_qa.json"
 ```
 
-Both commands must report `PDF QA: N/N passed`. A pass means zero image XObjects,
+Together the commands must cover and pass all `38/38` candidate PDFs. A pass
+means zero image XObjects,
 at least one font resource, and every reported font embedded. Type 1, Type 3, and
 CID TrueType fonts are acceptable when Poppler reports `emb=yes`; CID TrueType is
 preferred for newly generated Matplotlib text.
@@ -359,6 +392,7 @@ find "$FIGURE_ROOT" -type f -name '*.pdf' ! -path '*/review_previews/*' -print0 
 Inspect every preview for clipping, unreadable labels, inconsistent method colors,
 overlapping spyglasses, missing corner diamonds, and endpoint-marker policy. Zoom
 the authoritative PDF itself to at least `800%` to confirm paths and text remain
-sharp. After author approval, copy only selected PDFs into the paper asset folder,
-compile the manuscript and supplement, rerun `pdf_vector_qa.py` on every installed
-asset, and update `submission/figure_provenance.csv`.
+sharp. After author approval, select one candidate for each paired slot and copy
+exactly 26 unsuffixed PDFs into the paper asset folder. Compile the manuscript
+and supplement, rerun `pdf_vector_qa.py` on all `26/26` installed assets, and
+update `submission/figure_provenance.csv`.

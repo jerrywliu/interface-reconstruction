@@ -1,8 +1,9 @@
 # Post-Sweep Figure Regeneration Manifest
 
-Updated: 2026-07-30
+Updated: 2026-07-31
 
-This checklist audits the active Overleaf manuscript at commit `4431912`
+This checklist audits the active Overleaf figure paths and labels at verified
+audit commit `921ec9d`
 against `docs/PAPER_EXPERIMENT_MAP.md` and
 `submission/FINAL_FIGURE_REGENERATION.md`. It covers all 26 live
 `\includegraphics` PDF assets. The seven native TikZ schematics are listed
@@ -33,6 +34,10 @@ candidate figure packet, and the selected endpoint variants have been approved.
 5. **PDF is authoritative.** Every installed asset must have zero image XObjects
    and all reported fonts embedded. PNG siblings are 300-DPI review previews,
    never manuscript inputs.
+6. **Review and installation have different counts.** The complete review set is
+   38 PDFs: 14 unpaired figures plus both variants for 12 qualitative slots.
+   Author selection reduces those 24 paired candidates to 12, leaving exactly
+   26 unsuffixed PDFs for manuscript installation.
 
 ## Integrated Tooling And Remaining Review Work
 
@@ -79,7 +84,13 @@ Before any figure command:
   a clean captured source, and all 970 replayable raw bundles;
 - build the final-only canonical symlink view using the snippet in
   `submission/FINAL_FIGURE_REGENERATION.md`;
-- verify `SOURCE_COMMIT` is the checked-out commit for every dedicated run.
+- run the following exact gate immediately before every dedicated command R, C,
+  D1, and D2:
+
+  ```bash
+  test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+  python submission/check_submission_freeze.py --source-only
+  ```
 
 ## Command Catalog
 
@@ -120,20 +131,28 @@ python -m experiments.static.run_perturbed_sweeps \
 Run benchmarks separately so each manifest retains its explicit case selection:
 
 ```bash
+test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+python submission/check_submission_freeze.py --source-only
+
 python -m experiments.static.run_appendix_resolution_visuals --only lines \
   --case_index 0 --resolutions 0.16,0.32,0.64 --wiggles 0,0.1 \
+  --save_prefix "final_resolution_${SOURCE_COMMIT:0:12}_lines" \
   --endpoint_variants paired --out_dir "$FIGURE_ROOT/resolution/lines"
 python -m experiments.static.run_appendix_resolution_visuals --only squares \
   --case_index 22 --resolutions 0.16,0.32,0.64 --wiggles 0,0.1 \
+  --save_prefix "final_resolution_${SOURCE_COMMIT:0:12}_squares" \
   --endpoint_variants paired --out_dir "$FIGURE_ROOT/resolution/squares"
 python -m experiments.static.run_appendix_resolution_visuals --only circles \
   --case_index 12 --resolutions 0.16,0.32,0.64 --wiggles 0,0.1 \
+  --save_prefix "final_resolution_${SOURCE_COMMIT:0:12}_circles" \
   --endpoint_variants paired --out_dir "$FIGURE_ROOT/resolution/circles"
 python -m experiments.static.run_appendix_resolution_visuals --only ellipses \
   --case_index 12 --resolutions 0.16,0.32,0.64 --wiggles 0,0.1 \
+  --save_prefix "final_resolution_${SOURCE_COMMIT:0:12}_ellipses" \
   --endpoint_variants paired --out_dir "$FIGURE_ROOT/resolution/ellipses"
 python -m experiments.static.run_appendix_resolution_visuals --only zalesak \
   --case_index 20 --resolutions 0.16,0.32,0.64 --wiggles 0,0.1 \
+  --save_prefix "final_resolution_${SOURCE_COMMIT:0:12}_zalesak" \
   --endpoint_variants paired --out_dir "$FIGURE_ROOT/resolution/zalesak"
 ```
 
@@ -145,6 +164,9 @@ Cartesian/perturbed (`w=0,0.1`). Preserve `manifest.json`, logs, and raw geometr
 Run the paired representative export with the guarded study:
 
 ```bash
+test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+python submission/check_submission_freeze.py --source-only
+
 test ! -e "$C0_ROOT"
 python -m experiments.static.run_appendix_c0_study \
   --out_dir "$C0_ROOT" \
@@ -162,6 +184,9 @@ pre-`C0` facet.
 ### D1: Deterministic PLIC Stencil
 
 ```bash
+test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+python submission/check_submission_freeze.py --source-only
+
 mkdir -p "$FIGURE_ROOT/deterministic"
 python -m experiments.static.generate_plic_baseline_stencil_figure \
   --out "$FIGURE_ROOT/deterministic/perfect_reconstruction_plic_stencil" \
@@ -174,13 +199,17 @@ Preserve `perfect_reconstruction_plic_stencil_data.json` and the SVG sibling.
 ### D2: Deterministic Staged Reconstruction
 
 ```bash
+test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+python submission/check_submission_freeze.py --source-only
+
 python -m experiments.static.generate_staged_reconstruction_figure \
   --output-dir "$FIGURE_ROOT/deterministic" \
   --prefix staged_reconstruction_zalesak \
   --case-index 22 --resolution 1.0 --wiggle 0.1 --seed 0
 ```
 
-Preserve `staged_reconstruction_zalesak_data.json` and the SVG sibling.
+Preserve `staged_reconstruction_zalesak_data.json` and the SVG sibling. This
+candidate must replace the currently installed PDF, whose color key is raster.
 
 ## Main-Text Asset Manifest
 
@@ -241,7 +270,11 @@ Their gate is a clean manuscript compile and visual inspection at 800% zoom.
 - [x] Dedicated companion commands write a manifest or data JSON identifying
       source commit, case, resolution, perturbation, seed, method, fallback, and
       profile.
-- [ ] All 26 candidate manuscript PDFs pass:
+- [ ] All 38 review candidates exist before QA: 5 main metrics, 10 paired main
+      representatives, 5 all-method panels, 10 paired resolution panels, 2
+      guarded-`C0` metrics, 4 paired guarded-`C0` representatives, and 2
+      deterministic figures.
+- [ ] All 38 review candidates pass:
 
   ```bash
   python submission/pdf_vector_qa.py \
@@ -266,7 +299,8 @@ Their gate is a clean manuscript compile and visual inspection at 800% zoom.
       installed in the manuscript.
 - [ ] Record author selections and exact source paths in
       `submission/figure_provenance.csv`.
-- [ ] Copy only approved PDFs to the 26 unsuffixed manuscript filenames.
+- [ ] Select one PDF for each of the 12 paired qualitative slots, then copy the
+      resulting 26 approved PDFs to the 26 unsuffixed manuscript filenames.
 - [ ] If a clean variant is selected, revise any caption that says main-panel
       endpoints are visible; make every substantive manuscript diff blue.
 - [ ] Reconcile all reported medians, convergence language, corner-tail
@@ -281,6 +315,7 @@ Their gate is a clean manuscript compile and visual inspection at 800% zoom.
 A read-only audit of the active 26 PDFs produced `25/26` passes. Every asset but
 `staged_reconstruction_zalesak.pdf` contains zero raster image objects and has
 embedded fonts. The active staged-reconstruction PDF contains one raster image
-object; deterministic regeneration through D2 is therefore mandatory even if
-its visual content is otherwise approved. The corrected generator on the final
-source commit uses vector patches for the formerly rasterized colorbar.
+object and is explicitly ineligible for final installation; replace it with the
+D2 output even if its visual content is otherwise approved. The corrected
+generator on the final source commit uses vector patches for the formerly
+rasterized colorbar.
