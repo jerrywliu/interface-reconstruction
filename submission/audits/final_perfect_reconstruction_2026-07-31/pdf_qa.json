@@ -1,0 +1,25 @@
+{
+  "command_output": [
+    "PASS perfect_reconstruction_audit.pdf: 0 image object(s), 1 font(s)",
+    "PDF QA: 1/1 passed"
+  ],
+  "passed": true,
+  "pdf_count": 1,
+  "reports": [
+    {
+      "fonts": [
+        {
+          "embedded": true,
+          "font_type": "CID TrueType",
+          "name": "BMQQDV+DejaVuSans",
+          "subset": true
+        }
+      ],
+      "image_objects": 0,
+      "issues": [],
+      "passed": true,
+      "path": "perfect_reconstruction_audit.pdf"
+    }
+  ],
+  "schema_version": 1
+}

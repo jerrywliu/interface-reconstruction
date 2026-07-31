@@ -1,0 +1,61 @@
+{
+  "critical_methods": {
+    "squares": "linear+corner",
+    "zalesak": "circular+corner"
+  },
+  "inputs": {
+    "final_case_metrics": {
+      "path": "results/static/submission_static_20260731_012430_505aefa45432/diagnostics/case_metrics.csv",
+      "sha256": "16bc3a9c24ab36886dab18cb6b069a9d7c90bce8d2ddca44ab5500d14a8e9afc"
+    },
+    "final_sweep_manifest": {
+      "path": "results/static/submission_static_20260731_012430_505aefa45432/sweep_manifest.json",
+      "sha256": "cab4d04cea0e3105a1e94a2dd1f974dc508a69583236fdee8e01339ccfd794c7"
+    },
+    "invalid_failure_ledger": {
+      "path": "results/static/submission_static_20260730_202949_525d0cf5b4df/failures.csv",
+      "sha256": "2eeb5f8351de5b6df732709769f48db2d4ba5e94826360daf952d98b7912f069"
+    },
+    "july14_case_metrics": {
+      "path": "results/static/static_paper_affected_diagnostics_20260714_102206/diagnostics/case_metrics.csv",
+      "sha256": "df4744efbdfc034ad08001a67ed9fc4bbf9e68f640d2956b24fd959662cde993"
+    },
+    "july17_case_metrics": {
+      "path": "results/static/static_paper_simplified_default_20260717_212413/diagnostics/case_metrics.csv",
+      "sha256": "38f0cba0667f4453f11f4b279cfe404df37c997824abd826ab2729880ebf081a"
+    },
+    "keep_all_linear_rescue_summary": {
+      "path": "results/static/linear_rescue_cleanup_analysis_20260715/full_grid_comparison.csv",
+      "sha256": "d79959cfe97c967db1b69843275d3569a8942b47af08382b7f358ec6a3124651"
+    }
+  },
+  "material_change_definition": {
+    "absolute_difference_gt": 1e-10,
+    "relative_difference_gt": 0.01
+  },
+  "outputs": [
+    "README.md",
+    "SHA256SUMS",
+    "analysis_manifest.json",
+    "analyze.py",
+    "complex_profile_case_comparison.csv",
+    "complex_profile_summary.csv",
+    "final_resolution_summary.csv",
+    "final_setting_summary.csv",
+    "formerly_failed_square_settings.csv",
+    "july17_case_crosscheck.csv",
+    "july17_crosscheck_summary.csv",
+    "keep_all_linear_rescue_check.csv",
+    "pdf_qa.json",
+    "perfect_reconstruction_audit.pdf",
+    "perfect_reconstruction_audit.png",
+    "tail_inventory.csv",
+    "threshold_sensitivity.csv"
+  ],
+  "schema_version": 1,
+  "thresholds": [
+    1e-06,
+    1e-08,
+    1e-10
+  ]
+}
