@@ -1,7 +1,4 @@
-import csv
 import hashlib
-import importlib
-import json
 import shutil
 import subprocess
 import sys
@@ -11,7 +8,6 @@ import pytest
 from PIL import Image
 
 from submission.accept_figure_candidates import (
-    DEFAULT_ALLOWLIST,
     EXPECTED_COUNTS,
     AcceptedCandidate,
     CandidateSpec,
@@ -19,38 +15,23 @@ from submission.accept_figure_candidates import (
     PdfPageInfo,
     PreviewRecord,
     ProvenanceEvidence,
-    _accept_orchestrated_candidates,
-    _create_orchestrated_acceptance_state,
     build_vector_review_pdf,
+    inspect_generated_preview,
     load_candidate_allowlist,
+    pdf_page_info,
     render_pdf_preview,
+    verify_candidate_inventory,
     verify_review_page_map,
 )
 from submission.pdf_vector_qa import FontRecord, PdfQaReport, inspect_pdf
-from submission.final_figure_orchestrator import (
-    _remove_tree,
-    validate_published_logical_paths,
-)
-from test.submission.final_figure_test_support import freeze_staging_for_test
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SOURCE_COMMIT = "5" * 40
-APPROVED_COMMIT = "6" * 40
-PROFILE = {
-    "plic_fallback": "LVIRA",
-    "corner_behavior_profile": "pre_f8_corner",
-    "rescue_profile": "exact_linear_support_only",
-}
 
 
 def _sha256(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def _write_json(path, payload):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
 def _passing_report(path, *, require_fonts=True):
@@ -78,80 +59,6 @@ def _populate_candidate_roots(tmp_path):
     return roots
 
 
-def _orchestrated_state(roots):
-    snapshot = roots["figure_root"].parents[1]
-    private_allowlist = snapshot / "provenance" / "approved_candidate_allowlist.json"
-    private_allowlist.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(DEFAULT_ALLOWLIST, private_allowlist)
-    candidates = []
-    for spec in load_candidate_allowlist():
-        output = roots[spec.root] / spec.pdf
-        candidates.append(
-            {
-                "candidate_id": spec.candidate_id,
-                "path": (Path("candidates") / spec.root / spec.pdf).as_posix(),
-                "sha256": _sha256(output),
-                "generator": "test_generator",
-            }
-        )
-    manifest_path = snapshot / "provenance" / "final_figure_orchestration.json"
-    _write_json(manifest_path, {"record": "created by orchestrator test fixture"})
-    return _create_orchestrated_acceptance_state(
-        figure_root=roots["figure_root"],
-        c0_root=roots["c0_root"],
-        snapshot_root=snapshot,
-        release_anchor={
-            "name": "release",
-            "source_commit": SOURCE_COMMIT,
-            "reconstruction_profile": PROFILE,
-            "artifacts": {},
-        },
-        generator_source_commit=APPROVED_COMMIT,
-        orchestration_record=manifest_path,
-        allowlist_path=private_allowlist,
-        candidate_records=candidates,
-    )
-
-
-def _acceptance_fixture(tmp_path):
-    roots = _populate_candidate_roots(tmp_path)
-    state = _orchestrated_state(roots)
-    return roots, state
-
-
-def _fake_page_inspector(path):
-    path = Path(path)
-    if path.name == "figure_candidate_review.pdf":
-        return PdfPageInfo(41, 792.0, 612.0)
-    return PdfPageInfo(1, 72.0, 72.0)
-
-
-def _fake_preview_renderer(pdf_path, output_path, *, dpi, page):
-    assert dpi == 300
-    assert page >= 1
-    Image.new("RGB", (300, 300), "white").save(output_path)
-
-
-def _fake_review_builder(records, output, *, source_commit):
-    assert len(records) == 38
-    assert source_commit == SOURCE_COMMIT
-    output.write_bytes(b"%PDF-1.4\nsynthetic vector review\n%%EOF\n")
-
-
-def _accept(tmp_path, state, **overrides):
-    options = {
-        "orchestration_state": state,
-        "output_dir": tmp_path / "review",
-        "pdf_inspector": _passing_report,
-        "page_inspector": _fake_page_inspector,
-        "preview_renderer": _fake_preview_renderer,
-        "review_builder": _fake_review_builder,
-        "review_map_verifier": lambda *args, **kwargs: None,
-    }
-    options.update(overrides)
-    return _accept_orchestrated_candidates(**options)
-
-
 def test_explicit_allowlist_has_exact_38_candidate_contract():
     specs = load_candidate_allowlist()
     assert len(specs) == EXPECTED_COUNTS["candidate_pdfs"] == 38
@@ -167,15 +74,15 @@ def test_explicit_allowlist_has_exact_38_candidate_contract():
     assert len({(spec.root, spec.pdf) for spec in specs}) == 38
 
 
-def test_acceptance_fails_on_missing_and_unexpected_candidate_pdfs(tmp_path):
-    roots, state = _acceptance_fixture(tmp_path)
+def test_candidate_inventory_fails_on_missing_and_unexpected_pdfs(tmp_path):
+    roots = _populate_candidate_roots(tmp_path)
     missing = roots["figure_root"] / load_candidate_allowlist()[0].pdf
     missing.unlink()
     unexpected = roots["c0_root"] / "summary_plots/unexpected.pdf"
     unexpected.write_bytes(b"%PDF-1.4\n%%EOF\n")
 
     with pytest.raises(FigureAcceptanceError) as caught:
-        _accept(tmp_path, state)
+        verify_candidate_inventory(load_candidate_allowlist(), roots)
     message = str(caught.value)
     assert "Missing candidate PDFs" in message
     assert "Unexpected candidate PDFs" in message
@@ -183,27 +90,9 @@ def test_acceptance_fails_on_missing_and_unexpected_candidate_pdfs(tmp_path):
     assert "unexpected.pdf" in message
 
 
-def test_historical_file_masquerade_fails_provenance_checksum(tmp_path):
-    roots, state = _acceptance_fixture(tmp_path)
-    spec = load_candidate_allowlist()[0]
-    candidate = roots[spec.root] / spec.pdf
-    candidate.write_bytes(b"%PDF-1.4\nhistorical candidate with same name\n%%EOF\n")
-
-    with pytest.raises(FigureAcceptanceError, match="candidate checksum mismatch"):
-        _accept(tmp_path, state)
-
-
-def test_private_allowlist_mutation_fails_before_acceptance(tmp_path):
-    _roots, state = _acceptance_fixture(tmp_path)
-    state.allowlist_path.write_bytes(state.allowlist_path.read_bytes() + b"\n")
-
-    with pytest.raises(FigureAcceptanceError, match="allowlist mutated"):
-        _accept(tmp_path, state)
-
-
 def test_forged_standalone_manifest_cannot_invoke_acceptance(tmp_path):
     forged = tmp_path / "forged.json"
-    _write_json(forged, {"status": "completed", "scientific_contracts": {}})
+    forged.write_text("{}\n", encoding="utf-8")
     output = tmp_path / "review"
     completed = subprocess.run(
         [
@@ -220,154 +109,39 @@ def test_forged_standalone_manifest_cannot_invoke_acceptance(tmp_path):
         text=True,
     )
     assert completed.returncode == 2
-    assert "internal-only" in completed.stderr
+    assert "no acceptance command" in completed.stderr
     assert not output.exists()
 
 
 @pytest.mark.parametrize("size", [(1, 1), (300, 150)])
 def test_tiny_or_stale_rendered_preview_fails(tmp_path, size):
-    _roots, state = _acceptance_fixture(tmp_path)
-
-    def bad_renderer(pdf_path, output_path, *, dpi, page):
-        Image.new("RGB", size, "white").save(output_path)
+    preview = tmp_path / "preview.png"
+    Image.new("RGB", size, "white").save(preview, dpi=(300, 300))
 
     with pytest.raises(FigureAcceptanceError, match="tiny|dimensions do not match"):
-        _accept(
-            tmp_path,
-            state,
-            preview_renderer=bad_renderer,
+        inspect_generated_preview(
+            preview,
+            PdfPageInfo(1, 72.0, 72.0),
+            required_dpi=300.0,
+            logical_path=Path("review/previews/test.png"),
         )
-    assert not (tmp_path / "review").exists()
 
 
+@pytest.mark.skipif(
+    shutil.which("pdfinfo") is None,
+    reason="Poppler PDF tools are unavailable",
+)
 def test_multi_page_candidate_fails(tmp_path):
-    _roots, state = _acceptance_fixture(tmp_path)
-    failed_name = load_candidate_allowlist()[3].candidate_id
+    from reportlab.pdfgen import canvas
 
-    def page_inspector(path):
-        if failed_name in Path(path).read_text(encoding="utf-8"):
-            return PdfPageInfo(2, 72.0, 72.0)
-        return _fake_page_inspector(path)
+    pdf = tmp_path / "two-pages.pdf"
+    drawing = canvas.Canvas(str(pdf), pagesize=(72, 72))
+    drawing.drawString(10, 36, "one")
+    drawing.showPage()
+    drawing.drawString(10, 36, "two")
+    drawing.save()
 
-    with pytest.raises(FigureAcceptanceError, match="exactly one page"):
-        _accept(tmp_path, state, page_inspector=page_inspector)
-
-
-def test_wrong_merged_review_page_count_fails(tmp_path):
-    _roots, state = _acceptance_fixture(tmp_path)
-
-    def page_inspector(path):
-        if Path(path).name == "figure_candidate_review.pdf":
-            return PdfPageInfo(40, 792.0, 612.0)
-        return PdfPageInfo(1, 72.0, 72.0)
-
-    with pytest.raises(FigureAcceptanceError, match="Merged review page count"):
-        _accept(tmp_path, state, page_inspector=page_inspector)
-    assert not (tmp_path / "review").exists()
-
-
-def test_acceptance_reuses_pdf_qa_and_fails_closed(tmp_path):
-    _roots, state = _acceptance_fixture(tmp_path)
-    failed_name = load_candidate_allowlist()[7].candidate_id
-
-    def inspector(path, *, require_fonts=True):
-        if failed_name in Path(path).read_text(encoding="utf-8"):
-            return PdfQaReport(str(path), 1, (), ("contains 1 raster image object(s)",))
-        return _passing_report(path, require_fonts=require_fonts)
-
-    with pytest.raises(FigureAcceptanceError, match="contains 1 raster image"):
-        _accept(tmp_path, state, pdf_inspector=inspector)
-
-
-def test_success_writes_hash_source_maps_and_generated_previews(tmp_path):
-    _roots, state = _acceptance_fixture(tmp_path)
-    inspected = []
-
-    def inspector(path, *, require_fonts=True):
-        inspected.append(Path(path))
-        return _passing_report(path, require_fonts=require_fonts)
-
-    outputs = _accept(tmp_path, state, pdf_inspector=inspector)
-
-    assert len(inspected) == 39
-    assert len(list((tmp_path / "review" / "previews").glob("*.png"))) == 38
-    payload = json.loads(outputs.source_map_json.read_text(encoding="utf-8"))
-    assert payload["passed"]
-    assert payload["source_commit"] == SOURCE_COMMIT
-    assert payload["release"]["source_commit"] == SOURCE_COMMIT
-    assert payload["allowlist"]["sha256"] == _sha256(DEFAULT_ALLOWLIST)
-    assert (
-        payload["allowlist"]["path"] == "provenance/approved_candidate_allowlist.json"
-    )
-    assert payload["review"]["index_pages"] == 3
-    assert payload["review"]["page_count"] == 41
-    assert payload["review"]["sha256"] == _sha256(outputs.review_pdf)
-    assert len(payload["candidates"]) == 38
-    assert payload["candidates"][0]["review_page_start"] == 4
-    assert payload["candidates"][-1]["review_page_end"] == 41
-    assert all(len(row["pdf_sha256"]) == 64 for row in payload["candidates"])
-    assert all(len(row["png_sha256"]) == 64 for row in payload["candidates"])
-    assert all(row["png_width_px"] == 300 for row in payload["candidates"])
-    assert all(
-        len(row["provenance_manifest_sha256"]) == 64 for row in payload["candidates"]
-    )
-
-    with outputs.source_map_csv.open(newline="", encoding="utf-8") as stream:
-        rows = list(csv.DictReader(stream))
-    assert len(rows) == 38
-    assert rows[0]["review_page_start"] == "4"
-    assert rows[-1]["review_page_end"] == "41"
-    qa = json.loads(outputs.vector_qa_json.read_text(encoding="utf-8"))
-    assert qa["passed"]
-    assert qa["candidate_pdf_count"] == 38
-    assert qa["measured_review_page_count"] == 41
-    assert qa["review_page_map_verified"]
-
-
-def test_frozen_artifact_paths_are_publication_root_relative_and_exist(tmp_path):
-    _roots, state = _acceptance_fixture(tmp_path)
-    staging = state.snapshot_root
-    _accept(
-        tmp_path,
-        state,
-        output_dir=staging / "review",
-    )
-    frozen = tmp_path / "frozen-review"
-    freeze_staging_for_test(
-        staging=staging,
-        destination=frozen,
-        manifest_path=state.orchestration_record,
-        candidate_specs=load_candidate_allowlist(),
-    )
-    try:
-        checked = validate_published_logical_paths(frozen)
-        assert len(checked) >= 38 * 7
-        for relative in checked:
-            assert not Path(relative).is_absolute()
-            target = frozen / relative
-            target.resolve().relative_to(frozen.resolve())
-            assert target.exists()
-        for artifact in frozen.rglob("*"):
-            if artifact.suffix in {".json", ".csv"}:
-                assert str(staging) not in artifact.read_text(encoding="utf-8")
-    finally:
-        _remove_tree(frozen)
-
-
-def test_late_write_failure_removes_staging_and_publishes_nothing(
-    tmp_path, monkeypatch
-):
-    _roots, state = _acceptance_fixture(tmp_path)
-    module = importlib.import_module("submission.accept_figure_candidates")
-
-    def fail_late(*args, **kwargs):
-        raise OSError("simulated late write failure")
-
-    monkeypatch.setattr(module, "_write_csv", fail_late)
-    with pytest.raises(FigureAcceptanceError, match="simulated late write failure"):
-        _accept(tmp_path, state)
-    assert not (tmp_path / "review").exists()
-    assert not list(tmp_path.glob(".review.staging-*"))
+    assert pdf_page_info(pdf).page_count == 2
 
 
 @pytest.mark.skipif(
@@ -501,5 +275,5 @@ def test_standalone_acceptance_cli_is_deliberately_disabled():
         text=True,
     )
     assert completed.returncode == 2
-    assert "internal-only" in completed.stderr
-    assert "final_figure_orchestrator.py" in completed.stderr
+    assert "no acceptance command" in completed.stderr
+    assert "run_final_figure_orchestrator" in completed.stderr

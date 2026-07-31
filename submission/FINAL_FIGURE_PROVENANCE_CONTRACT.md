@@ -3,11 +3,13 @@
 The submission figure set is produced only through
 `submission/run_final_figure_orchestrator`, which starts the internal
 `submission/final_figure_orchestrator.py` entry point in an isolated process.
-The review builder in
-`submission/accept_figure_candidates.py` is internal-only: it accepts a
-process-local state created by the orchestrator and has no standalone
-acceptance CLI. A JSON manifest that merely claims `status=completed` has no
-authority.
+That entry point refuses ordinary Python import before loading any project
+module. Reservation, generator execution, operational acceptance, and atomic
+publication exist only behind this script boundary. The importable
+`submission/accept_figure_candidates.py` module contains non-publishing review
+utilities only: it exposes no acceptance authority, operational acceptance
+routine, or standalone acceptance CLI. A JSON manifest that merely claims
+`status=completed` has no authority.
 
 ## Two-Phase Approval
 
@@ -57,13 +59,18 @@ The supported CLI starts only through
 `submission/run_final_figure_orchestrator`. This fixed `/bin/sh` launcher
 requires an explicit absolute, non-symlink Python executable, clears Python
 startup and module-path variables, constructs a minimal environment, and
-executes a fresh interpreter with `-I`. The Python entry point refuses a
+executes a fresh interpreter with `-I` while passing an inherited descriptor
+pinned to the launcher file. The Python entry point refuses a missing or
+replaced launcher descriptor, a
 non-isolated process, user/site customization, or any preloaded `submission`
-or `experiments` module. Direct `python .../final_figure_orchestrator.py`
-execution is deliberately unsupported. The operational module contains one
-orchestration entry point and no injectable command, acceptance, publication,
-or race hooks. Tests exercise checksum, freeze, path, reservation, and atomic
-rename helpers without an alternate full-orchestration publication path.
+or `experiments` module, and it raises `ImportError` before exposing production
+authority when loaded as a module. Direct
+`python .../final_figure_orchestrator.py` execution is deliberately
+unsupported. The boundary contains one orchestration entry point and no
+injectable command, acceptance, publication, or race hooks. Importable helpers
+can validate and freeze bytes but cannot reserve a destination, execute a
+generator, accept candidates, or publish a tree. An isolated subprocess probe
+checks that all four capabilities remain unreachable through ordinary import.
 
 Every Git command receives a scrubbed Git environment. Replacement objects are
 disabled, caller `GIT_*` configuration is removed, and object facts are read
@@ -166,10 +173,13 @@ and do not establish submission provenance.
 
 ## Acceptance And Publication
 
-The orchestrator's in-memory state covers exactly 38 allowlisted one-page PDFs.
-Internal acceptance runs vector QA fail-closed, renders fresh 300-DPI previews,
-verifies their dimensions, builds the indexed vector review PDF, measures its
-41 pages, verifies the page map, and writes JSON/CSV source maps. Every
+The orchestrator's boundary-local immutable state covers exactly 38 allowlisted
+one-page PDFs; it uses no mutable authority flag. Operational acceptance calls
+the fixed PDF inspector, page inspector, preview renderer, review builder, and
+page-map verifier with the attested runtime. It runs vector QA fail-closed,
+renders fresh 300-DPI previews, verifies their dimensions, builds the indexed
+vector review PDF, measures its 41 pages, verifies the page map, and writes
+JSON/CSV source maps. Every
 wrapper-owned PDF, preview, QA, source-map, candidate, snapshot, and provenance
 artifact path is a publication-root-relative POSIX path. Before publication,
 each recorded path must resolve inside the frozen publication tree and exist;
@@ -183,6 +193,10 @@ makes files `0400` and directories `0500`, and rehashes the ledger, exact
 inventory, modes, and every artifact while still holding the lock immediately
 before an atomic no-replace directory rename. Any late mutation fails and all
 owned temporary trees are removed. A concurrent destination wins untouched.
+The transaction-level adversarial test drives this fixed path with 38 real
+embedded-font vector PDFs and no production hooks, covering acceptance,
+reservation, freeze/rehash, successful no-replace rename, competing-destination
+preservation, and owned cleanup.
 
 ## Invocation
 

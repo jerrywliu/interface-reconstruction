@@ -28,6 +28,7 @@ if [ -L "$python" ] || [ ! -f "$python" ] || [ ! -x "$python" ]; then
 fi
 
 script_dir=$(CDPATH= cd -P -- "$(/usr/bin/dirname -- "$0")" && /bin/pwd)
+exec 9< "$script_dir/run_final_figure_orchestrator"
 exec /usr/bin/env -i \
     HOME=/var/empty \
     PATH="$PATH" \

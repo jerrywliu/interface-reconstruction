@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Sequence
 
-from submission.final_figure_orchestrator import (
+from submission.final_figure_orchestration import (
     PUBLISHED_TREE_LEDGER,
     _copy_publication_tree,
     _published_tree_records,

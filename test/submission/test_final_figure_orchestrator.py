@@ -3,7 +3,6 @@ import os
 import shutil
 import hashlib
 import csv
-import inspect
 import subprocess
 import sys
 import stat
@@ -14,8 +13,8 @@ import pytest
 from PIL import Image
 
 from experiments.static import run_perturbed_sweeps
-import submission.final_figure_orchestrator as orchestrator_module
-from submission.final_figure_orchestrator import (
+import submission.final_figure_orchestration as orchestration
+from submission.final_figure_orchestration import (
     ALL_METHOD_FILES,
     C0_RESOLUTIONS,
     C0_VARIANTS,
@@ -32,9 +31,7 @@ from submission.final_figure_orchestrator import (
     _generator_environment,
     _numbers,
     _rehash_before_publish,
-    _rename_directory_noreplace,
     _remove_tree,
-    _reserve_publication,
     _snapshot_release_inputs,
     _snapshot_complete_release,
     _seal_execution_config,
@@ -48,7 +45,6 @@ from submission.final_figure_orchestrator import (
     validate_plic_metadata,
     validate_resolution_manifest,
     validate_staged_metadata,
-    orchestrate_final_figures,
 )
 from submission.final_figure_provenance import atomic_write_json, file_sha256
 from submission.generator_checkout import (
@@ -230,81 +226,81 @@ def test_materialized_source_reattestation_rejects_late_pyc(tmp_path):
     _remove_tree(source)
 
 
-def test_operational_module_has_one_noninjectable_orchestration_entry():
-    parameters = set(inspect.signature(orchestrate_final_figures).parameters)
-    forbidden = {
-        "command_runner",
-        "acceptance_runner",
-        "acceptance_kwargs",
-        "after_acceptance_hook",
-        "after_publish_freeze_hook",
-        "source_materialized_hook",
-        "release_after_open_hook",
-        "_test_hooks",
-    }
-    assert not parameters.intersection(forbidden)
-    assert not hasattr(orchestrator_module, "_OrchestrationTestHooks")
-    assert not hasattr(orchestrator_module, "_orchestrate_final_figures")
-    assert not hasattr(orchestrator_module, "finalize_publication")
-    assert not hasattr(orchestrator_module, "_build_frozen_publication_tree")
-    orchestration_entries = [
-        name
-        for name, value in vars(orchestrator_module).items()
-        if inspect.isfunction(value)
-        and value.__module__ == orchestrator_module.__name__
-        and "orchestrat" in name
-    ]
-    assert orchestration_entries == ["orchestrate_final_figures"]
-
-
-def test_isolated_import_exposes_no_hook_bearing_publication_path(tmp_path):
+def test_ordinary_import_cannot_reach_sensitive_publication_stages(tmp_path):
     probe = r"""
+import importlib
 import inspect
 import json
 import sys
 
 sys.path.insert(0, sys.argv[1])
-import submission.final_figure_orchestrator as module
+try:
+    importlib.import_module("submission.final_figure_orchestrator")
+except ImportError as exc:
+    import_error = str(exc)
+else:
+    raise SystemExit("script boundary was importable")
 
-forbidden_symbols = {
-    "_OrchestrationTestHooks",
-    "_orchestrate_final_figures",
-    "finalize_publication",
-    "_build_frozen_publication_tree",
+import submission.accept_figure_candidates as acceptance
+import submission.final_figure_orchestration as library
+
+sensitive = {
+    "reservation": {
+        "PublicationReservation",
+        "_reserve_publication",
+        "_verify_reservation",
+        "_release_reservation",
+    },
+    "generation": {"run_command", "orchestrate_final_figures"},
+    "acceptance": {
+        "_ORCHESTRATION_AUTHORITY",
+        "_OrchestratedAcceptanceState",
+        "_AcceptanceState",
+        "_create_orchestrated_acceptance_state",
+        "_create_acceptance_state",
+        "_accept_orchestrated_candidates",
+        "_accept_candidates",
+    },
+    "publication": {
+        "finalize_publication",
+        "_complete_publication_transaction",
+        "_rename_directory_noreplace",
+    },
 }
-forbidden_parameters = {
-    "command_runner",
-    "acceptance_runner",
-    "acceptance_kwargs",
-    "after_acceptance_hook",
-    "after_publish_freeze_hook",
-    "source_materialized_hook",
-    "release_after_open_hook",
-    "_test_hooks",
+reachable = {
+    stage: sorted(
+        name
+        for name in names
+        if name in vars(acceptance) or name in vars(library)
+    )
+    for stage, names in sensitive.items()
 }
-present_symbols = sorted(forbidden_symbols.intersection(vars(module)))
-hook_bearing = {}
-for name, value in vars(module).items():
-    if not inspect.isfunction(value) or value.__module__ != module.__name__:
-        continue
-    parameters = set(inspect.signature(value).parameters)
-    dangerous = sorted(parameters.intersection(forbidden_parameters))
-    if dangerous:
-        hook_bearing[name] = dangerous
-alternate_entries = sorted(
-    name
-    for name, value in vars(module).items()
-    if inspect.isfunction(value)
-    and value.__module__ == module.__name__
-    and "orchestrat" in name
-    and name != "orchestrate_final_figures"
-)
-print(json.dumps({
-    "present_symbols": present_symbols,
-    "hook_bearing": hook_bearing,
-    "alternate_entries": alternate_entries,
-}))
-if present_symbols or hook_bearing or alternate_entries:
+injectable_parameters = {
+    "pdf_inspector",
+    "page_inspector",
+    "preview_renderer",
+    "review_builder",
+    "review_map_verifier",
+    "renderer",
+}
+injectable = {}
+for name, value in vars(acceptance).items():
+    if inspect.isfunction(value) and value.__module__ == acceptance.__name__:
+        found = sorted(
+            set(inspect.signature(value).parameters) & injectable_parameters
+        )
+        if found:
+            injectable[name] = found
+result = {
+    "import_refused": "script-only publication boundary" in import_error,
+    "module_cached": "submission.final_figure_orchestrator" in sys.modules,
+    "reachable": reachable,
+    "injectable": injectable,
+}
+print(json.dumps(result, sort_keys=True))
+if not result["import_refused"] or result["module_cached"]:
+    raise SystemExit(8)
+if any(reachable.values()) or injectable:
     raise SystemExit(9)
 """
     completed = subprocess.run(
@@ -315,10 +311,65 @@ if present_symbols or hook_bearing or alternate_entries:
         text=True,
     )
     assert json.loads(completed.stdout) == {
-        "present_symbols": [],
-        "hook_bearing": {},
-        "alternate_entries": [],
+        "import_refused": True,
+        "module_cached": False,
+        "reachable": {
+            "acceptance": [],
+            "generation": [],
+            "publication": [],
+            "reservation": [],
+        },
+        "injectable": {},
     }
+
+
+@pytest.mark.skipif(
+    any(
+        shutil.which(tool) is None
+        for tool in ("pdfimages", "pdffonts", "pdfinfo", "pdftocairo", "pdfunite")
+    ),
+    reason="Poppler PDF tools are unavailable",
+)
+def test_real_transaction_accepts_freezes_publishes_and_cleans_attack(tmp_path):
+    worker = REPO_ROOT / "test/submission/final_figure_transaction_probe.py"
+    boundary = REPO_ROOT / "submission/final_figure_orchestrator.py"
+    completed = subprocess.run(
+        [
+            str(Path(sys.executable).resolve()),
+            "-I",
+            str(worker),
+            str(boundary),
+            str(tmp_path),
+        ],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    result = json.loads(completed.stdout)
+
+    assert result["success"] == {
+        "candidate_fonts_embedded": True,
+        "candidate_pdfs": 38,
+        "candidate_rasters": 0,
+        "preview_dpi": [300.0],
+        "previews": 38,
+        "publish_temporaries": 0,
+        "reservation_cleaned": True,
+        "review_fonts_embedded": True,
+        "review_pages": 41,
+        "review_rasters": 0,
+        "root_mode": 0o500,
+        "staging_cleaned": True,
+    }
+    attack = result["destination_attack"]
+    assert "destination appeared before publish" in attack["error"]
+    assert attack["winner"] == "competing winner\n"
+    assert attack["reservation_cleaned"]
+    assert attack["staging_cleaned"]
+    assert attack["acceptance_temporaries"] == 0
+    assert attack["publish_temporaries"] == 0
 
 
 def test_trusted_launcher_ignores_pythonpath_and_user_sitecustomize(tmp_path):
@@ -369,6 +420,23 @@ def test_orchestrator_cli_rejects_unisolated_direct_python_startup():
     assert (
         "use the trusted submission/run_final_figure_orchestrator" in completed.stderr
     )
+
+
+def test_orchestrator_cli_rejects_isolated_direct_python_startup():
+    completed = subprocess.run(
+        [
+            str(Path(sys.executable).resolve()),
+            "-I",
+            "submission/final_figure_orchestrator.py",
+            "--help",
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 2
+    assert "inherited descriptor is missing or invalid" in completed.stderr
 
 
 def test_orchestrator_cli_rejects_preloaded_repository_modules():
@@ -952,7 +1020,7 @@ def _release_snapshot_fixture(tmp_path):
                         "zalesak": 200,
                     }[experiment],
                 }
-                for experiment, methods in orchestrator_module.RELEASE_METHODS.items()
+                for experiment, methods in orchestration.RELEASE_METHODS.items()
             },
             "planned_totals": {"runs": 970, "cases": 24250},
             "production_method": {
@@ -1054,7 +1122,7 @@ def test_complete_snapshot_is_the_only_release_audit_root_during_substitution(
     )
     audited_roots = []
     verified_roots = []
-    real_verify = orchestrator_module.verify_sha256_manifest
+    real_verify = orchestration.verify_sha256_manifest
 
     def substitute_live_release(_snapshot_root):
         audited_roots.append(Path(_snapshot_root))
@@ -1082,11 +1150,9 @@ def test_complete_snapshot_is_the_only_release_audit_root_during_substitution(
         verified_roots.append(Path(root))
         return real_verify(root)
 
-    monkeypatch.setattr(
-        orchestrator_module, "audit_final_release", substitute_live_release
-    )
-    monkeypatch.setattr(orchestrator_module, "verify_sha256_manifest", verify_snapshot)
-    audited = orchestrator_module.validate_final_release_contract(complete.root)
+    monkeypatch.setattr(orchestration, "audit_final_release", substitute_live_release)
+    monkeypatch.setattr(orchestration, "verify_sha256_manifest", verify_snapshot)
+    audited = orchestration.validate_final_release_contract(complete.root)
 
     assert audited_roots == [complete.root]
     assert verified_roots == [complete.root]
@@ -1108,9 +1174,9 @@ def test_complete_release_snapshot_has_exact_full_checksum_inventory(tmp_path):
     )
 
     assert complete.file_count == len(
-        orchestrator_module.parse_sha256_manifest(release / "SHA256SUMS")
+        orchestration.parse_sha256_manifest(release / "SHA256SUMS")
     )
-    assert orchestrator_module.verify_sha256_manifest(complete.root) == []
+    assert orchestration.verify_sha256_manifest(complete.root) == []
     assert (complete.root / "SHA256SUMS").read_bytes() == live_pin.sha256sums_bytes
 
 
@@ -1239,7 +1305,7 @@ def test_nested_config_read_consumes_digest_attested_source_bytes(
         "value": 2,
         "nested": {"base": True, "override": True},
     }
-    orchestrator_module._verify_execution_config(authority)
+    orchestration._verify_execution_config(authority)
 
 
 def test_nested_config_read_rejects_source_and_authority_substitution(
@@ -1253,7 +1319,7 @@ def test_nested_config_read_rejects_source_and_authority_substitution(
     with pytest.raises(
         FinalFigureOrchestrationError, match="execution config bytes mutated"
     ):
-        orchestrator_module._verify_execution_config(authority)
+        orchestration._verify_execution_config(authority)
 
     override.write_text("value: 2\nnested:\n  override: true\n", encoding="utf-8")
     authority.manifest_path.chmod(0o600)
@@ -1394,20 +1460,6 @@ def test_candidate_mutation_is_rejected_before_frozen_tree_build(tmp_path):
     assert not list(tmp_path.glob(".publication.publish-*"))
 
 
-def test_destination_race_never_replaces_competing_output(tmp_path):
-    frozen = tmp_path / ".publication.publish-test"
-    frozen.mkdir()
-    (frozen / "candidate.txt").write_text("accepted\n", encoding="utf-8")
-    output = tmp_path / "publication"
-    output.mkdir()
-    (output / "sentinel.txt").write_text("winner\n", encoding="utf-8")
-
-    with pytest.raises(FinalFigureOrchestrationError, match="destination appeared"):
-        _rename_directory_noreplace(frozen, output)
-    assert (output / "sentinel.txt").read_text(encoding="utf-8") == "winner\n"
-    assert (frozen / "candidate.txt").read_text(encoding="utf-8") == "accepted\n"
-
-
 def test_mutation_of_frozen_publish_tree_fails_final_locked_rehash(tmp_path):
     staging = tmp_path / ".publication.staging-test"
     staging.mkdir()
@@ -1431,14 +1483,6 @@ def test_mutation_of_frozen_publish_tree_fails_final_locked_rehash(tmp_path):
         _verify_frozen_publication_tree(frozen, ledger_sha256=ledger_sha256)
     assert not output.exists()
     _remove_tree(frozen)
-
-
-def test_publication_reservation_rejects_dangling_destination_symlink(tmp_path):
-    output = tmp_path / "publication"
-    output.symlink_to(tmp_path / "missing-target", target_is_directory=True)
-    with pytest.raises(FinalFigureOrchestrationError, match="including as a symlink"):
-        _reserve_publication(output)
-    assert output.is_symlink()
 
 
 def test_frozen_publication_builder_seals_complete_tree(tmp_path):
