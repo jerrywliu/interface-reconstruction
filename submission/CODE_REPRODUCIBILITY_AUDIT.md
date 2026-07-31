@@ -168,8 +168,9 @@ exact commit and blob object hashes itself. It enumerates the commit with
 archive attributes such as `export-ignore` cannot remove tracked source from the
 oracle. A seek-aware wrapper limits gzip output to the canonical Git-tree payload
 plus fixed per-member and global metadata allowances before `tarfile` can process
-PAX or GNU metadata. A separate bounded single-member gzip pass forces CRC and
-trailer validation and rejects concatenated members or compressed trailing data.
+PAX or GNU metadata. Each individual extension payload is limited to 4,096 bytes.
+A separate bounded single-member gzip pass forces CRC and trailer validation and
+rejects concatenated members or compressed trailing data.
 Before extracting any archived source payload, the audit also checks the complete
 tar metadata pass against tree-derived bounds for file count, each file size, total
 uncompressed bytes, path, and the complete executable mode; set-id and sticky bits
@@ -188,6 +189,15 @@ release-relative inventory rows. Per-case raster previews are excluded. The
 temporary namespaced source run is removed only after the archived scientific file
 inventory matches and consolidation succeeds. Required diagnostic files must exist
 and parse before the controller counts a run as successful.
+
+The audit reconciles every consolidated CSV row, case-geometry JSON object, and
+nested run-manifest object against its archived raw counterpart using stable run,
+case, cell, merge, and event keys. JSON numbers are compared canonically and
+bundle-relative paths are normalized without permitting absolute or parent paths.
+Cell provenance is also joined to unresolved-fallback events by run, case, and
+merge component: fallback cells and events must both report `LVIRA`, every event
+must have exactly the corresponding fallback component, and nonfallback cells may
+not claim a fallback policy.
 
 Remaining archival risks:
 

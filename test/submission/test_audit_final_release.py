@@ -414,7 +414,10 @@ def _make_release(root: Path) -> Path:
             "cell_id": f"{case_index},0",
             "cell_x": case_index,
             "cell_y": 0,
+            "merge_id": case_index,
             "final_facet_class": "linear",
+            "construction_path": "direct_fit",
+            "fallback_policy": "",
             "facet_geometry_json": json.dumps(
                 {"class": "linear", "p_left": [0, 0], "p_right": [1, 1]}
             ),
@@ -442,7 +445,10 @@ def _make_release(root: Path) -> Path:
             "cell_id",
             "cell_x",
             "cell_y",
+            "merge_id",
             "final_facet_class",
+            "construction_path",
+            "fallback_policy",
             "facet_geometry_json",
         ],
         cell_rows,
@@ -519,7 +525,10 @@ def _make_release(root: Path) -> Path:
             "cell_id",
             "cell_x",
             "cell_y",
+            "merge_id",
             "final_facet_class",
+            "construction_path",
+            "fallback_policy",
             "facet_geometry_json",
         ],
         raw_cell_rows,
@@ -593,6 +602,17 @@ def _add_provenance_rows(root: Path) -> None:
     _write_csv(
         bundle / "unresolved_plic_fallbacks.csv", fallback_fields, [raw_fallback]
     )
+
+    for relative in (
+        "diagnostics/cell_metrics.csv",
+        f"raw_runs/{SAVE_NAME}/metrics/cell_metrics.csv",
+    ):
+        path = root / relative
+        fieldnames, rows = _read_csv(path)
+        rows[0]["merge_id"] = "7"
+        rows[0]["construction_path"] = "plic_fallback"
+        rows[0]["fallback_policy"] = "LVIRA"
+        _write_csv(path, fieldnames, rows)
 
     inventory_path = root / "diagnostics" / "run_inventory.csv"
     fieldnames, rows = _read_csv(inventory_path)
@@ -1430,6 +1450,34 @@ def test_nonzero_pax_and_gnu_extension_padding_is_rejected(
     assert "nonzero extension-member padding byte" in _messages(report)
 
 
+@pytest.mark.parametrize(
+    ("archive_format", "extension_type"),
+    [
+        (tarfile.PAX_FORMAT, tarfile.XHDTYPE),
+        (tarfile.GNU_FORMAT, tarfile.GNUTYPE_LONGNAME),
+    ],
+)
+def test_pax_and_gnu_extension_metadata_size_is_individually_bounded(
+    tmp_path,
+    archive_format,
+    extension_type,
+):
+    long_name = "source/" + "a" * (audit_module.MAX_TAR_METADATA_BYTES_PER_MEMBER + 128)
+    files = {long_name: b"content"}
+    raw_archive = _in_memory_tar(files, archive_format)
+    extension = tarfile.TarInfo.frombuf(
+        raw_archive[: tarfile.BLOCKSIZE], "utf-8", "surrogateescape"
+    )
+    assert extension.type == extension_type
+    assert extension.size > audit_module.MAX_TAR_METADATA_BYTES_PER_MEMBER
+    assert len(raw_archive) < _snapshot_budget(files)
+
+    report = _audit_snapshot_bytes(tmp_path, files, raw_archive)
+
+    assert not report.ok
+    assert "extension metadata size exceeds per-extension limit" in _messages(report)
+
+
 def test_source_snapshot_member_count_is_bounded_by_git_tree(tmp_path):
     root = _make_release(tmp_path / "release")
     files = _snapshot_files(root / "diagnostics" / "source_snapshot.tar.gz")
@@ -1556,6 +1604,70 @@ def test_value_level_reconciliation_rejects_raw_tampering(tmp_path):
     assert "case_metrics.csv/case_index=0 column facet_gap" in messages
 
 
+@pytest.mark.parametrize("source", ["consolidated", "raw"])
+def test_case_geometry_jsonl_reconciliation_rejects_value_tampering(tmp_path, source):
+    root = _make_release(tmp_path / "release")
+    path = (
+        root / "diagnostics" / "case_geometry.jsonl"
+        if source == "consolidated"
+        else root / "raw_runs" / SAVE_NAME / "metrics" / "case_geometry.jsonl"
+    )
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    rows[0]["angle"] = 99.0
+    _write_jsonl(path, rows)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    messages = _messages(report)
+    assert not report.ok
+    assert "raw/consolidated JSON value mismatch" in messages
+    assert "case_geometry.jsonl" in messages
+    assert "$.angle" in messages
+
+
+@pytest.mark.parametrize("source", ["consolidated", "raw"])
+def test_run_manifest_jsonl_reconciliation_rejects_nested_tampering(tmp_path, source):
+    root = _make_release(tmp_path / "release")
+    if source == "consolidated":
+        path = root / "diagnostics" / "run_manifests.jsonl"
+        row = json.loads(path.read_text())
+        row["manifest"]["timestamp_utc"] = "tampered"
+        _write_jsonl(path, [row])
+    else:
+        path = root / "raw_runs" / SAVE_NAME / "run_manifest.json"
+        row = json.loads(path.read_text())
+        row["timestamp_utc"] = "tampered"
+        _write_json(path, row)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    messages = _messages(report)
+    assert not report.ok
+    assert "raw/consolidated JSON value mismatch" in messages
+    assert "run_manifests.jsonl" in messages
+    assert "$.timestamp_utc" in messages
+
+
+def test_jsonl_reconciliation_normalizes_numbers_and_safe_relative_paths(tmp_path):
+    root = _make_release(tmp_path / "release")
+    geometry_path = root / "raw_runs" / SAVE_NAME / "metrics" / "case_geometry.jsonl"
+    geometry_rows = [
+        json.loads(line) for line in geometry_path.read_text().splitlines()
+    ]
+    geometry_rows[0]["angle"] = 0
+    geometry_rows[0]["truth_vtp"] = "./vtk/true/true_line0.vtp"
+    _write_jsonl(geometry_path, geometry_rows)
+
+    manifest_path = root / "raw_runs" / SAVE_NAME / "run_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["parameters"]["perturb_wiggle"] = 0
+    _write_json(manifest_path, manifest)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    assert report.ok, _messages(report)
+
+
 def test_matching_raw_and_consolidated_non_lvira_fallbacks_still_fail(tmp_path):
     root = _make_release(tmp_path / "release")
     _add_provenance_rows(root)
@@ -1571,6 +1683,84 @@ def test_matching_raw_and_consolidated_non_lvira_fallbacks_still_fail(tmp_path):
     assert not report.ok
     assert messages.count("policy differs from production") >= 2
     assert "'ELVIRA' != 'LVIRA'" in messages
+
+
+def test_plic_fallback_cell_requires_lvira_policy(tmp_path):
+    root = _make_release(tmp_path / "release")
+    _add_provenance_rows(root)
+    for relative in (
+        "diagnostics/cell_metrics.csv",
+        f"raw_runs/{SAVE_NAME}/metrics/cell_metrics.csv",
+    ):
+        _mutate_csv(root / relative, 0, "fallback_policy", "ELVIRA")
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    messages = _messages(report)
+    assert not report.ok
+    assert "plic_fallback policy differs from production" in messages
+    assert "'ELVIRA' != 'LVIRA'" in messages
+
+
+def test_plic_fallback_component_requires_matching_event(tmp_path):
+    root = _make_release(tmp_path / "release")
+    _add_provenance_rows(root)
+    for relative in (
+        "diagnostics/cell_metrics.csv",
+        f"raw_runs/{SAVE_NAME}/metrics/cell_metrics.csv",
+    ):
+        _mutate_csv(root / relative, 0, "merge_id", "8")
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    messages = _messages(report)
+    assert not report.ok
+    assert "plic_fallback component has no unresolved fallback event" in messages
+    assert "unresolved fallback event has no plic_fallback cell component" in messages
+
+
+def test_fallback_event_requires_plic_cell_component(tmp_path):
+    root = _make_release(tmp_path / "release")
+    _add_provenance_rows(root)
+    for relative in (
+        "diagnostics/cell_metrics.csv",
+        f"raw_runs/{SAVE_NAME}/metrics/cell_metrics.csv",
+    ):
+        _mutate_csv(root / relative, 0, "construction_path", "direct_fit")
+        _mutate_csv(root / relative, 0, "fallback_policy", "")
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    messages = _messages(report)
+    assert not report.ok
+    assert "unresolved fallback event has no plic_fallback cell component" in messages
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value", "expected_message"),
+    [
+        (
+            "fallback_policy",
+            "LVIRA",
+            "nonfallback construction_path 'direct_fit' cannot claim fallback_policy",
+        ),
+        ("construction_path", "", "has no construction_path provenance"),
+    ],
+)
+def test_nonfallback_cell_provenance_is_fail_closed(
+    tmp_path, field_name, value, expected_message
+):
+    root = _make_release(tmp_path / "release")
+    for relative in (
+        "diagnostics/cell_metrics.csv",
+        f"raw_runs/{SAVE_NAME}/metrics/cell_metrics.csv",
+    ):
+        _mutate_csv(root / relative, 0, field_name, value)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    assert not report.ok
+    assert expected_message in _messages(report)
 
 
 def test_reconciliation_reports_missing_and_unexpected_stable_keys(tmp_path):

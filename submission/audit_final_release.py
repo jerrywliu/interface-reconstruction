@@ -179,6 +179,7 @@ RECONCILIATION_TABLES = (
 )
 
 INTEGER_KEY_FIELDS = frozenset({"case_index", "event_order", "merge_id"})
+JSON_RELATIVE_PATH_FIELDS = frozenset({"truth_vtp", "truth_metadata"})
 CELL_INTEGER_FIELDS = frozenset(
     {
         "merge_id",
@@ -1290,6 +1291,12 @@ def _validate_tar_member_padding(
                 raise SourceSnapshotFormatError(
                     f"source tar extension has a negative size at offset {cursor}"
                 )
+            if extension.size > MAX_TAR_METADATA_BYTES_PER_MEMBER:
+                raise SourceSnapshotFormatError(
+                    "source tar extension metadata size exceeds per-extension "
+                    f"limit at offset {cursor}: {extension.size} > "
+                    f"{MAX_TAR_METADATA_BYTES_PER_MEMBER}"
+                )
             extension_data_offset = cursor + TAR_BLOCK_SIZE
             extension_padded_end = extension_data_offset + _tar_padded_size(
                 extension.size
@@ -1921,10 +1928,11 @@ def _check_consolidated_run_manifests(
     production_context: Mapping[str, str],
     inheritance: RescueProfileInheritance,
     report: AuditReport,
-) -> None:
+) -> dict[RunKey, dict]:
     path = root / "diagnostics" / "run_manifests.jsonl"
     seen: set[RunKey] = set()
     save_names: set[str] = set()
+    manifests: dict[RunKey, dict] = {}
     for line_number, row in _iter_jsonl(path, report):
         label = f"{path}:{line_number}"
         try:
@@ -1934,6 +1942,8 @@ def _check_consolidated_run_manifests(
             continue
         if key in seen:
             report.add_error(f"duplicate run key in run_manifests: {key.display()}")
+        else:
+            manifests[key] = row
         seen.add(key)
         if key not in expected_runs:
             report.add_error(f"unexpected run manifest key: {key.display()}")
@@ -2005,6 +2015,7 @@ def _check_consolidated_run_manifests(
 
     for key in sorted(expected_runs - seen):
         report.add_error(f"missing consolidated run manifest: {key.display()}")
+    return manifests
 
 
 def _case_key(row: Mapping[str, object], source: str) -> tuple[RunKey, int]:
@@ -2112,9 +2123,10 @@ def _check_case_geometry(
     production_context: Mapping[str, str],
     inheritance: RescueProfileInheritance,
     report: AuditReport,
-) -> None:
+) -> dict[tuple[RunKey, int], dict]:
     path = root / "diagnostics" / "case_geometry.jsonl"
     seen: set[tuple[RunKey, int]] = set()
+    geometry: dict[tuple[RunKey, int], dict] = {}
     row_count = 0
     for line_number, row in _iter_jsonl(path, report):
         row_count += 1
@@ -2129,6 +2141,8 @@ def _check_case_geometry(
             report.add_error(
                 f"duplicate case key in case_geometry: {key.display()}/case={case_index}"
             )
+        else:
+            geometry[case_key] = row
         seen.add(case_key)
         if key not in expected_runs or not 0 <= case_index < trials:
             report.add_error(
@@ -2156,6 +2170,7 @@ def _check_case_geometry(
             f"missing case_geometry key: {key.display()}/case={case_index}"
         )
     report.summaries["case_geometry_rows"] = row_count
+    return geometry
 
 
 def _canonical_cell_id(row: Mapping[str, object], label: str) -> str:
@@ -2175,6 +2190,70 @@ def _canonical_cell_id(row: Mapping[str, object], label: str) -> str:
     return canonical
 
 
+def _validate_cell_diagnostic_row(
+    row: Mapping[str, object],
+    label: str,
+    expected_fallback_policy: str,
+    report: AuditReport,
+) -> tuple[int, int, str] | None:
+    try:
+        _canonical_cell_id(row, label)
+    except ReleaseAuditInputError as exc:
+        report.add_error(str(exc))
+    for field_name in sorted(CELL_INTEGER_FIELDS):
+        value = row.get(field_name)
+        if value in (None, ""):
+            continue
+        try:
+            _parse_canonical_int(value, f"{label} {field_name}")
+        except ReleaseAuditInputError as exc:
+            report.add_error(str(exc))
+
+    facet_class = row.get("final_facet_class", "")
+    if facet_class in ("", "missing"):
+        report.add_error(f"{label} has no final reconstructed facet")
+    if not row.get("facet_geometry_json"):
+        report.add_error(f"{label} has no facet geometry metadata")
+
+    construction_path = row.get("construction_path")
+    fallback_policy = row.get("fallback_policy")
+    if not isinstance(construction_path, str) or not construction_path:
+        report.add_error(f"{label} has no construction_path provenance")
+        construction_path = ""
+    if fallback_policy is None:
+        report.add_error(f"{label} has no fallback_policy provenance field")
+        fallback_policy = ""
+    elif not isinstance(fallback_policy, str):
+        report.add_error(f"{label} fallback_policy is not text")
+        fallback_policy = str(fallback_policy)
+
+    if construction_path == "plic_fallback":
+        if fallback_policy != expected_fallback_policy:
+            report.add_error(
+                f"{label} plic_fallback policy differs from production: "
+                f"{fallback_policy!r} != {expected_fallback_policy!r}"
+            )
+    elif fallback_policy:
+        report.add_error(
+            f"{label} nonfallback construction_path {construction_path!r} "
+            f"cannot claim fallback_policy {fallback_policy!r}"
+        )
+
+    try:
+        case_index = _parse_canonical_int(row.get("case_index"), f"{label} case_index")
+        merge_id = _parse_canonical_int(row.get("merge_id"), f"{label} merge_id")
+    except ReleaseAuditInputError as exc:
+        report.add_error(str(exc))
+        return None
+    if case_index < 0 or merge_id < 0:
+        report.add_error(
+            f"{label} case_index and merge_id must be nonnegative: "
+            f"{case_index},{merge_id}"
+        )
+        return None
+    return case_index, merge_id, construction_path
+
+
 def _count_csv_rows(
     path: Path,
     required_headers: Iterable[str],
@@ -2183,6 +2262,7 @@ def _count_csv_rows(
     validate_cell_rows: bool = False,
     valid_cases: set[int] | None = None,
     expected_values: Mapping[str, str] | None = None,
+    expected_fallback_policy: str = "",
 ) -> int:
     if not path.is_file():
         report.add_error(f"missing required CSV file: {path}")
@@ -2217,29 +2297,12 @@ def _count_csv_rows(
                                 f"{path}:{row_number} references unexpected case {case_index}"
                             )
                 if validate_cell_rows:
-                    try:
-                        _canonical_cell_id(row, f"{path}:{row_number}")
-                    except ReleaseAuditInputError as exc:
-                        report.add_error(str(exc))
-                    for field_name in sorted(CELL_INTEGER_FIELDS):
-                        value = row.get(field_name)
-                        if value in (None, ""):
-                            continue
-                        try:
-                            _parse_canonical_int(
-                                value, f"{path}:{row_number} {field_name}"
-                            )
-                        except ReleaseAuditInputError as exc:
-                            report.add_error(str(exc))
-                    facet_class = row.get("final_facet_class", "")
-                    if facet_class in ("", "missing"):
-                        report.add_error(
-                            f"{path}:{row_number} has no final reconstructed facet"
-                        )
-                    if not row.get("facet_geometry_json"):
-                        report.add_error(
-                            f"{path}:{row_number} has no facet geometry metadata"
-                        )
+                    _validate_cell_diagnostic_row(
+                        row,
+                        f"{path}:{row_number}",
+                        expected_fallback_policy,
+                        report,
+                    )
     except (OSError, UnicodeError, csv.Error) as exc:
         report.add_error(f"could not read CSV {path}: {exc}")
     return count
@@ -2260,7 +2323,10 @@ def _check_consolidated_table_counts(
                 "cell_id",
                 "cell_x",
                 "cell_y",
+                "merge_id",
                 "final_facet_class",
+                "construction_path",
+                "fallback_policy",
                 "facet_geometry_json",
             ),
             True,
@@ -2295,6 +2361,9 @@ def _check_consolidated_table_counts(
                 if path.name == "unresolved_plic_fallbacks.csv"
                 else None
             ),
+            expected_fallback_policy=(
+                production_context.get("plic_fallback", "") if validate_cells else ""
+            ),
         )
         if actual != expected:
             report.add_error(
@@ -2308,6 +2377,106 @@ def _diagnostic_value(value: object, limit: int = 160) -> str:
     if len(rendered) <= limit:
         return rendered
     return rendered[: limit - 3] + "..."
+
+
+def _normalized_relative_json_path(value: object, label: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ReleaseAuditInputError(f"{label} is not a nonempty relative path")
+    pure = PurePosixPath(value)
+    if pure.is_absolute() or ".." in pure.parts:
+        raise ReleaseAuditInputError(f"{label} is not a safe relative path: {value!r}")
+    normalized = str(pure)
+    if normalized in ("", "."):
+        raise ReleaseAuditInputError(f"{label} is not a file path: {value!r}")
+    return normalized
+
+
+def _normalize_json_reconciliation_value(
+    value: object,
+    label: str,
+    path: tuple[str, ...] = (),
+) -> object:
+    if isinstance(value, Mapping):
+        normalized: dict[str, object] = {}
+        for key, nested in value.items():
+            if not isinstance(key, str):
+                raise ReleaseAuditInputError(
+                    f"{label} contains a non-string JSON key at {'.'.join(path) or '$'}"
+                )
+            nested_path = (*path, key)
+            nested_label = f"{label} at {'.'.join(nested_path)}"
+            if key in JSON_RELATIVE_PATH_FIELDS or (path and path[-1] == "artifacts"):
+                normalized[key] = _normalized_relative_json_path(nested, nested_label)
+            else:
+                normalized[key] = _normalize_json_reconciliation_value(
+                    nested, label, nested_path
+                )
+        return normalized
+    if isinstance(value, list):
+        return [
+            _normalize_json_reconciliation_value(nested, label, (*path, str(index)))
+            for index, nested in enumerate(value)
+        ]
+    if value is None:
+        return ("null",)
+    if isinstance(value, bool):
+        return ("boolean", value)
+    if isinstance(value, (int, float, Decimal)):
+        return ("number", _canonical_number(value))
+    if isinstance(value, str):
+        return ("string", value)
+    raise ReleaseAuditInputError(
+        f"{label} contains an unsupported JSON value at {'.'.join(path) or '$'}"
+    )
+
+
+def _first_json_difference(actual: object, expected: object, path: str = "$") -> str:
+    if isinstance(actual, Mapping) and isinstance(expected, Mapping):
+        for key in sorted(set(actual) | set(expected)):
+            child_path = f"{path}.{key}"
+            if key not in actual or key not in expected:
+                return child_path
+            difference = _first_json_difference(actual[key], expected[key], child_path)
+            if difference:
+                return difference
+        return ""
+    if isinstance(actual, list) and isinstance(expected, list):
+        if len(actual) != len(expected):
+            return path
+        for index, (actual_item, expected_item) in enumerate(zip(actual, expected)):
+            difference = _first_json_difference(
+                actual_item, expected_item, f"{path}[{index}]"
+            )
+            if difference:
+                return difference
+        return ""
+    if actual == expected:
+        return ""
+    return path
+
+
+def _reconcile_json_value(
+    label: str,
+    consolidated: object,
+    raw: object,
+    report: AuditReport,
+) -> None:
+    try:
+        normalized_consolidated = _normalize_json_reconciliation_value(
+            consolidated, f"consolidated {label}"
+        )
+        normalized_raw = _normalize_json_reconciliation_value(raw, f"raw {label}")
+    except ReleaseAuditInputError as exc:
+        report.add_error(str(exc))
+        return
+    difference = _first_json_difference(normalized_consolidated, normalized_raw)
+    if not difference:
+        return
+    report.add_error(
+        f"raw/consolidated JSON value mismatch for {label} at {difference}: "
+        f"consolidated={_diagnostic_value(consolidated)}, "
+        f"raw={_diagnostic_value(raw)}"
+    )
 
 
 def _csv_values_equal(actual: object, expected: object) -> bool:
@@ -2762,6 +2931,59 @@ def _reconcile_consolidated_tables(
         )
 
 
+def _reconcile_jsonl_records(
+    consolidated_manifests: Mapping[RunKey, Mapping[str, object]],
+    raw_manifests: Mapping[RunKey, Mapping[str, object]],
+    consolidated_geometry: Mapping[tuple[RunKey, int], Mapping[str, object]],
+    raw_geometry: Mapping[tuple[RunKey, int], Mapping[str, object]],
+    report: AuditReport,
+) -> None:
+    for key in sorted(raw_manifests.keys() - consolidated_manifests.keys()):
+        report.add_error(
+            f"missing consolidated run_manifests.jsonl row for {key.display()}"
+        )
+    for key in sorted(consolidated_manifests.keys() - raw_manifests.keys()):
+        report.add_error(
+            f"unexpected consolidated run_manifests.jsonl row for {key.display()}"
+        )
+    for key in sorted(consolidated_manifests.keys() & raw_manifests.keys()):
+        _reconcile_json_value(
+            f"run_manifests.jsonl/{key.display()}",
+            consolidated_manifests[key].get("manifest"),
+            raw_manifests[key],
+            report,
+        )
+
+    for key, case_index in sorted(raw_geometry.keys() - consolidated_geometry.keys()):
+        report.add_error(
+            "missing consolidated case_geometry.jsonl row for "
+            f"{key.display()}/case={case_index}"
+        )
+    for key, case_index in sorted(consolidated_geometry.keys() - raw_geometry.keys()):
+        report.add_error(
+            "unexpected consolidated case_geometry.jsonl row for "
+            f"{key.display()}/case={case_index}"
+        )
+    shared_geometry = consolidated_geometry.keys() & raw_geometry.keys()
+    for key, case_index in sorted(shared_geometry):
+        consolidated_payload = {
+            field_name: value
+            for field_name, value in consolidated_geometry[(key, case_index)].items()
+            if field_name not in RUN_CONTEXT_FIELDS
+        }
+        _reconcile_json_value(
+            f"case_geometry.jsonl/{key.display()}/case={case_index}",
+            consolidated_payload,
+            raw_geometry[(key, case_index)],
+            report,
+        )
+
+    report.summaries["reconciled_run_manifests_rows"] = len(
+        consolidated_manifests.keys() & raw_manifests.keys()
+    )
+    report.summaries["reconciled_case_geometry_rows"] = len(shared_geometry)
+
+
 def _check_raw_case_rows(
     bundle: Path,
     key: RunKey,
@@ -2909,6 +3131,102 @@ def _finalize_rescue_profile_inheritance(
     )
 
 
+def _check_raw_cell_fallback_provenance(
+    bundle: Path,
+    key: RunKey,
+    trials: int,
+    expected_policy: str,
+    report: AuditReport,
+) -> tuple[int, int]:
+    metrics = bundle / "metrics"
+    cell_path = metrics / "cell_metrics.csv"
+    _, cell_rows = _read_csv_rows(
+        cell_path,
+        {
+            "case_index",
+            "cell_id",
+            "cell_x",
+            "cell_y",
+            "merge_id",
+            "final_facet_class",
+            "construction_path",
+            "fallback_policy",
+            "facet_geometry_json",
+        },
+        report,
+    )
+    component_paths: dict[tuple[int, int], set[str]] = defaultdict(set)
+    fallback_components: set[tuple[int, int]] = set()
+    for row_number, row in enumerate(cell_rows, start=2):
+        label = f"{cell_path}:{row_number}"
+        component = _validate_cell_diagnostic_row(row, label, expected_policy, report)
+        if component is None:
+            continue
+        case_index, merge_id, construction_path = component
+        if not 0 <= case_index < trials:
+            report.add_error(f"{label} references unexpected case {case_index}")
+        component_key = (case_index, merge_id)
+        component_paths[component_key].add(construction_path)
+        if construction_path == "plic_fallback":
+            fallback_components.add(component_key)
+
+    fallback_path = metrics / "unresolved_plic_fallbacks.csv"
+    _, fallback_rows = _read_csv_rows(
+        fallback_path,
+        {"case_index", "merge_id", "policy"},
+        report,
+    )
+    fallback_events: set[tuple[int, int]] = set()
+    for row_number, row in enumerate(fallback_rows, start=2):
+        label = f"{fallback_path}:{row_number}"
+        try:
+            case_index = _parse_canonical_int(
+                row.get("case_index"), f"{label} case_index"
+            )
+            merge_id = _parse_canonical_int(row.get("merge_id"), f"{label} merge_id")
+        except ReleaseAuditInputError as exc:
+            report.add_error(str(exc))
+            continue
+        if not 0 <= case_index < trials or merge_id < 0:
+            report.add_error(
+                f"{label} has unexpected case_index/merge_id: "
+                f"{case_index},{merge_id}"
+            )
+        event_key = (case_index, merge_id)
+        if event_key in fallback_events:
+            report.add_error(
+                "duplicate unresolved fallback event for "
+                f"{key.display()}/case={case_index}/merge_id={merge_id}"
+            )
+        fallback_events.add(event_key)
+        policy = row.get("policy")
+        if policy != expected_policy:
+            report.add_error(
+                f"{label} fallback event policy differs from production: "
+                f"{policy!r} != {expected_policy!r}"
+            )
+
+    for case_index, merge_id in sorted(fallback_components):
+        paths = component_paths[(case_index, merge_id)]
+        if paths != {"plic_fallback"}:
+            report.add_error(
+                "fallback component has inconsistent construction paths for "
+                f"{key.display()}/case={case_index}/merge_id={merge_id}: "
+                f"{sorted(paths)!r}"
+            )
+    for case_index, merge_id in sorted(fallback_components - fallback_events):
+        report.add_error(
+            "plic_fallback component has no unresolved fallback event for "
+            f"{key.display()}/case={case_index}/merge_id={merge_id}"
+        )
+    for case_index, merge_id in sorted(fallback_events - fallback_components):
+        report.add_error(
+            "unresolved fallback event has no plic_fallback cell component for "
+            f"{key.display()}/case={case_index}/merge_id={merge_id}"
+        )
+    return len(cell_rows), len(fallback_rows)
+
+
 def _check_raw_bundle(
     root: Path,
     bundle: Path,
@@ -2920,7 +3238,7 @@ def _check_raw_bundle(
     production_context: Mapping[str, str],
     inheritance: RescueProfileInheritance,
     report: AuditReport,
-) -> None:
+) -> tuple[dict | None, list[dict]]:
     for path in bundle.rglob("*"):
         if path.is_symlink():
             report.add_error(f"raw bundle contains a symbolic link: {path}")
@@ -2987,36 +3305,24 @@ def _check_raw_bundle(
     raw_case_count, raw_geometry_count, geometry_rows = _check_raw_case_rows(
         bundle, key, trials, report
     )
+    raw_cell_count, raw_fallback_count = _check_raw_cell_fallback_provenance(
+        bundle,
+        key,
+        trials,
+        production_context.get("plic_fallback", ""),
+        report,
+    )
     actual_counts = {
         "case_metrics_rows": raw_case_count,
         "case_geometry_rows": raw_geometry_count,
-        "cell_metrics_rows": _count_csv_rows(
-            bundle / "metrics" / "cell_metrics.csv",
-            (
-                "case_index",
-                "cell_id",
-                "cell_x",
-                "cell_y",
-                "final_facet_class",
-                "facet_geometry_json",
-            ),
-            report,
-            validate_cell_rows=True,
-            valid_cases=set(range(trials)),
-        ),
+        "cell_metrics_rows": raw_cell_count,
         "merge_events_rows": _count_csv_rows(
             bundle / "metrics" / "merge_events.csv",
             ("case_index", "event_order", "event_kind"),
             report,
             valid_cases=set(range(trials)),
         ),
-        "unresolved_plic_fallbacks_rows": _count_csv_rows(
-            bundle / "metrics" / "unresolved_plic_fallbacks.csv",
-            ("case_index", "merge_id", "policy"),
-            report,
-            valid_cases=set(range(trials)),
-            expected_values={"policy": production_context.get("plic_fallback", "")},
-        ),
+        "unresolved_plic_fallbacks_rows": raw_fallback_count,
     }
     for field_name, actual in actual_counts.items():
         try:
@@ -3069,6 +3375,7 @@ def _check_raw_bundle(
             "reconstructed mixed cells",
             report,
         )
+    return manifest, geometry_rows
 
 
 def _check_raw_bundles(
@@ -3081,11 +3388,13 @@ def _check_raw_bundles(
     production_context: Mapping[str, str],
     inheritance: RescueProfileInheritance,
     report: AuditReport,
-) -> None:
+) -> tuple[dict[RunKey, dict], dict[tuple[RunKey, int], dict]]:
+    raw_manifests: dict[RunKey, dict] = {}
+    raw_geometry: dict[tuple[RunKey, int], dict] = {}
     raw_root = root / "raw_runs"
     if not raw_root.is_dir():
         report.add_error(f"missing raw bundle directory: {raw_root}")
-        return
+        return raw_manifests, raw_geometry
     children = list(raw_root.iterdir())
     staging = [path for path in children if path.name.startswith(".")]
     for path in staging:
@@ -3121,7 +3430,7 @@ def _check_raw_bundles(
         bundle = raw_dirs.get(str(inventory_row.get("save_name", "")))
         if bundle is None:
             continue
-        _check_raw_bundle(
+        manifest, geometry_rows = _check_raw_bundle(
             root,
             bundle,
             key,
@@ -3133,7 +3442,19 @@ def _check_raw_bundles(
             inheritance,
             report,
         )
+        if manifest is not None:
+            raw_manifests[key] = manifest
+        for row_number, geometry in enumerate(geometry_rows, start=1):
+            try:
+                case_index = _parse_int(
+                    geometry.get("case_index"),
+                    f"raw geometry row {row_number} for {key.display()} case_index",
+                )
+            except ReleaseAuditInputError:
+                continue
+            raw_geometry.setdefault((key, case_index), geometry)
     report.summaries["raw_bundles"] = len(raw_dirs)
+    return raw_manifests, raw_geometry
 
 
 def _percentile(values: Sequence[float], quantile: float) -> float:
@@ -3306,7 +3627,7 @@ def audit_final_release(
         inheritance,
         report,
     )
-    _check_consolidated_run_manifests(
+    consolidated_manifests = _check_consolidated_run_manifests(
         root,
         expected_runs,
         inventory,
@@ -3326,7 +3647,7 @@ def audit_final_release(
         inheritance,
         report,
     )
-    _check_case_geometry(
+    consolidated_geometry = _check_case_geometry(
         root,
         expected_runs,
         trials,
@@ -3337,7 +3658,7 @@ def audit_final_release(
         report,
     )
     _check_consolidated_table_counts(root, inventory, production_context, report)
-    _check_raw_bundles(
+    raw_manifests, raw_geometry = _check_raw_bundles(
         root,
         expected_runs,
         inventory,
@@ -3346,6 +3667,13 @@ def audit_final_release(
         target_branch,
         production_context,
         inheritance,
+        report,
+    )
+    _reconcile_jsonl_records(
+        consolidated_manifests,
+        raw_manifests,
+        consolidated_geometry,
+        raw_geometry,
         report,
     )
     _reconcile_consolidated_tables(
