@@ -35,7 +35,7 @@ from submission.audit_final_release import (
 from submission.pdf_vector_qa import PdfQaReport, inspect_pdf
 
 
-PACKAGE_SCHEMA_VERSION = 4
+PACKAGE_SCHEMA_VERSION = 5
 RELEASE_SHA256_MANIFEST = "SHA256SUMS"
 PACKAGE_ROOT_MARKERS = ("INVENTORY.json", "SHA256SUMS")
 DEFAULT_PAPER_SOURCE_SUBDIR = "interface-reconstruction-paper"
@@ -43,6 +43,20 @@ DEFAULT_PAPER_ENTRYPOINT = "interface-reconstruction-paper/interface-reconstruct
 DEFAULT_MANUSCRIPT_COMPILE_TIMEOUT_SECONDS = 300
 GENERATOR_ARCHIVE_ROOT = "interface-reconstruction-generator"
 GENERATOR_EXPERIMENT_MAP = "docs/PAPER_EXPERIMENT_MAP.md"
+FINAL_FIGURE_ORCHESTRATION = "provenance/final_figure_orchestration.json"
+FINAL_FIGURE_SOURCE_MAP = "review/figure_candidate_source_map.json"
+FINAL_FIGURE_SOURCE_MAP_CSV = "review/figure_candidate_source_map.csv"
+FINAL_FIGURE_ALLOWLIST = "provenance/approved_candidate_allowlist.json"
+FINAL_FIGURE_TREE_LEDGER = "provenance/published_tree_sha256.json"
+FINAL_FIGURE_SCHEMA_VERSION = 4
+FINAL_FIGURE_SOURCE_MAP_SCHEMA_VERSION = 2
+EXPECTED_FINAL_FIGURE_COUNTS = {
+    "candidate_pdfs": 38,
+    "unpaired_candidates": 14,
+    "paired_slots": 12,
+    "paired_candidates": 24,
+}
+EXPECTED_APPROVED_FIGURE_COUNT = 26
 REQUIRED_GENERATOR_PATHS = frozenset(
     {
         GENERATOR_EXPERIMENT_MAP,
@@ -128,6 +142,12 @@ REVIEW_BUNDLE_SUFFIXES = {".csv", ".json", ".md", ".pdf", ".txt"}
 DEPOSITION_PATTERN = re.compile(r"^(?:https?://\S+|doi:\s*10\.\S+)$", re.IGNORECASE)
 FULL_GIT_COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 SHA256_IDENTIFIER_PATTERN = re.compile(r"^sha256:([0-9a-f]{64})$")
+SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+HOME_PATH_PATTERNS = (
+    re.compile(rb"/Users/[A-Za-z0-9._-]+"),
+    re.compile(rb"/home/[A-Za-z0-9._-]+"),
+    re.compile(rb"[A-Za-z]:\\Users\\[^\\\s]+", re.IGNORECASE),
+)
 
 
 class SubmissionPackagingError(RuntimeError):
@@ -136,6 +156,10 @@ class SubmissionPackagingError(RuntimeError):
 
 @dataclass(frozen=True)
 class ApprovedFigure:
+    candidate_id: str
+    slot_id: str
+    variant: str
+    candidate_path: str
     paper_path: str
     source_path: str
     source: "ContentSource"
@@ -160,6 +184,10 @@ class ContentSource:
     git_object_id: str | None = None
     git_tree_entries: tuple[GitTreeEntry, ...] | None = None
     git_archive_root: str | None = None
+    authority_sha256: str | None = None
+    privacy_format: str | None = None
+    private_hostnames: tuple[str, ...] = ()
+    redaction_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -210,8 +238,36 @@ class RawDataDeposit:
 
 
 @dataclass(frozen=True)
+class FinalFigurePublication:
+    root: Path
+    orchestration_sha256: str
+    source_map_sha256: str
+    source_map_csv_sha256: str
+    allowlist_sha256: str
+    published_tree_ledger_sha256: str
+    generator_commit: str
+    generator_tree: str
+    scientific_commit: str
+    release_sha256sums_sha256: str
+    candidate_count: int
+    slot_count: int
+
+
+@dataclass(frozen=True)
+class PrivacyRedaction:
+    package_path: str
+    authority: str
+    authority_sha256: str
+    public_sha256: str
+    format: str
+    replacement_count: int
+
+
+@dataclass(frozen=True)
 class PackagePlan:
     release_root: Path
+    scientific_commit: str
+    scientific_tree_object_id: str
     generator_worktree_root: Path
     generator_commit: str
     generator_tree_object_id: str
@@ -229,11 +285,14 @@ class PackagePlan:
     output_parent_device: int
     output_parent_inode: int
     files: tuple[PlannedFile, ...]
+    final_figure_publication: FinalFigurePublication
     approved_figures: tuple[ApprovedFigure, ...]
     figure_qa: tuple[PdfQaReport, ...]
     excluded_paper_files: tuple[str, ...]
     audit_summary: Mapping[str, int | str]
     raw_data_deposit: RawDataDeposit
+    privacy_redactions: tuple[PrivacyRedaction, ...]
+    private_hostnames: tuple[str, ...]
     review_bundle: Path | None
 
 
@@ -533,6 +592,163 @@ def _filesystem_source(
     )
 
 
+def _redact_private_bytes(
+    data: bytes, private_hostnames: Sequence[str]
+) -> tuple[bytes, int]:
+    redacted = data
+    replacements = 0
+    for pattern in HOME_PATH_PATTERNS:
+        redacted, count = pattern.subn(b"<HOME>", redacted)
+        replacements += count
+    for hostname in sorted(set(private_hostnames), key=len, reverse=True):
+        if not hostname:
+            continue
+        encoded = hostname.encode("utf-8")
+        count = redacted.count(encoded)
+        if count:
+            redacted = redacted.replace(encoded, b"<HOSTNAME>")
+            replacements += count
+    return redacted, replacements
+
+
+def _sanitize_tar_gz_bytes(
+    data: bytes, private_hostnames: Sequence[str]
+) -> tuple[bytes, int]:
+    members: list[tuple[tarfile.TarInfo, bytes | None]] = []
+    seen_members: set[str] = set()
+    try:
+        with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
+            for member in archive.getmembers():
+                pure = PurePosixPath(member.name)
+                if (
+                    not member.name
+                    or pure.is_absolute()
+                    or "." in pure.parts
+                    or ".." in pure.parts
+                    or member.issym()
+                    or member.islnk()
+                    or not (member.isdir() or member.isfile())
+                    or member.name in seen_members
+                ):
+                    raise SubmissionPackagingError(
+                        "source snapshot contains an unsafe archive member: "
+                        f"{member.name}"
+                    )
+                seen_members.add(member.name)
+                if member.isfile():
+                    stream = archive.extractfile(member)
+                    if stream is None:
+                        raise SubmissionPackagingError(
+                            f"could not read source snapshot member: {member.name}"
+                        )
+                    members.append((member, stream.read()))
+                else:
+                    members.append((member, None))
+    except (OSError, tarfile.TarError) as exc:
+        raise SubmissionPackagingError(
+            f"could not inspect source snapshot archive: {exc}"
+        ) from exc
+
+    output = io.BytesIO()
+    replacement_count = 0
+    with gzip.GzipFile(filename="", mode="wb", fileobj=output, mtime=0) as stream:
+        with tarfile.open(
+            fileobj=stream, mode="w", format=tarfile.PAX_FORMAT
+        ) as archive:
+            for original, member_data in sorted(members, key=lambda item: item[0].name):
+                info = tarfile.TarInfo(original.name)
+                info.type = tarfile.DIRTYPE if original.isdir() else tarfile.REGTYPE
+                info.mode = original.mode
+                info.uid = 0
+                info.gid = 0
+                info.uname = ""
+                info.gname = ""
+                info.mtime = 0
+                if member_data is None:
+                    archive.addfile(info)
+                    continue
+                public_data, count = _redact_private_bytes(
+                    member_data, private_hostnames
+                )
+                replacement_count += count
+                info.size = len(public_data)
+                archive.addfile(info, io.BytesIO(public_data))
+    return output.getvalue(), replacement_count
+
+
+def _privacy_transform(
+    data: bytes,
+    *,
+    format_name: str,
+    private_hostnames: Sequence[str],
+) -> tuple[bytes, int]:
+    if format_name == "text":
+        return _redact_private_bytes(data, private_hostnames)
+    if format_name == "tar.gz":
+        return _sanitize_tar_gz_bytes(data, private_hostnames)
+    raise SubmissionPackagingError(f"unsupported privacy format: {format_name}")
+
+
+def _privacy_filesystem_source(
+    path: Path,
+    *,
+    label: str,
+    authority_sha256: str,
+    format_name: str,
+    private_hostnames: Sequence[str],
+) -> ContentSource:
+    path = _require_regular_file(path, label)
+    if _sha256(path) != authority_sha256:
+        raise SubmissionPackagingError(
+            f"privacy source checksum mismatch before planning: {label}"
+        )
+    public_bytes, replacement_count = _privacy_transform(
+        path.read_bytes(),
+        format_name=format_name,
+        private_hostnames=private_hostnames,
+    )
+    return ContentSource(
+        kind="privacy_filesystem",
+        label=label,
+        expected_sha256=_sha256_bytes(public_bytes),
+        path=path,
+        authority_sha256=authority_sha256,
+        privacy_format=format_name,
+        private_hostnames=tuple(private_hostnames),
+        redaction_count=replacement_count,
+    )
+
+
+def _discover_private_hostnames(release_root: Path) -> tuple[str, ...]:
+    environment_path = _require_regular_file(
+        release_root / "environment.json", "release environment manifest"
+    )
+    try:
+        payload = json.loads(environment_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise SubmissionPackagingError(
+            f"could not inspect release environment for privacy: {exc}"
+        ) from exc
+    hostnames: set[str] = set()
+
+    def visit(value: object, key: str = "") -> None:
+        if isinstance(value, dict):
+            for child_key, child in value.items():
+                visit(child, str(child_key).lower())
+        elif isinstance(value, list):
+            for child in value:
+                visit(child, key)
+        elif (
+            isinstance(value, str)
+            and value.strip()
+            and key in {"host", "hostname", "node", "nodename"}
+        ):
+            hostnames.add(value.strip())
+
+    visit(payload)
+    return tuple(sorted(hostnames))
+
+
 def _load_release_sha256_manifest(path: Path) -> dict[str, str]:
     path = _require_regular_file(path, "complete-release checksum manifest")
     try:
@@ -577,8 +793,13 @@ def _validate_deposition_location(value: str) -> str:
         raise SubmissionPackagingError(
             "raw-data deposition must be an http(s) URL or a 'doi:10....' identifier"
         )
-    if any(
-        token in value.lower() for token in ("pending", "placeholder", "example.com")
+    lowered = value.lower()
+    placeholder_doi = re.search(
+        r"10\.(?:x{2,}|0{4,}|[0-9x.-]*x[0-9x.-]*)/", lowered
+    ) or re.search(r"10\.[^/\s]+/(?:record|todo|tbd|placeholder)(?:\b|$)", lowered)
+    if (
+        any(token in lowered for token in ("pending", "placeholder", "example.com"))
+        or placeholder_doi
     ):
         raise SubmissionPackagingError("raw-data deposition contains a placeholder")
     return value
@@ -827,20 +1048,61 @@ def _generator_content_source(
     )
 
 
-def _generator_archive_source(state: GeneratorGitState) -> ContentSource:
+def _privacy_generator_content_source(
+    state: GeneratorGitState,
+    path: str,
+    *,
+    label: str,
+    private_hostnames: Sequence[str],
+) -> ContentSource:
+    entries = {entry.path: entry for entry in state.tree_entries}
+    entry = entries.get(path)
+    if entry is None:
+        raise SubmissionPackagingError(
+            f"{label} is not present in generator commit {state.commit}: {path}"
+        )
+    data = _verified_git_blob(state.worktree_root, entry)
+    public_data, replacement_count = _privacy_transform(
+        data, format_name="text", private_hostnames=private_hostnames
+    )
+    return ContentSource(
+        kind="privacy_git_blob",
+        label=f"generator-git:{state.commit}:{path}",
+        expected_sha256=_sha256_bytes(public_data),
+        git_repository=state.worktree_root,
+        git_object_id=entry.object_id,
+        authority_sha256=_sha256_bytes(data),
+        privacy_format="text",
+        private_hostnames=tuple(private_hostnames),
+        redaction_count=replacement_count,
+    )
+
+
+def _generator_archive_source(
+    state: GeneratorGitState, *, private_hostnames: Sequence[str]
+) -> ContentSource:
     archive_bytes = _git_tree_archive_bytes(
         state.worktree_root,
         state.tree_entries,
         archive_root=GENERATOR_ARCHIVE_ROOT,
     )
+    public_bytes, replacement_count = _privacy_transform(
+        archive_bytes,
+        format_name="tar.gz",
+        private_hostnames=private_hostnames,
+    )
     return ContentSource(
-        kind="git_tree_archive",
+        kind="privacy_git_tree_archive",
         label=(f"generator-git-tree:{state.commit}:{state.tree_object_id}"),
-        expected_sha256=_sha256_bytes(archive_bytes),
+        expected_sha256=_sha256_bytes(public_bytes),
         git_repository=state.worktree_root,
         git_object_id=state.tree_object_id,
         git_tree_entries=state.tree_entries,
         git_archive_root=GENERATOR_ARCHIVE_ROOT,
+        authority_sha256=_sha256_bytes(archive_bytes),
+        privacy_format="tar.gz",
+        private_hostnames=tuple(private_hostnames),
+        redaction_count=replacement_count,
     )
 
 
@@ -1149,8 +1411,479 @@ def discover_imported_graphics_from_git(
     return _discover_imported_graphics_from_texts(texts)
 
 
+def _load_json_object(path: Path, label: str) -> dict:
+    path = _require_regular_file(path, label)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise SubmissionPackagingError(f"could not read {label}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise SubmissionPackagingError(f"{label} must contain a JSON object")
+    return payload
+
+
+def _require_sha256(value: object, label: str) -> str:
+    if not isinstance(value, str) or SHA256_PATTERN.fullmatch(value.lower()) is None:
+        raise SubmissionPackagingError(f"{label} is not a SHA-256 digest")
+    return value.lower()
+
+
+def _verify_final_figure_tree(root: Path) -> tuple[str, dict[str, dict]]:
+    supplied = Path(root).expanduser().absolute()
+    if supplied.is_symlink():
+        raise SubmissionPackagingError(
+            f"published final-figure root cannot be a symlink: {supplied}"
+        )
+    try:
+        root_metadata = supplied.lstat()
+    except FileNotFoundError as exc:
+        raise SubmissionPackagingError(
+            f"published final-figure root does not exist: {supplied}"
+        ) from exc
+    if not stat.S_ISDIR(root_metadata.st_mode):
+        raise SubmissionPackagingError(
+            f"published final-figure root is not a directory: {supplied}"
+        )
+    if stat.S_IMODE(root_metadata.st_mode) & 0o222:
+        raise SubmissionPackagingError(
+            "published final-figure root must be sealed read-only"
+        )
+
+    ledger_path = supplied / FINAL_FIGURE_TREE_LEDGER
+    ledger = _load_json_object(ledger_path, "published final-figure tree ledger")
+    if set(ledger) != {"schema_version", "files"} or ledger.get("schema_version") != 1:
+        raise SubmissionPackagingError(
+            "published final-figure tree ledger has an unsupported schema"
+        )
+    raw_records = ledger.get("files")
+    if not isinstance(raw_records, list):
+        raise SubmissionPackagingError(
+            "published final-figure tree ledger lacks a files list"
+        )
+    records: dict[str, dict] = {}
+    for index, record in enumerate(raw_records, start=1):
+        if not isinstance(record, dict) or set(record) != {
+            "role",
+            "path",
+            "sha256",
+            "size_bytes",
+        }:
+            raise SubmissionPackagingError(
+                f"published final-figure ledger row {index} is malformed"
+            )
+        if record.get("role") != "published_artifact":
+            raise SubmissionPackagingError(
+                f"published final-figure ledger row {index} has the wrong role"
+            )
+        relative = _safe_relative_path(
+            str(record.get("path", "")),
+            f"published final-figure ledger row {index} path",
+        )
+        if relative == FINAL_FIGURE_TREE_LEDGER or relative in records:
+            raise SubmissionPackagingError(
+                "published final-figure tree ledger has a duplicate or self entry"
+            )
+        digest = _require_sha256(
+            record.get("sha256"),
+            f"published final-figure ledger row {index} checksum",
+        )
+        size = record.get("size_bytes")
+        if not isinstance(size, int) or isinstance(size, bool) or size < 0:
+            raise SubmissionPackagingError(
+                f"published final-figure ledger row {index} has an invalid size"
+            )
+        records[relative] = {**record, "path": relative, "sha256": digest}
+
+    actual_files: set[str] = set()
+    for path in supplied.rglob("*"):
+        relative = path.relative_to(supplied).as_posix()
+        metadata = path.lstat()
+        if stat.S_ISLNK(metadata.st_mode) or not (
+            stat.S_ISDIR(metadata.st_mode) or stat.S_ISREG(metadata.st_mode)
+        ):
+            raise SubmissionPackagingError(
+                f"published final-figure tree contains an unsafe entry: {relative}"
+            )
+        if stat.S_IMODE(metadata.st_mode) & 0o222:
+            raise SubmissionPackagingError(
+                f"published final-figure tree contains a writable entry: {relative}"
+            )
+        if stat.S_ISREG(metadata.st_mode):
+            if relative != FINAL_FIGURE_TREE_LEDGER:
+                actual_files.add(relative)
+    if actual_files != set(records):
+        raise SubmissionPackagingError(
+            "published final-figure inventory differs from its sealed ledger"
+        )
+    for relative, record in records.items():
+        path = supplied.joinpath(*PurePosixPath(relative).parts)
+        if (
+            path.stat().st_size != record["size_bytes"]
+            or _sha256(path) != record["sha256"]
+        ):
+            raise SubmissionPackagingError(
+                f"published final-figure artifact checksum mismatch: {relative}"
+            )
+    return _sha256(ledger_path), records
+
+
+def _scientific_source_authority(
+    release_root: Path, generator_state: GeneratorGitState
+) -> tuple[str, str]:
+    config = _load_json_object(
+        release_root / "submission_config.resolved.json",
+        "resolved release configuration",
+    )
+    source = config.get("source")
+    commit = source.get("target_commit") if isinstance(source, dict) else None
+    if not isinstance(commit, str) or FULL_GIT_COMMIT_PATTERN.fullmatch(commit) is None:
+        raise SubmissionPackagingError(
+            "resolved release configuration lacks a full scientific commit"
+        )
+    source_state = _load_json_object(
+        release_root / "diagnostics" / "source_state.json",
+        "release source-state manifest",
+    )
+    if (
+        source_state.get("source_commit") != commit
+        or source_state.get("source_dirty") is not False
+    ):
+        raise SubmissionPackagingError(
+            "release source-state manifest does not prove the clean scientific commit"
+        )
+    try:
+        object_type = (
+            _run_git(generator_state.worktree_root, ("cat-file", "-t", commit))
+            .decode("ascii")
+            .strip()
+        )
+        tree = (
+            _run_git(generator_state.worktree_root, ("rev-parse", f"{commit}^{{tree}}"))
+            .decode("ascii")
+            .strip()
+        )
+    except (UnicodeError, SubmissionPackagingError) as exc:
+        raise SubmissionPackagingError(
+            "scientific commit is unavailable from the pinned generator repository"
+        ) from exc
+    if object_type != "commit" or FULL_GIT_COMMIT_PATTERN.fullmatch(tree) is None:
+        raise SubmissionPackagingError(
+            "scientific commit does not resolve to a valid Git tree"
+        )
+    return commit, tree
+
+
+def inspect_final_figure_publication(
+    root: Path,
+    *,
+    generator_state: GeneratorGitState,
+    scientific_commit: str,
+    release_sha256sums_sha256: str,
+) -> tuple[FinalFigurePublication, dict[str, dict]]:
+    root = Path(root).expanduser().absolute()
+    ledger_sha256, ledger_records = _verify_final_figure_tree(root)
+    required = (
+        FINAL_FIGURE_ORCHESTRATION,
+        FINAL_FIGURE_SOURCE_MAP,
+        FINAL_FIGURE_SOURCE_MAP_CSV,
+        FINAL_FIGURE_ALLOWLIST,
+    )
+    missing = [relative for relative in required if relative not in ledger_records]
+    if missing:
+        raise SubmissionPackagingError(
+            "published final-figure tree lacks required provenance: "
+            + ", ".join(missing)
+        )
+
+    orchestration = _load_json_object(
+        root / FINAL_FIGURE_ORCHESTRATION, "final-figure orchestration manifest"
+    )
+    source_map = _load_json_object(
+        root / FINAL_FIGURE_SOURCE_MAP, "final-figure candidate source map"
+    )
+    allowlist = _load_json_object(
+        root / FINAL_FIGURE_ALLOWLIST, "final-figure candidate allowlist"
+    )
+    if (
+        orchestration.get("schema_version") != FINAL_FIGURE_SCHEMA_VERSION
+        or orchestration.get("manifest_type") != "final_figure_orchestration"
+        or orchestration.get("status") != "ready_for_internal_acceptance"
+    ):
+        raise SubmissionPackagingError(
+            "final-figure orchestration manifest is not the approved schema/status"
+        )
+    if (
+        source_map.get("schema_version") != FINAL_FIGURE_SOURCE_MAP_SCHEMA_VERSION
+        or source_map.get("passed") is not True
+    ):
+        raise SubmissionPackagingError(
+            "final-figure candidate source map is not an accepted schema-2 map"
+        )
+    if (
+        allowlist.get("schema_version") != 1
+        or allowlist.get("expected_counts") != EXPECTED_FINAL_FIGURE_COUNTS
+    ):
+        raise SubmissionPackagingError(
+            "published final-figure allowlist has the wrong candidate contract"
+        )
+
+    checkout = orchestration.get("generator_checkout")
+    approval = orchestration.get("external_approval")
+    if not isinstance(checkout, dict) or not isinstance(approval, dict):
+        raise SubmissionPackagingError(
+            "final-figure orchestration lacks generator or approval provenance"
+        )
+    if (
+        checkout.get("approved_commit") != generator_state.commit
+        or checkout.get("commit_tree") != generator_state.tree_object_id
+        or checkout.get("scientific_release_commit") != scientific_commit
+        or approval.get("approved_generator_commit") != generator_state.commit
+        or approval.get("approved_generator_tree") != generator_state.tree_object_id
+        or approval.get("orchestrator_schema_version") != FINAL_FIGURE_SCHEMA_VERSION
+        or approval.get("approval_status") != "approved"
+        or approval.get("revoked") is not False
+    ):
+        raise SubmissionPackagingError(
+            "published final figures do not match the pinned generator commit/tree"
+        )
+
+    scientific_release = orchestration.get("scientific_release")
+    audited_release = orchestration.get("audited_release_authority")
+    source_release = source_map.get("release")
+    if not all(
+        isinstance(item, dict)
+        for item in (scientific_release, audited_release, source_release)
+    ):
+        raise SubmissionPackagingError(
+            "published final figures lack scientific-release provenance"
+        )
+    release_artifacts = scientific_release.get("artifacts", {})
+    source_release_artifacts = source_release.get("artifacts", {})
+    release_ledger_record = (
+        release_artifacts.get(RELEASE_SHA256_MANIFEST)
+        if isinstance(release_artifacts, dict)
+        else None
+    )
+    source_ledger_record = (
+        source_release_artifacts.get(RELEASE_SHA256_MANIFEST)
+        if isinstance(source_release_artifacts, dict)
+        else None
+    )
+    release_commits = {
+        scientific_release.get("source_commit"),
+        audited_release.get("source_commit"),
+        approval.get("scientific_release_commit"),
+        source_release.get("source_commit"),
+        source_map.get("source_commit"),
+        source_map.get("release_source_commit"),
+    }
+    release_ledger_digests = {
+        audited_release.get("sha256sums_sha256"),
+        approval.get("release_sha256sums_sha256"),
+        (
+            release_ledger_record.get("sha256")
+            if isinstance(release_ledger_record, dict)
+            else None
+        ),
+        (
+            source_ledger_record.get("sha256")
+            if isinstance(source_ledger_record, dict)
+            else None
+        ),
+    }
+    if release_commits != {scientific_commit}:
+        raise SubmissionPackagingError(
+            "published final figures do not match the audited scientific commit"
+        )
+    if release_ledger_digests != {release_sha256sums_sha256}:
+        raise SubmissionPackagingError(
+            "published final figures do not match the sealed release ledger digest"
+        )
+
+    allowlist_sha256 = _sha256(root / FINAL_FIGURE_ALLOWLIST)
+    generator_allowlist_entry = {
+        entry.path: entry for entry in generator_state.tree_entries
+    }.get("submission/final_figure_candidates.json")
+    if (
+        generator_allowlist_entry is None
+        or _sha256_bytes(
+            _verified_git_blob(generator_state.worktree_root, generator_allowlist_entry)
+        )
+        != allowlist_sha256
+    ):
+        raise SubmissionPackagingError(
+            "published final-figure allowlist is not the pinned generator Git blob"
+        )
+    orchestration_allowlist = orchestration.get("allowlist")
+    source_map_allowlist = source_map.get("allowlist")
+    if not isinstance(orchestration_allowlist, dict) or not isinstance(
+        source_map_allowlist, dict
+    ):
+        raise SubmissionPackagingError(
+            "published final-figure manifests lack allowlist provenance"
+        )
+    if (
+        orchestration_allowlist.get("sha256") != allowlist_sha256
+        or orchestration_allowlist.get("expected_counts")
+        != EXPECTED_FINAL_FIGURE_COUNTS
+        or approval.get("allowlist_sha256") != allowlist_sha256
+        or source_map_allowlist.get("sha256") != allowlist_sha256
+        or source_map_allowlist.get("expected_counts") != EXPECTED_FINAL_FIGURE_COUNTS
+        or approval.get("candidate_contract") != EXPECTED_FINAL_FIGURE_COUNTS
+    ):
+        raise SubmissionPackagingError(
+            "published final-figure allowlist authority does not match its manifests"
+        )
+
+    raw_specs = allowlist.get("candidates")
+    raw_source_candidates = source_map.get("candidates")
+    raw_orchestration_candidates = orchestration.get("candidates")
+    if not all(
+        isinstance(items, list)
+        for items in (raw_specs, raw_source_candidates, raw_orchestration_candidates)
+    ):
+        raise SubmissionPackagingError(
+            "published final-figure manifests lack candidate lists"
+        )
+    specs: dict[str, dict] = {}
+    for index, raw in enumerate(raw_specs, start=1):
+        if not isinstance(raw, dict):
+            raise SubmissionPackagingError(
+                f"final-figure allowlist candidate {index} is malformed"
+            )
+        candidate_id = str(raw.get("candidate_id", ""))
+        if not candidate_id or candidate_id in specs:
+            raise SubmissionPackagingError(
+                "final-figure allowlist has a missing or duplicate candidate ID"
+            )
+        slot_id = str(raw.get("slot_id", ""))
+        variant = str(raw.get("variant", ""))
+        root_key = str(raw.get("root", ""))
+        pdf = _safe_relative_path(
+            str(raw.get("pdf", "")), f"candidate {candidate_id} PDF"
+        )
+        if (
+            not slot_id
+            or variant not in {"unpaired", "with_endpoints", "clean"}
+            or root_key not in {"figure_root", "c0_root"}
+        ):
+            raise SubmissionPackagingError(
+                f"final-figure candidate {candidate_id} has an invalid variant/root"
+            )
+        specs[candidate_id] = {
+            **raw,
+            "candidate_id": candidate_id,
+            "slot_id": slot_id,
+            "variant": variant,
+            "candidate_path": f"candidates/{root_key}/{pdf}",
+        }
+    if len(specs) != EXPECTED_FINAL_FIGURE_COUNTS["candidate_pdfs"]:
+        raise SubmissionPackagingError(
+            "published final-figure allowlist does not contain exactly 38 candidates"
+        )
+
+    source_candidates = {
+        str(record.get("candidate_id")): record
+        for record in raw_source_candidates
+        if isinstance(record, dict)
+    }
+    orchestration_candidates = {
+        str(record.get("candidate_id")): record
+        for record in raw_orchestration_candidates
+        if isinstance(record, dict)
+    }
+    if (
+        len(source_candidates) != len(raw_source_candidates)
+        or len(orchestration_candidates) != len(raw_orchestration_candidates)
+        or set(source_candidates) != set(specs)
+        or set(orchestration_candidates) != set(specs)
+    ):
+        raise SubmissionPackagingError(
+            "published final-figure candidate inventories are incomplete or duplicated"
+        )
+
+    try:
+        with (root / FINAL_FIGURE_SOURCE_MAP_CSV).open(
+            newline="", encoding="utf-8"
+        ) as stream:
+            csv_rows = list(csv.DictReader(stream))
+    except (OSError, UnicodeError, csv.Error) as exc:
+        raise SubmissionPackagingError(
+            f"could not read final-figure CSV source map: {exc}"
+        ) from exc
+    csv_candidates = {str(row.get("candidate_id")): row for row in csv_rows}
+    if len(csv_candidates) != len(csv_rows) or set(csv_candidates) != set(specs):
+        raise SubmissionPackagingError(
+            "final-figure JSON and CSV source maps name different candidates"
+        )
+
+    for candidate_id, spec in specs.items():
+        source_record = source_candidates[candidate_id]
+        orchestration_record = orchestration_candidates[candidate_id]
+        csv_record = csv_candidates[candidate_id]
+        path = spec["candidate_path"]
+        orchestration_sha256 = _sha256(root / FINAL_FIGURE_ORCHESTRATION)
+        if (
+            source_record.get("slot_id") != spec["slot_id"]
+            or source_record.get("variant") != spec["variant"]
+            or source_record.get("pdf_path") != path
+            or source_record.get("generator_source_commit") != generator_state.commit
+            or source_record.get("provenance_manifest") != FINAL_FIGURE_ORCHESTRATION
+            or source_record.get("provenance_manifest_sha256") != orchestration_sha256
+            or orchestration_record.get("path") != path
+            or csv_record.get("slot_id") != spec["slot_id"]
+            or csv_record.get("variant") != spec["variant"]
+            or csv_record.get("pdf_relative_path") != path
+            or csv_record.get("generator_source_commit") != generator_state.commit
+            or csv_record.get("source_commit") != scientific_commit
+            or csv_record.get("provenance_manifest") != FINAL_FIGURE_ORCHESTRATION
+            or csv_record.get("provenance_manifest_sha256") != orchestration_sha256
+        ):
+            raise SubmissionPackagingError(
+                f"final-figure candidate metadata mismatch: {candidate_id}"
+            )
+        pdf_path = _require_regular_file(
+            root.joinpath(*PurePosixPath(path).parts),
+            f"published final-figure candidate {candidate_id}",
+        )
+        digest = _sha256(pdf_path)
+        if (
+            source_record.get("pdf_sha256") != digest
+            or orchestration_record.get("sha256") != digest
+            or csv_record.get("pdf_sha256") != digest
+            or ledger_records.get(path, {}).get("sha256") != digest
+        ):
+            raise SubmissionPackagingError(
+                f"final-figure candidate checksum mismatch: {candidate_id}"
+            )
+        spec["pdf_sha256"] = digest
+
+    slot_count = len({str(spec["slot_id"]) for spec in specs.values()})
+    if slot_count != EXPECTED_APPROVED_FIGURE_COUNT:
+        raise SubmissionPackagingError(
+            "published final-figure allowlist does not define exactly 26 slots"
+        )
+    publication = FinalFigurePublication(
+        root=root,
+        orchestration_sha256=_sha256(root / FINAL_FIGURE_ORCHESTRATION),
+        source_map_sha256=_sha256(root / FINAL_FIGURE_SOURCE_MAP),
+        source_map_csv_sha256=_sha256(root / FINAL_FIGURE_SOURCE_MAP_CSV),
+        allowlist_sha256=allowlist_sha256,
+        published_tree_ledger_sha256=ledger_sha256,
+        generator_commit=generator_state.commit,
+        generator_tree=generator_state.tree_object_id,
+        scientific_commit=scientific_commit,
+        release_sha256sums_sha256=release_sha256sums_sha256,
+        candidate_count=len(specs),
+        slot_count=slot_count,
+    )
+    return publication, specs
+
+
 def load_approved_figures(
-    manifest_path: Path, paper_source: Path | PaperGitState
+    manifest_path: Path,
+    paper_source: Path | PaperGitState,
+    candidate_records: Mapping[str, Mapping[str, object]],
 ) -> tuple[ApprovedFigure, ...]:
     """Load checksum-pinned, explicitly approved vector figures."""
     manifest_path = _require_regular_file(manifest_path, "approved-figures manifest")
@@ -1162,7 +1895,15 @@ def load_approved_figures(
         with manifest_path.open(newline="", encoding="utf-8") as stream:
             reader = csv.DictReader(stream)
             fieldnames = set(reader.fieldnames or ())
-            required = {"paper_path", "sha256", "approval_status", "approval_reference"}
+            required = {
+                "candidate_id",
+                "slot_id",
+                "variant",
+                "paper_path",
+                "sha256",
+                "approval_status",
+                "approval_reference",
+            }
             missing = sorted(required - fieldnames)
             if missing:
                 raise SubmissionPackagingError(
@@ -1179,6 +1920,8 @@ def load_approved_figures(
         raise SubmissionPackagingError("approved-figures manifest is empty")
     figures: list[ApprovedFigure] = []
     seen: set[str] = set()
+    seen_candidates: set[str] = set()
+    seen_slots: set[str] = set()
     for row_number, row in enumerate(rows, start=2):
         if str(row.get("approval_status", "")).strip().lower() != "approved":
             raise SubmissionPackagingError(
@@ -1195,6 +1938,25 @@ def load_approved_figures(
         if paper_path in seen:
             raise SubmissionPackagingError(f"duplicate approved figure: {paper_path}")
         seen.add(paper_path)
+
+        candidate_id = str(row.get("candidate_id", "")).strip()
+        candidate = candidate_records.get(candidate_id)
+        if candidate is None or candidate_id in seen_candidates:
+            raise SubmissionPackagingError(
+                f"figure row {row_number} has an unknown or duplicate candidate ID"
+            )
+        seen_candidates.add(candidate_id)
+        slot_id = str(row.get("slot_id", "")).strip()
+        variant = str(row.get("variant", "")).strip()
+        if (
+            slot_id != candidate.get("slot_id")
+            or variant != candidate.get("variant")
+            or slot_id in seen_slots
+        ):
+            raise SubmissionPackagingError(
+                f"figure row {row_number} has a mismatched or duplicate slot/variant"
+            )
+        seen_slots.add(slot_id)
 
         source_value = str(row.get("source_path", "")).strip() or paper_path
         source_relative = _safe_relative_path(
@@ -1234,6 +1996,14 @@ def load_approved_figures(
             raise SubmissionPackagingError(
                 f"approved figure checksum mismatch: {paper_path}"
             )
+        candidate_digest = _require_sha256(
+            candidate.get("pdf_sha256"),
+            f"published candidate {candidate_id} checksum",
+        )
+        if candidate_digest != expected_digest:
+            raise SubmissionPackagingError(
+                f"approved paper figure is not byte-identical to candidate {candidate_id}"
+            )
         approval_reference = str(row.get("approval_reference", "")).strip()
         if not approval_reference:
             raise SubmissionPackagingError(
@@ -1241,12 +2011,24 @@ def load_approved_figures(
             )
         figures.append(
             ApprovedFigure(
+                candidate_id=candidate_id,
+                slot_id=slot_id,
+                variant=variant,
+                candidate_path=str(candidate["candidate_path"]),
                 paper_path=paper_path,
                 source_path=source_relative,
                 source=source,
                 sha256=expected_digest,
                 approval_reference=approval_reference,
             )
+        )
+    expected_slots = {
+        str(record.get("slot_id")) for record in candidate_records.values()
+    }
+    if len(figures) != EXPECTED_APPROVED_FIGURE_COUNT or seen_slots != expected_slots:
+        raise SubmissionPackagingError(
+            "approved-figures manifest must select exactly one candidate for each "
+            "of the 26 final-figure slots"
         )
     return tuple(sorted(figures, key=lambda item: item.paper_path))
 
@@ -1472,6 +2254,7 @@ def _preflight_manuscript_compile(
 def plan_submission_package(
     *,
     release_root: Path,
+    final_figure_root: Path,
     generator_worktree_root: Path,
     generator_commit: str,
     paper_worktree_root: Path,
@@ -1523,6 +2306,7 @@ def plan_submission_package(
         raise SubmissionPackagingError(f"output archive already exists: {archive_path}")
     for protected_root, label in (
         (release_root, "release root"),
+        (Path(final_figure_root).expanduser().absolute(), "final-figure root"),
         (generator_state.worktree_root, "generator worktree root"),
         (paper_state.worktree_root, "paper worktree root"),
     ):
@@ -1538,11 +2322,23 @@ def plan_submission_package(
     release_manifest_records = _load_release_sha256_manifest(
         release_root / RELEASE_SHA256_MANIFEST
     )
+    scientific_commit, scientific_tree = _scientific_source_authority(
+        release_root, generator_state
+    )
+    release_sha256sums_sha256 = _sha256(release_root / RELEASE_SHA256_MANIFEST)
+    final_figure_publication, candidate_records = inspect_final_figure_publication(
+        final_figure_root,
+        generator_state=generator_state,
+        scientific_commit=scientific_commit,
+        release_sha256sums_sha256=release_sha256sums_sha256,
+    )
+    private_hostnames = _discover_private_hostnames(release_root)
 
     paper_files, excluded = discover_paper_source_paths(paper_state)
     figures = load_approved_figures(
         approved_figures_manifest,
         paper_state,
+        candidate_records,
     )
     approved_source_paths = {figure.source_path for figure in figures}
     excluded = tuple(
@@ -1557,6 +2353,12 @@ def plan_submission_package(
         raise SubmissionPackagingError(
             "manuscript imports graphics absent from the approved-figures manifest: "
             + ", ".join(missing_approvals)
+        )
+    unused_approvals = sorted(approved_paths - imported_graphics)
+    if unused_approvals:
+        raise SubmissionPackagingError(
+            "approved-figures manifest contains PDFs not imported by the manuscript: "
+            + ", ".join(unused_approvals)
         )
     figure_qa: list[PdfQaReport] = []
     with tempfile.TemporaryDirectory(prefix="submission-figure-qa-") as temp:
@@ -1598,20 +2400,31 @@ def plan_submission_package(
                     "release payload is absent from the complete-release checksum "
                     f"manifest: {source_relative}"
                 )
-        add(
-            destination,
-            _filesystem_source(
+        if source_relative == RELEASE_SHA256_MANIFEST:
+            source = _filesystem_source(
                 release_root / source_relative,
                 label=f"release:{source_relative}",
                 expected_sha256=expected_digest,
-            ),
-            role,
-        )
-    generator_archive = _generator_archive_source(generator_state)
-    experiment_map = _generator_content_source(
+            )
+        else:
+            source = _privacy_filesystem_source(
+                release_root / source_relative,
+                label=f"release:{source_relative}",
+                authority_sha256=expected_digest,
+                format_name=(
+                    "tar.gz" if source_relative.endswith(".tar.gz") else "text"
+                ),
+                private_hostnames=private_hostnames,
+            )
+        add(destination, source, role)
+    generator_archive = _generator_archive_source(
+        generator_state, private_hostnames=private_hostnames
+    )
+    experiment_map = _privacy_generator_content_source(
         generator_state,
         GENERATOR_EXPERIMENT_MAP,
         label="paper experiment map",
+        private_hostnames=private_hostnames,
     )
     experiment_map_entry = {
         entry.path: entry for entry in generator_state.tree_entries
@@ -1626,6 +2439,47 @@ def plan_submission_package(
         experiment_map,
         "paper_experiment_map",
     )
+    for source_relative, destination, role, expected_digest in (
+        (
+            FINAL_FIGURE_ORCHESTRATION,
+            "provenance/figures/final_figure_orchestration.json",
+            "final_figure_orchestration_manifest",
+            final_figure_publication.orchestration_sha256,
+        ),
+        (
+            FINAL_FIGURE_SOURCE_MAP,
+            "provenance/figures/figure_candidate_source_map.json",
+            "final_figure_candidate_source_map",
+            final_figure_publication.source_map_sha256,
+        ),
+        (
+            FINAL_FIGURE_SOURCE_MAP_CSV,
+            "provenance/figures/figure_candidate_source_map.csv",
+            "final_figure_candidate_source_map_csv",
+            final_figure_publication.source_map_csv_sha256,
+        ),
+        (
+            FINAL_FIGURE_ALLOWLIST,
+            "provenance/figures/approved_candidate_allowlist.json",
+            "final_figure_candidate_allowlist",
+            final_figure_publication.allowlist_sha256,
+        ),
+        (
+            FINAL_FIGURE_TREE_LEDGER,
+            "provenance/figures/published_tree_sha256.json",
+            "final_figure_published_tree_ledger",
+            final_figure_publication.published_tree_ledger_sha256,
+        ),
+    ):
+        add(
+            destination,
+            _filesystem_source(
+                final_figure_publication.root / source_relative,
+                label=f"published-final-figures:{source_relative}",
+                expected_sha256=expected_digest,
+            ),
+            role,
+        )
     for relative in paper_files:
         add(
             f"manuscript/source/{relative}",
@@ -1656,6 +2510,19 @@ def plan_submission_package(
         )
 
     planned_files = tuple(sorted(planned, key=lambda item: item.destination))
+    privacy_redactions = tuple(
+        PrivacyRedaction(
+            package_path=item.destination,
+            authority=item.source.label,
+            authority_sha256=str(item.source.authority_sha256),
+            public_sha256=item.source.expected_sha256,
+            format=str(item.source.privacy_format),
+            replacement_count=item.source.redaction_count,
+        )
+        for item in planned_files
+        if item.source.privacy_format is not None
+        and item.source.authority_sha256 is not None
+    )
     _preflight_manuscript_compile(
         planned_files,
         source_subdir=paper_state.source_subdir,
@@ -1665,6 +2532,8 @@ def plan_submission_package(
 
     return PackagePlan(
         release_root=release_root,
+        scientific_commit=scientific_commit,
+        scientific_tree_object_id=scientific_tree,
         generator_worktree_root=generator_state.worktree_root,
         generator_commit=generator_state.commit,
         generator_tree_object_id=generator_state.tree_object_id,
@@ -1682,11 +2551,14 @@ def plan_submission_package(
         output_parent_device=output_parent.device,
         output_parent_inode=output_parent.inode,
         files=planned_files,
+        final_figure_publication=final_figure_publication,
         approved_figures=figures,
         figure_qa=tuple(figure_qa),
         excluded_paper_files=excluded,
         audit_summary=dict(audit_report.summaries),
         raw_data_deposit=deposition,
+        privacy_redactions=privacy_redactions,
+        private_hostnames=private_hostnames,
         review_bundle=Path(review_bundle).resolve() if review_bundle else None,
     )
 
@@ -1742,6 +2614,86 @@ def _copy_content_source(source: ContentSource, destination: Path) -> None:
                 archive_root=source.git_archive_root,
             ),
         )
+    elif source.kind == "privacy_filesystem":
+        if (
+            source.path is None
+            or source.authority_sha256 is None
+            or source.privacy_format is None
+        ):
+            raise SubmissionPackagingError(
+                f"privacy source is incomplete: {source.label}"
+            )
+        path = _require_regular_file(source.path, source.label)
+        data = path.read_bytes()
+        if _sha256_bytes(data) != source.authority_sha256:
+            raise SubmissionPackagingError(
+                f"privacy authority checksum mismatch for {source.label}"
+            )
+        public_bytes, replacement_count = _privacy_transform(
+            data,
+            format_name=source.privacy_format,
+            private_hostnames=source.private_hostnames,
+        )
+        if replacement_count != source.redaction_count:
+            raise SubmissionPackagingError(
+                f"privacy redaction count changed for {source.label}"
+            )
+        _write_bytes(destination, public_bytes)
+    elif source.kind == "privacy_git_tree_archive":
+        if (
+            source.git_repository is None
+            or source.git_tree_entries is None
+            or source.git_archive_root is None
+            or source.authority_sha256 is None
+            or source.privacy_format != "tar.gz"
+        ):
+            raise SubmissionPackagingError(
+                f"private Git archive source is incomplete: {source.label}"
+            )
+        archive_bytes = _git_tree_archive_bytes(
+            source.git_repository,
+            source.git_tree_entries,
+            archive_root=source.git_archive_root,
+        )
+        if _sha256_bytes(archive_bytes) != source.authority_sha256:
+            raise SubmissionPackagingError(
+                f"Git archive authority checksum mismatch for {source.label}"
+            )
+        public_bytes, replacement_count = _privacy_transform(
+            archive_bytes,
+            format_name="tar.gz",
+            private_hostnames=source.private_hostnames,
+        )
+        if replacement_count != source.redaction_count:
+            raise SubmissionPackagingError(
+                f"privacy redaction count changed for {source.label}"
+            )
+        _write_bytes(destination, public_bytes)
+    elif source.kind == "privacy_git_blob":
+        if (
+            source.git_repository is None
+            or source.git_object_id is None
+            or source.authority_sha256 is None
+            or source.privacy_format != "text"
+        ):
+            raise SubmissionPackagingError(
+                f"private Git blob source is incomplete: {source.label}"
+            )
+        data = _read_git_blob(source.git_repository, source.git_object_id)
+        if _sha256_bytes(data) != source.authority_sha256:
+            raise SubmissionPackagingError(
+                f"Git blob authority checksum mismatch for {source.label}"
+            )
+        public_bytes, replacement_count = _privacy_transform(
+            data,
+            format_name="text",
+            private_hostnames=source.private_hostnames,
+        )
+        if replacement_count != source.redaction_count:
+            raise SubmissionPackagingError(
+                f"privacy redaction count changed for {source.label}"
+            )
+        _write_bytes(destination, public_bytes)
     else:
         raise SubmissionPackagingError(
             f"unsupported content-source kind {source.kind!r}: {source.label}"
@@ -1789,6 +2741,15 @@ def _write_inventory(
         for item in plan.files
         if item.destination == "code/scientific_source_snapshot.tar.gz"
     )
+    generator_snapshot = next(
+        item
+        for item in plan.files
+        if item.destination == "code/figure_generator_snapshot.tar.gz"
+    )
+    experiment_map = next(
+        item for item in plan.files if item.destination == GENERATOR_EXPERIMENT_MAP
+    )
+    publication = plan.final_figure_publication
     payload = {
         "schema_version": PACKAGE_SCHEMA_VERSION,
         "release": {
@@ -1796,19 +2757,30 @@ def _write_inventory(
             "audit_passed": True,
             "audit_summary": dict(sorted(plan.audit_summary.items())),
             "full_release_sha256_manifest": "provenance/release/SHA256SUMS",
-            "staged_payloads_verified_against_release_manifest": True,
+            "source_payloads_verified_against_release_manifest": True,
+            "packaged_presentation_metadata_privacy_sanitized": True,
         },
         "code": {
             "scientific_source_snapshot": {
                 "path": "code/scientific_source_snapshot.tar.gz",
                 "authority": "audited_release_checksum_manifest",
+                "git_commit": plan.scientific_commit,
+                "git_tree": plan.scientific_tree_object_id,
                 "sha256": scientific_snapshot.source.expected_sha256,
+                "authority_archive_sha256": (
+                    scientific_snapshot.source.authority_sha256
+                ),
+                "privacy_sanitized_public_archive": True,
             },
             "figure_generator_snapshot": {
                 "path": "code/figure_generator_snapshot.tar.gz",
                 "git_commit": plan.generator_commit,
                 "git_tree": plan.generator_tree_object_id,
                 "sha256": plan.generator_archive_sha256,
+                "authority_archive_sha256": (
+                    generator_snapshot.source.authority_sha256
+                ),
+                "privacy_sanitized_public_archive": True,
                 "tracked_file_count": plan.generator_tracked_file_count,
                 "clean_pinned_worktree_verified": True,
                 "bytes_materialized_from_pinned_git_objects": True,
@@ -1818,6 +2790,8 @@ def _write_inventory(
                 "git_commit": plan.generator_commit,
                 "git_object_id": plan.generator_experiment_map_object_id,
                 "sha256": plan.generator_experiment_map_sha256,
+                "authority_blob_sha256": experiment_map.source.authority_sha256,
+                "privacy_sanitized_public_copy": True,
             },
         },
         "raw_data": {
@@ -1838,8 +2812,31 @@ def _write_inventory(
             "bytes_materialized_from_pinned_git_objects": True,
             "tracked_file_count": plan.paper_tracked_file_count,
         },
+        "final_figure_publication": {
+            "generator_commit": publication.generator_commit,
+            "generator_tree": publication.generator_tree,
+            "scientific_commit": publication.scientific_commit,
+            "sealed_release_sha256sums_sha256": (publication.release_sha256sums_sha256),
+            "published_tree_ledger_sha256": (publication.published_tree_ledger_sha256),
+            "orchestration_manifest_sha256": publication.orchestration_sha256,
+            "candidate_source_map_sha256": publication.source_map_sha256,
+            "candidate_source_map_csv_sha256": publication.source_map_csv_sha256,
+            "allowlist_sha256": publication.allowlist_sha256,
+            "candidate_count": publication.candidate_count,
+            "approved_slot_count": publication.slot_count,
+        },
+        "privacy": {
+            "policy": "privacy_sanitized_public_presentation",
+            "audit_passed": True,
+            "redaction_record": "provenance/privacy_redactions.json",
+            "redacted_payload_count": len(plan.privacy_redactions),
+        },
         "approved_figures": [
             {
+                "candidate_id": figure.candidate_id,
+                "slot_id": figure.slot_id,
+                "variant": figure.variant,
+                "candidate_path": figure.candidate_path,
                 "paper_path": figure.paper_path,
                 "sha256": figure.sha256,
                 "approval_reference": figure.approval_reference,
@@ -1877,8 +2874,8 @@ This package was assembled from the completed, programmatically audited release
 
 ## Contents
 
-- `code/scientific_source_snapshot.tar.gz`: exact scientific source archive recorded by the final sweep.
-- `code/figure_generator_snapshot.tar.gz`: exact final-figure generator and control repository from pinned commit `{plan.generator_commit}`.
+- `code/scientific_source_snapshot.tar.gz`: privacy-sanitized public copy of the scientific source archive recorded by the final sweep; its exact authority digest and Git commit/tree are retained in provenance.
+- `code/figure_generator_snapshot.tar.gz`: privacy-sanitized public copy of the final-figure generator and control repository from pinned commit `{plan.generator_commit}`; its exact Git tree and pre-redaction archive digest are retained in provenance.
 - `manuscript/source/`: allowlisted manuscript source plus checksum-pinned approved vector figures.
 - `manuscript/review/`: optional review material supplied to the packager.
 - `results/perturbed_sweep.csv`: audited aggregate result table.
@@ -1889,6 +2886,8 @@ This package was assembled from the completed, programmatically audited release
 - `provenance/release/`: resolved configuration, environment, source state,
   run inventory, and full-release checksums.
 - `provenance/vector_pdf_qa.json`: zero-raster and font-embedding audit for every approved figure.
+- `provenance/figures/approved_figure_bindings.json`: cryptographic binding from each promoted paper PDF to its published candidate ID, slot, variant, and packet authority.
+- `provenance/privacy_redactions.json`: public-package privacy policy plus original and public SHA-256 values for every sanitized payload.
 - `INVENTORY.json` and `INVENTORY.csv`: machine- and human-readable payload inventories.
 
 ## Raw Scientific Data
@@ -1914,13 +2913,25 @@ package was created with its outer archive, it also verified package checksums
 and compiled a disposable copy of the extracted manuscript before reporting
 success.
 
+Every approved manuscript PDF is byte-identical to one candidate in the sealed
+38-candidate publication. Exactly one candidate is selected for each of the 26
+paper slots. The copied orchestration manifest, JSON/CSV source maps, allowlist,
+and publication ledger bind those choices to generator commit
+`{plan.generator_commit}`, scientific commit `{plan.scientific_commit}`, and the
+sealed release checksum-ledger digest.
+
 ## Code Provenance
 
-The scientific source snapshot is the exact archive checksum-pinned by the
-audited numerical release. The separately named final-figure generator snapshot
-was materialized from Git blobs at commit `{plan.generator_commit}` and tree
-`{plan.generator_tree_object_id}`; no generator worktree file bytes were copied.
-The experiment map is the pinned blob from the same generator commit.
+The two packaged code archives are deterministic privacy-sanitized presentation
+copies. User-home prefixes and the captured workstation hostname are replaced;
+no scientific or figure algorithm source currently requires either value. The
+exact scientific authority remains commit `{plan.scientific_commit}`, tree
+`{plan.scientific_tree_object_id}`, and the original release archive digest. The
+exact figure-generator authority remains commit `{plan.generator_commit}`, tree
+`{plan.generator_tree_object_id}`, and the original deterministic archive digest.
+`provenance/code_snapshots.json` records both original and public archive hashes.
+The experiment map is a privacy-sanitized copy of the pinned generator blob; its
+Git object ID and original blob digest are retained in provenance.
 
 ## Verification
 
@@ -2004,7 +3015,8 @@ def _write_release_audit_record(root: Path, plan: PackagePlan) -> None:
         "release_name": plan.release_root.name,
         "summaries": dict(sorted(plan.audit_summary.items())),
         "full_release_checksums_verified": True,
-        "staged_release_payloads_verified_against_manifest": True,
+        "source_release_payloads_verified_against_manifest": True,
+        "packaged_presentation_metadata_privacy_sanitized": True,
     }
     _write_text(
         root / "provenance" / "release" / "audit_report.json",
@@ -2018,12 +3030,24 @@ def _write_code_snapshot_record(root: Path, plan: PackagePlan) -> None:
         for item in plan.files
         if item.destination == "code/scientific_source_snapshot.tar.gz"
     )
+    generator = next(
+        item
+        for item in plan.files
+        if item.destination == "code/figure_generator_snapshot.tar.gz"
+    )
+    experiment_map = next(
+        item for item in plan.files if item.destination == GENERATOR_EXPERIMENT_MAP
+    )
     payload = {
         "schema_version": 1,
         "scientific_source_snapshot": {
             "path": scientific.destination,
             "authority": "audited_release_checksum_manifest",
+            "git_commit": plan.scientific_commit,
+            "git_tree": plan.scientific_tree_object_id,
             "sha256": scientific.source.expected_sha256,
+            "authority_archive_sha256": scientific.source.authority_sha256,
+            "privacy_sanitized_public_archive": True,
             "release_name": plan.release_root.name,
         },
         "figure_generator_snapshot": {
@@ -2031,6 +3055,8 @@ def _write_code_snapshot_record(root: Path, plan: PackagePlan) -> None:
             "git_commit": plan.generator_commit,
             "git_tree": plan.generator_tree_object_id,
             "sha256": plan.generator_archive_sha256,
+            "authority_archive_sha256": generator.source.authority_sha256,
+            "privacy_sanitized_public_archive": True,
             "tracked_file_count": plan.generator_tracked_file_count,
             "clean_pinned_worktree_verified": True,
             "bytes_materialized_from_pinned_git_objects": True,
@@ -2041,10 +3067,70 @@ def _write_code_snapshot_record(root: Path, plan: PackagePlan) -> None:
             "git_commit": plan.generator_commit,
             "git_object_id": plan.generator_experiment_map_object_id,
             "sha256": plan.generator_experiment_map_sha256,
+            "authority_blob_sha256": experiment_map.source.authority_sha256,
+            "privacy_sanitized_public_copy": True,
         },
     }
     _write_text(
         root / "provenance" / "code_snapshots.json",
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+    )
+
+
+def _write_final_figure_binding_record(root: Path, plan: PackagePlan) -> None:
+    publication = plan.final_figure_publication
+    payload = {
+        "schema_version": 1,
+        "passed": True,
+        "published_tree_ledger_sha256": publication.published_tree_ledger_sha256,
+        "orchestration_manifest_sha256": publication.orchestration_sha256,
+        "candidate_source_map_sha256": publication.source_map_sha256,
+        "candidate_source_map_csv_sha256": publication.source_map_csv_sha256,
+        "allowlist_sha256": publication.allowlist_sha256,
+        "generator_commit": publication.generator_commit,
+        "generator_tree": publication.generator_tree,
+        "scientific_commit": publication.scientific_commit,
+        "sealed_release_sha256sums_sha256": (publication.release_sha256sums_sha256),
+        "candidate_count": publication.candidate_count,
+        "approved_slot_count": publication.slot_count,
+        "approved_figures": [
+            {
+                "candidate_id": figure.candidate_id,
+                "slot_id": figure.slot_id,
+                "variant": figure.variant,
+                "candidate_path": figure.candidate_path,
+                "paper_path": figure.paper_path,
+                "sha256": figure.sha256,
+                "approval_reference": figure.approval_reference,
+            }
+            for figure in plan.approved_figures
+        ],
+    }
+    _write_text(
+        root / "provenance" / "figures" / "approved_figure_bindings.json",
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+    )
+
+
+def _write_privacy_record(root: Path, plan: PackagePlan) -> None:
+    payload = {
+        "schema_version": 1,
+        "policy": "privacy_sanitized_public_presentation",
+        "passed": True,
+        "rules": [
+            "replace user-home prefixes with <HOME>",
+            "replace captured workstation hostnames with <HOSTNAME>",
+            "preserve original authority SHA-256 values without original private metadata bytes",
+        ],
+        "exact_authorities": {
+            "scientific_release": "sealed external release plus SHA256SUMS digest",
+            "scientific_source": "scientific Git commit/tree and original archive digest",
+            "figure_generator": "generator Git commit/tree and original archive digest",
+        },
+        "records": [asdict(record) for record in plan.privacy_redactions],
+    }
+    _write_text(
+        root / "provenance" / "privacy_redactions.json",
         json.dumps(payload, indent=2, sort_keys=True) + "\n",
     )
 
@@ -2055,13 +3141,25 @@ def _write_figure_approval_record(root: Path, plan: PackagePlan) -> None:
     with path.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.DictWriter(
             stream,
-            fieldnames=("paper_path", "sha256", "approval_reference"),
+            fieldnames=(
+                "candidate_id",
+                "slot_id",
+                "variant",
+                "candidate_path",
+                "paper_path",
+                "sha256",
+                "approval_reference",
+            ),
             lineterminator="\n",
         )
         writer.writeheader()
         for figure in plan.approved_figures:
             writer.writerow(
                 {
+                    "candidate_id": figure.candidate_id,
+                    "slot_id": figure.slot_id,
+                    "variant": figure.variant,
+                    "candidate_path": figure.candidate_path,
                     "paper_path": figure.paper_path,
                     "sha256": figure.sha256,
                     "approval_reference": figure.approval_reference,
@@ -2093,6 +3191,53 @@ def _write_vector_qa_record(root: Path, plan: PackagePlan) -> None:
         root / "provenance" / "vector_pdf_qa.json",
         json.dumps(payload, indent=2, sort_keys=True) + "\n",
     )
+
+
+def _private_markers(data: bytes, private_hostnames: Sequence[str]) -> list[str]:
+    markers: list[str] = []
+    for pattern in HOME_PATH_PATTERNS:
+        if pattern.search(data):
+            markers.append(pattern.pattern.decode("ascii", errors="replace"))
+    for hostname in private_hostnames:
+        if hostname and hostname.encode("utf-8") in data:
+            markers.append("captured workstation hostname")
+    return markers
+
+
+def _verify_public_package_privacy(
+    root: Path, private_hostnames: Sequence[str]
+) -> None:
+    failures: list[str] = []
+    for path in sorted(root.rglob("*")):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(root).as_posix()
+        data = path.read_bytes()
+        markers = _private_markers(data, private_hostnames)
+        if markers:
+            failures.append(f"{relative}: {', '.join(markers)}")
+        if path.name.endswith(".tar.gz"):
+            try:
+                with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
+                    for member in archive.getmembers():
+                        if not member.isfile():
+                            continue
+                        stream = archive.extractfile(member)
+                        member_data = stream.read() if stream is not None else b""
+                        markers = _private_markers(member_data, private_hostnames)
+                        if markers:
+                            failures.append(
+                                f"{relative}!{member.name}: {', '.join(markers)}"
+                            )
+            except (OSError, tarfile.TarError) as exc:
+                raise SubmissionPackagingError(
+                    f"could not privacy-audit source archive {relative}: {exc}"
+                ) from exc
+    if failures:
+        raise SubmissionPackagingError(
+            "public package privacy audit found workstation metadata: "
+            + "; ".join(failures[:10])
+        )
 
 
 def _all_files(root: Path, excluded: Iterable[Path] = ()) -> tuple[Path, ...]:
@@ -2338,6 +3483,26 @@ def build_submission_package(
         raise SubmissionPackagingError(
             "generator Git tree changed after package planning"
         )
+    scientific_commit, scientific_tree = _scientific_source_authority(
+        plan.release_root, generator_state
+    )
+    if (
+        scientific_commit != plan.scientific_commit
+        or scientific_tree != plan.scientific_tree_object_id
+    ):
+        raise SubmissionPackagingError(
+            "scientific Git authority changed after package planning"
+        )
+    publication, _ = inspect_final_figure_publication(
+        plan.final_figure_publication.root,
+        generator_state=generator_state,
+        scientific_commit=plan.scientific_commit,
+        release_sha256sums_sha256=_sha256(plan.release_root / RELEASE_SHA256_MANIFEST),
+    )
+    if publication != plan.final_figure_publication:
+        raise SubmissionPackagingError(
+            "published final-figure authority changed after package planning"
+        )
     paper_state = inspect_paper_worktree(
         plan.paper_worktree_root,
         plan.paper_commit,
@@ -2403,6 +3568,8 @@ def build_submission_package(
             )
             _write_release_audit_record(staging, plan)
             _write_code_snapshot_record(staging, plan)
+            _write_final_figure_binding_record(staging, plan)
+            _write_privacy_record(staging, plan)
             _write_figure_approval_record(staging, plan)
             _write_vector_qa_record(staging, plan)
             _write_package_readme(staging, plan)
@@ -2432,6 +3599,16 @@ def build_submission_package(
                     ),
                     _generated_inventory_entry(
                         staging,
+                        "provenance/figures/approved_figure_bindings.json",
+                        "final_figure_binding_record",
+                    ),
+                    _generated_inventory_entry(
+                        staging,
+                        "provenance/privacy_redactions.json",
+                        "privacy_redaction_record",
+                    ),
+                    _generated_inventory_entry(
+                        staging,
                         "provenance/approved_figures.csv",
                         "figure_approval_record",
                     ),
@@ -2444,6 +3621,7 @@ def build_submission_package(
                 ]
             )
             _write_inventory(staging, plan, entries)
+            _verify_public_package_privacy(staging, plan.private_hostnames)
             _write_package_checksums(staging)
             checksum_errors = verify_package_checksums(staging)
             if checksum_errors:
@@ -2520,12 +3698,23 @@ def _plan_payload(plan: PackagePlan) -> dict:
             plan.raw_data_deposit.verification_status
         ),
         "network_assertion_made": False,
+        "scientific_commit": plan.scientific_commit,
+        "scientific_tree": plan.scientific_tree_object_id,
         "generator_commit": plan.generator_commit,
         "generator_tree": plan.generator_tree_object_id,
         "generator_archive_sha256": plan.generator_archive_sha256,
         "generator_experiment_map_sha256": plan.generator_experiment_map_sha256,
         "paper_commit": plan.paper_commit,
         "paper_entrypoint": plan.paper_entrypoint,
+        "final_figure_published_tree_ledger_sha256": (
+            plan.final_figure_publication.published_tree_ledger_sha256
+        ),
+        "final_figure_orchestration_sha256": (
+            plan.final_figure_publication.orchestration_sha256
+        ),
+        "final_figure_source_map_sha256": (
+            plan.final_figure_publication.source_map_sha256
+        ),
         "manuscript_compile_preflight_passed": True,
         "approved_figure_count": len(plan.approved_figures),
         "paper_source_file_count": sum(
@@ -2539,6 +3728,15 @@ def _plan_payload(plan: PackagePlan) -> dict:
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--release-root", type=Path, required=True)
+    parser.add_argument(
+        "--final-figure-root",
+        type=Path,
+        required=True,
+        help=(
+            "sealed publication root containing the canonical orchestration "
+            "manifest and JSON/CSV candidate source maps"
+        ),
+    )
     parser.add_argument(
         "--generator-worktree-root",
         type=Path,
@@ -2631,6 +3829,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         plan = plan_submission_package(
             release_root=args.release_root,
+            final_figure_root=args.final_figure_root,
             generator_worktree_root=args.generator_worktree_root,
             generator_commit=args.generator_commit,
             paper_worktree_root=args.paper_worktree_root,
