@@ -82,6 +82,25 @@ def _metadata_bomb_archive(metadata_kind: str, payload_size: int) -> bytes:
     return gzip.compress(header + payload + padding + b"\0" * tarfile.RECORDSIZE)
 
 
+def _tar_data_end(archive_bytes: bytes) -> int:
+    with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:") as archive:
+        members = list(archive)
+    return max(
+        member.offset_data
+        + ((member.size + tarfile.BLOCKSIZE - 1) // tarfile.BLOCKSIZE)
+        * tarfile.BLOCKSIZE
+        for member in members
+    )
+
+
+def _snapshot_budget(files: dict[str, bytes]) -> int:
+    expected = {
+        relative: audit_module.GitBlob("100644", "0" * 40, data)
+        for relative, data in files.items()
+    }
+    return audit_module._source_tar_decompressed_budget(expected)
+
+
 def _run_context() -> dict[str, object]:
     return {
         "experiment": "lines",
@@ -1208,11 +1227,7 @@ def test_source_snapshot_metadata_bomb_hits_decompressed_budget(
 ):
     root = _make_release(tmp_path / "release")
     files = _snapshot_files(root / "diagnostics" / "source_snapshot.tar.gz")
-    expected = {
-        relative: audit_module.GitBlob("100644", "0" * 40, data)
-        for relative, data in files.items()
-    }
-    budget = audit_module._source_tar_decompressed_budget(expected)
+    budget = _snapshot_budget(files)
     archive_bytes = _metadata_bomb_archive(metadata_kind, budget + 1)
     _rewrite_snapshot_bytes(root, archive_bytes, len(files))
 
@@ -1221,6 +1236,119 @@ def test_source_snapshot_metadata_bomb_hits_decompressed_budget(
     messages = _messages(report)
     assert not report.ok
     assert "decompressed source snapshot exceeds Git-derived byte budget" in messages
+
+
+def test_high_ratio_zero_tail_hits_decompressed_budget(tmp_path):
+    root = _make_release(tmp_path / "release")
+    snapshot_path = root / "diagnostics" / "source_snapshot.tar.gz"
+    files = _snapshot_files(snapshot_path)
+    raw_archive = gzip.decompress(snapshot_path.read_bytes())
+    budget = _snapshot_budget(files)
+    oversized_tail = b"\0" * (budget - len(raw_archive) + 1)
+    _rewrite_snapshot_bytes(
+        root, gzip.compress(raw_archive + oversized_tail), len(files)
+    )
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    messages = _messages(report)
+    assert not report.ok
+    assert "decompressed source snapshot exceeds Git-derived byte budget" in messages
+
+
+def test_gzip_crc_corruption_is_rejected(tmp_path):
+    root = _make_release(tmp_path / "release")
+    snapshot_path = root / "diagnostics" / "source_snapshot.tar.gz"
+    files = _snapshot_files(snapshot_path)
+    corrupted = bytearray(snapshot_path.read_bytes())
+    corrupted[-8] ^= 0x01
+    _rewrite_snapshot_bytes(root, bytes(corrupted), len(files))
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    messages = _messages(report)
+    assert not report.ok
+    assert "gzip source snapshot CRC/trailer validation failed" in messages
+
+
+def test_truncated_gzip_trailer_is_rejected(tmp_path):
+    root = _make_release(tmp_path / "release")
+    snapshot_path = root / "diagnostics" / "source_snapshot.tar.gz"
+    files = _snapshot_files(snapshot_path)
+    _rewrite_snapshot_bytes(root, snapshot_path.read_bytes()[:-4], len(files))
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    messages = _messages(report)
+    assert not report.ok
+    assert "gzip source snapshot is truncated or missing its CRC/trailer" in messages
+
+
+def test_missing_second_tar_end_block_is_rejected(tmp_path):
+    root = _make_release(tmp_path / "release")
+    snapshot_path = root / "diagnostics" / "source_snapshot.tar.gz"
+    files = _snapshot_files(snapshot_path)
+    raw_archive = gzip.decompress(snapshot_path.read_bytes())
+    data_end = _tar_data_end(raw_archive)
+    one_end_block = raw_archive[:data_end] + b"\0" * tarfile.BLOCKSIZE
+    _rewrite_snapshot_bytes(root, gzip.compress(one_end_block), len(files))
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    messages = _messages(report)
+    assert not report.ok
+    assert "canonical two-zero-block, record-aligned terminator" in messages
+
+
+def test_extra_zero_tar_record_is_rejected_below_global_budget(tmp_path):
+    root = _make_release(tmp_path / "release")
+    snapshot_path = root / "diagnostics" / "source_snapshot.tar.gz"
+    files = _snapshot_files(snapshot_path)
+    raw_archive = gzip.decompress(snapshot_path.read_bytes())
+    _rewrite_snapshot_bytes(
+        root,
+        gzip.compress(raw_archive + b"\0" * tarfile.RECORDSIZE),
+        len(files),
+    )
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    messages = _messages(report)
+    assert not report.ok
+    assert "canonical two-zero-block, record-aligned terminator" in messages
+
+
+@pytest.mark.parametrize("tail_kind", ["gzip_member", "compressed_garbage"])
+def test_gzip_multi_member_and_compressed_tail_are_rejected(tmp_path, tail_kind):
+    root = _make_release(tmp_path / "release")
+    snapshot_path = root / "diagnostics" / "source_snapshot.tar.gz"
+    files = _snapshot_files(snapshot_path)
+    tail = (
+        gzip.compress(b"second member")
+        if tail_kind == "gzip_member"
+        else b"compressed garbage"
+    )
+    _rewrite_snapshot_bytes(root, snapshot_path.read_bytes() + tail, len(files))
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    messages = _messages(report)
+    assert not report.ok
+    assert "multiple members or trailing compressed data" in messages
+
+
+def test_nonzero_decompressed_data_after_tar_terminator_is_rejected(tmp_path):
+    root = _make_release(tmp_path / "release")
+    snapshot_path = root / "diagnostics" / "source_snapshot.tar.gz"
+    files = _snapshot_files(snapshot_path)
+    raw_archive = gzip.decompress(snapshot_path.read_bytes())
+    _rewrite_snapshot_bytes(root, gzip.compress(raw_archive + b"not zero"), len(files))
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    messages = _messages(report)
+    assert not report.ok
+    assert "nonzero trailing decompressed data" in messages
 
 
 def test_source_snapshot_member_count_is_bounded_by_git_tree(tmp_path):
@@ -1242,11 +1370,10 @@ def test_source_snapshot_member_and_total_sizes_are_git_tree_bounded(
 ):
     root = _make_release(tmp_path / "release")
     files = _snapshot_files(root / "diagnostics" / "source_snapshot.tar.gz")
-    total_size = sum(len(data) for data in files.values())
     entries = [
         (
             relative,
-            b"x" * (total_size + 1) if relative == "requirements.txt" else data,
+            data + b"x" if relative == "requirements.txt" else data,
             0o644,
         )
         for relative, data in sorted(files.items())

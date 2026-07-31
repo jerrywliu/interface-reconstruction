@@ -17,6 +17,7 @@ import statistics
 import subprocess
 import tarfile
 import tempfile
+import zlib
 from collections import defaultdict
 from dataclasses import dataclass, field
 from decimal import Decimal, DecimalException
@@ -40,6 +41,7 @@ TAR_BLOCK_SIZE = 512
 TAR_RECORD_SIZE = 10_240
 MAX_TAR_METADATA_BYTES_PER_MEMBER = 4_096
 MAX_TAR_GLOBAL_METADATA_BYTES = 65_536
+GZIP_VALIDATION_CHUNK_SIZE = 65_536
 
 SNAPSHOT_EXCLUDED_ROOTS = frozenset(
     {".git", "logs", "output", "plots", "results", "tmp"}
@@ -191,6 +193,10 @@ class ReleaseAuditInputError(ValueError):
 
 class DecompressedSnapshotBudgetExceeded(OSError):
     """Raised before tarfile can consume data beyond the verified source budget."""
+
+
+class SourceSnapshotFormatError(OSError):
+    """Raised when gzip or tar termination is not canonical and complete."""
 
 
 class _DecompressedByteBudgetStream:
@@ -1164,6 +1170,82 @@ def _source_tar_decompressed_budget(expected: Mapping[str, GitBlob]) -> int:
     )
 
 
+def _validate_single_gzip_member(compressed_stream, byte_budget: int) -> int:
+    decompressor = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    decompressed_bytes = 0
+    while True:
+        compressed = compressed_stream.read(GZIP_VALIDATION_CHUNK_SIZE)
+        if not compressed:
+            break
+        pending = compressed
+        while pending:
+            maximum_output = min(
+                GZIP_VALIDATION_CHUNK_SIZE,
+                byte_budget - decompressed_bytes + 1,
+            )
+            try:
+                output = decompressor.decompress(pending, maximum_output)
+            except zlib.error as exc:
+                raise SourceSnapshotFormatError(
+                    f"gzip source snapshot CRC/trailer validation failed: {exc}"
+                ) from exc
+            decompressed_bytes += len(output)
+            if decompressed_bytes > byte_budget:
+                raise DecompressedSnapshotBudgetExceeded(
+                    "decompressed source snapshot exceeds Git-derived byte budget "
+                    f"of {byte_budget} bytes"
+                )
+            pending = decompressor.unconsumed_tail
+            if decompressor.eof:
+                if decompressor.unused_data or pending or compressed_stream.read(1):
+                    raise SourceSnapshotFormatError(
+                        "gzip source snapshot contains multiple members or trailing "
+                        "compressed data"
+                    )
+                return decompressed_bytes
+    raise SourceSnapshotFormatError(
+        "gzip source snapshot is truncated or missing its CRC/trailer"
+    )
+
+
+def _canonical_tar_end(data_end: int) -> int:
+    minimum_end = data_end + 2 * TAR_BLOCK_SIZE
+    return ((minimum_end + TAR_RECORD_SIZE - 1) // TAR_RECORD_SIZE) * TAR_RECORD_SIZE
+
+
+def _drain_and_validate_tar_termination(
+    stream: _DecompressedByteBudgetStream,
+    data_end: int,
+    preflight_size: int,
+) -> None:
+    expected_end = _canonical_tar_end(data_end)
+    stream.seek(data_end)
+    trailing_bytes = 0
+    has_nonzero_data = False
+    while True:
+        chunk = stream.read(GZIP_VALIDATION_CHUNK_SIZE)
+        if not chunk:
+            break
+        trailing_bytes += len(chunk)
+        has_nonzero_data = has_nonzero_data or any(chunk)
+    actual_end = data_end + trailing_bytes
+    if actual_end != preflight_size:
+        raise SourceSnapshotFormatError(
+            "gzip source snapshot decompressed size changed between validation passes: "
+            f"{actual_end} != {preflight_size}"
+        )
+    if has_nonzero_data:
+        raise SourceSnapshotFormatError(
+            "source tar contains nonzero trailing decompressed data after the final "
+            "member"
+        )
+    if actual_end != expected_end:
+        raise SourceSnapshotFormatError(
+            "source tar is missing or exceeds its canonical two-zero-block, "
+            f"record-aligned terminator: {actual_end} != {expected_end}"
+        )
+
+
 def _read_bounded_source_snapshot(
     snapshot_path: Path,
     expected: Mapping[str, GitBlob],
@@ -1179,6 +1261,10 @@ def _read_bounded_source_snapshot(
     decompressed_budget = _source_tar_decompressed_budget(expected)
     try:
         with snapshot_path.open("rb") as compressed_stream:
+            preflight_size = _validate_single_gzip_member(
+                compressed_stream, decompressed_budget
+            )
+            compressed_stream.seek(0)
             with gzip.GzipFile(fileobj=compressed_stream, mode="rb") as gzip_stream:
                 bounded_stream = _DecompressedByteBudgetStream(
                     gzip_stream, decompressed_budget
@@ -1252,6 +1338,15 @@ def _read_bounded_source_snapshot(
 
                     if report.total_errors != metadata_errors:
                         return {}, {}
+                    if not validated_members:
+                        raise SourceSnapshotFormatError(
+                            "source tar contains no validated tracked-file members"
+                        )
+
+                    data_end = max(
+                        member.offset_data + _tar_padded_size(member.size)
+                        for member in validated_members
+                    )
 
                     for member in validated_members:
                         expected_blob = expected[member.name]
@@ -1271,6 +1366,9 @@ def _read_bounded_source_snapshot(
                             continue
                         members[member.name] = data
                         modes[member.name] = member.mode
+                    _drain_and_validate_tar_termination(
+                        bounded_stream, data_end, preflight_size
+                    )
     except (EOFError, OSError, tarfile.TarError) as exc:
         report.add_error(f"could not read source snapshot: {exc}")
     return members, modes

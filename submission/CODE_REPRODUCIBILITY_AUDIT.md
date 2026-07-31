@@ -168,11 +168,14 @@ exact commit and blob object hashes itself. It enumerates the commit with
 archive attributes such as `export-ignore` cannot remove tracked source from the
 oracle. A seek-aware wrapper limits gzip output to the canonical Git-tree payload
 plus fixed per-member and global metadata allowances before `tarfile` can process
-PAX or GNU metadata. Before extracting any archived source payload, the audit also
-checks the complete tar metadata pass against tree-derived bounds for file count,
-each file size, total uncompressed bytes, path, and the complete executable mode;
-set-id and sticky bits are rejected. The archived bytes are then compared with the
-corresponding verified Git blobs.
+PAX or GNU metadata. A separate bounded single-member gzip pass forces CRC and
+trailer validation and rejects concatenated members or compressed trailing data.
+Before extracting any archived source payload, the audit also checks the complete
+tar metadata pass against tree-derived bounds for file count, each file size, total
+uncompressed bytes, path, and the complete executable mode; set-id and sticky bits
+are rejected. Finally, it drains gzip through EOF and requires exactly two zero end
+blocks plus zero padding to the next tar record boundary after the final member.
+The archived bytes are then compared with the corresponding verified Git blobs.
 
 ## Result And Raw-Bundle Findings
 
