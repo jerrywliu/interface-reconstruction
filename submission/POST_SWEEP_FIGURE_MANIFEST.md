@@ -27,6 +27,10 @@ No existing figure directory may be passed into the submission gate. Run
 roots, requires the external approval record for the exact integrated commit,
 materializes source and release inputs into immutable snapshots, invokes the
 exact generators, and publishes only after its internal acceptance gate passes.
+It uses only the private copy of this allowlist, records the attested
+Poppler/Python/font runtime, snapshots the actual square/circle VTP truth inputs
+used by the resolution plots, and seals a separately copied final tree before
+the locked no-replace publication.
 
 The publication root and exact command are documented in
 `submission/FINAL_FIGURE_REGENERATION.md`. The machine-readable source map is

@@ -179,21 +179,21 @@ def copy_verified_file(
 
 
 def make_tree_read_only(root: Path) -> None:
-    """Remove write permission from a private snapshot tree."""
+    """Make a private snapshot readable/traversable only by its owner."""
 
     root = Path(root)
     for path in root.rglob("*"):
         if path.is_symlink():
             raise ValueError(f"Immutable snapshot contains a symlink: {path}")
         if path.is_file():
-            path.chmod(0o444)
+            path.chmod(0o400)
     for directory in sorted(
         (path for path in root.rglob("*") if path.is_dir()),
         key=lambda path: len(path.parts),
         reverse=True,
     ):
-        directory.chmod(0o555)
-    root.chmod(0o555)
+        directory.chmod(0o500)
+    root.chmod(0o500)
 
 
 def release_figure_anchor(release_root: Path) -> dict:

@@ -75,6 +75,9 @@ def _populate_candidate_roots(tmp_path):
 
 def _orchestrated_state(roots):
     snapshot = roots["figure_root"].parents[1]
+    private_allowlist = snapshot / "provenance" / "approved_candidate_allowlist.json"
+    private_allowlist.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(DEFAULT_ALLOWLIST, private_allowlist)
     candidates = []
     for spec in load_candidate_allowlist():
         output = roots[spec.root] / spec.pdf
@@ -101,6 +104,7 @@ def _orchestrated_state(roots):
         },
         generator_source_commit=APPROVED_COMMIT,
         orchestration_record=manifest_path,
+        allowlist_path=private_allowlist,
         candidate_records=candidates,
     )
 
@@ -182,6 +186,14 @@ def test_historical_file_masquerade_fails_provenance_checksum(tmp_path):
     candidate.write_bytes(b"%PDF-1.4\nhistorical candidate with same name\n%%EOF\n")
 
     with pytest.raises(FigureAcceptanceError, match="candidate checksum mismatch"):
+        _accept(tmp_path, state)
+
+
+def test_private_allowlist_mutation_fails_before_acceptance(tmp_path):
+    _roots, state = _acceptance_fixture(tmp_path)
+    state.allowlist_path.write_bytes(state.allowlist_path.read_bytes() + b"\n")
+
+    with pytest.raises(FigureAcceptanceError, match="allowlist mutated"):
         _accept(tmp_path, state)
 
 
@@ -280,6 +292,9 @@ def test_success_writes_hash_source_maps_and_generated_previews(tmp_path):
     assert payload["source_commit"] == SOURCE_COMMIT
     assert payload["release"]["source_commit"] == SOURCE_COMMIT
     assert payload["allowlist"]["sha256"] == _sha256(DEFAULT_ALLOWLIST)
+    assert (
+        payload["allowlist"]["path"] == "provenance/approved_candidate_allowlist.json"
+    )
     assert payload["review"]["index_pages"] == 3
     assert payload["review"]["page_count"] == 41
     assert payload["review"]["sha256"] == _sha256(outputs.review_pdf)

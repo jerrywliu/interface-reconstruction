@@ -8,6 +8,7 @@ import os
 import re
 import stat
 import subprocess
+from datetime import datetime, timezone
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import Mapping, Optional
@@ -42,7 +43,12 @@ class ApprovalRecord:
     approved_generator_commit: str
     approved_generator_tree: str
     scientific_release_commit: str
+    release_sha256sums_sha256: str
     allowlist_sha256: str
+    candidate_contract: Mapping[str, int]
+    orchestrator_schema_version: int
+    approval_status: str
+    revoked: bool
     approved_by: str
     approved_at_utc: str
 
@@ -55,7 +61,7 @@ def sanitized_git_environment(
 ) -> dict[str, str]:
     """Return a minimal Git environment with caller Git configuration removed."""
 
-    source = os.environ if base is None else base
+    source = {} if base is None else base
     keep = (
         "TMPDIR",
         "TMP",
@@ -395,6 +401,55 @@ def materialize_approved_source(
     )
 
 
+def verify_materialized_source(
+    repository: Path,
+    approved_commit: str,
+    source: Path,
+    attestation: CheckoutAttestation,
+) -> None:
+    """Re-attest a materialized source tree before and after generator execution."""
+
+    repository = Path(repository).resolve()
+    source = Path(source).resolve()
+    object_format = _object_format(repository)
+    commit_tree = _commit_tree(repository, approved_commit, object_format)
+    if (
+        commit_tree != attestation.commit_tree
+        or attestation.materialized_manifest_sha256
+        != attestation.checkout_manifest_sha256
+    ):
+        raise GeneratorCheckoutError("Materialized source attestation is inconsistent")
+    records = _tree_records(repository, commit_tree)
+    if _inventory_digest(records) != attestation.checkout_manifest_sha256:
+        raise GeneratorCheckoutError("Approved source inventory changed")
+    expected_paths = {relative for _mode, _oid, relative in records}
+    actual_paths = {
+        path.relative_to(source).as_posix()
+        for path in source.rglob("*")
+        if path.is_file() or path.is_symlink()
+    }
+    if actual_paths != expected_paths:
+        raise GeneratorCheckoutError(
+            "Materialized source contains missing or unexpected files"
+        )
+    for directory in (source, *(path for path in source.rglob("*") if path.is_dir())):
+        if stat.S_IMODE(directory.stat().st_mode) != 0o555:
+            raise GeneratorCheckoutError(
+                f"Materialized source directory mode changed: {directory}"
+            )
+    for mode, expected_oid, relative in records:
+        data = _working_tree_blob(source, mode, relative)
+        if _object_oid(data, "blob", object_format) != expected_oid:
+            raise GeneratorCheckoutError(
+                f"Materialized source bytes changed: {relative}"
+            )
+        expected_mode = 0o555 if mode == "100755" else 0o444
+        if stat.S_IMODE((source / relative).stat().st_mode) != expected_mode:
+            raise GeneratorCheckoutError(
+                f"Materialized source mode changed: {relative}"
+            )
+
+
 def verify_external_approval_record(
     path: Path,
     expected_sha256: str,
@@ -403,7 +458,10 @@ def verify_external_approval_record(
     approved_commit: str,
     approved_tree: str,
     scientific_release_commit: str,
+    release_sha256sums_sha256: str,
     allowlist_sha256: str,
+    candidate_contract: Mapping[str, int],
+    orchestrator_schema_version: int,
 ) -> ApprovalRecord:
     """Verify the separately reviewed approval record for the exact final commit."""
 
@@ -440,29 +498,70 @@ def verify_external_approval_record(
     if not isinstance(payload, dict):
         raise GeneratorCheckoutError("Approval record JSON root must be an object")
     expected = {
-        "schema_version": 1,
-        "record_type": "final_figure_generator_approval",
+        "schema_version": 2,
+        "record_type": "final_figure_orchestration_approval",
+        "approval_status": "approved",
+        "revoked": False,
         "approved_generator_commit": approved_commit,
         "approved_generator_tree": approved_tree,
         "scientific_release_commit": scientific_release_commit,
+        "release_sha256sums_sha256": release_sha256sums_sha256,
         "allowlist_sha256": allowlist_sha256,
+        "candidate_contract": dict(candidate_contract),
+        "orchestrator_schema_version": orchestrator_schema_version,
     }
+    allowed_fields = set(expected) | {"approved_by", "approved_at_utc"}
+    missing = allowed_fields - set(payload)
+    unknown = set(payload) - allowed_fields
+    if missing:
+        raise GeneratorCheckoutError(
+            "Approval record is missing fields: " + ", ".join(sorted(missing))
+        )
+    if unknown:
+        raise GeneratorCheckoutError(
+            "Approval record has unknown fields: " + ", ".join(sorted(unknown))
+        )
     for key, value in expected.items():
         if payload.get(key) != value:
             raise GeneratorCheckoutError(f"Approval record field {key} does not match")
     approved_by = payload.get("approved_by")
     approved_at = payload.get("approved_at_utc")
-    if not isinstance(approved_by, str) or not approved_by.strip():
-        raise GeneratorCheckoutError("Approval record lacks approved_by")
-    if not isinstance(approved_at, str) or not approved_at.strip():
-        raise GeneratorCheckoutError("Approval record lacks approved_at_utc")
+    if (
+        not isinstance(approved_by, str)
+        or not 3 <= len(approved_by.strip()) <= 200
+        or any(ord(character) < 32 for character in approved_by)
+    ):
+        raise GeneratorCheckoutError(
+            "Approval record approved_by must be 3-200 printable characters"
+        )
+    if not isinstance(approved_at, str) or not re.fullmatch(
+        r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", approved_at
+    ):
+        raise GeneratorCheckoutError(
+            "Approval record approved_at_utc must be UTC YYYY-MM-DDTHH:MM:SSZ"
+        )
+    try:
+        parsed_at = datetime.strptime(approved_at, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc
+        )
+    except ValueError as exc:
+        raise GeneratorCheckoutError(
+            "Approval record approved_at_utc is not a valid UTC timestamp"
+        ) from exc
+    if not datetime(2000, 1, 1, tzinfo=timezone.utc) <= parsed_at:
+        raise GeneratorCheckoutError("Approval record timestamp predates policy")
     return ApprovalRecord(
         path=str(path),
         sha256=digest,
         approved_generator_commit=approved_commit,
         approved_generator_tree=approved_tree,
         scientific_release_commit=scientific_release_commit,
+        release_sha256sums_sha256=release_sha256sums_sha256,
         allowlist_sha256=allowlist_sha256,
+        candidate_contract=dict(candidate_contract),
+        orchestrator_schema_version=orchestrator_schema_version,
+        approval_status="approved",
+        revoked=False,
         approved_by=approved_by.strip(),
         approved_at_utc=approved_at.strip(),
     )

@@ -15,12 +15,12 @@ import math
 import os
 import re
 import shutil
-import subprocess
 import sys
 import tempfile
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path, PurePosixPath
-from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Callable, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
 
 from PIL import Image, UnidentifiedImageError
 
@@ -31,6 +31,12 @@ if str(REPO_ROOT) not in sys.path:
 
 from submission.final_figure_provenance import file_sha256
 from submission.pdf_vector_qa import PdfQaError, PdfQaReport, inspect_pdf
+from submission.trusted_figure_runtime import (
+    TrustedFigureRuntime,
+    TrustedFigureRuntimeError,
+    prepare_trusted_figure_runtime,
+    run_attested_tool,
+)
 
 
 DEFAULT_ALLOWLIST = Path(__file__).with_name("final_figure_candidates.json")
@@ -103,6 +109,8 @@ class _OrchestratedAcceptanceState:
     generator_source_commit: str
     orchestration_record: Path
     orchestration_record_sha256: str
+    allowlist_path: Path
+    allowlist_sha256: str
     candidate_records: Tuple[Mapping[str, object], ...]
 
 
@@ -138,6 +146,7 @@ def _create_orchestrated_acceptance_state(
     release_anchor: Mapping[str, object],
     generator_source_commit: str,
     orchestration_record: Path,
+    allowlist_path: Path,
     candidate_records: Sequence[Mapping[str, object]],
 ) -> _OrchestratedAcceptanceState:
     """Create the process-local capability consumed by internal acceptance."""
@@ -146,6 +155,7 @@ def _create_orchestrated_acceptance_state(
     figure_root = Path(figure_root).resolve()
     c0_root = Path(c0_root).resolve()
     orchestration_record = Path(orchestration_record).resolve()
+    allowlist_path = Path(allowlist_path).resolve()
     expected_roots = {
         "figure_root": (snapshot_root / "candidates" / "figure_root").resolve(),
         "c0_root": (snapshot_root / "candidates" / "c0_root").resolve(),
@@ -161,6 +171,10 @@ def _create_orchestrated_acceptance_state(
         snapshot_root, orchestration_record
     ):
         raise FigureAcceptanceError("Orchestration record is outside private staging")
+    if not allowlist_path.is_file() or not _root_contains(
+        snapshot_root, allowlist_path
+    ):
+        raise FigureAcceptanceError("Approved allowlist is outside private staging")
     if not isinstance(release_anchor.get("source_commit"), str):
         raise FigureAcceptanceError("Orchestration state lacks a release source commit")
     if not re.fullmatch(r"[0-9a-fA-F]{40}", generator_source_commit or ""):
@@ -176,6 +190,8 @@ def _create_orchestrated_acceptance_state(
         generator_source_commit=generator_source_commit,
         orchestration_record=orchestration_record,
         orchestration_record_sha256=file_sha256(orchestration_record),
+        allowlist_path=allowlist_path,
+        allowlist_sha256=file_sha256(allowlist_path),
         candidate_records=tuple(dict(record) for record in candidate_records),
     )
 
@@ -412,29 +428,34 @@ def _candidate_provenance_from_state(
     return evidence
 
 
-def _run_text_tool(command: Sequence[str]) -> str:
+@contextmanager
+def _runtime_or_temporary(
+    runtime: Optional[TrustedFigureRuntime],
+) -> Iterator[TrustedFigureRuntime]:
+    if runtime is not None:
+        yield runtime
+        return
+    with tempfile.TemporaryDirectory(prefix="figure-acceptance-runtime-") as raw:
+        try:
+            yield prepare_trusted_figure_runtime(Path(raw) / "runtime")
+        except TrustedFigureRuntimeError as exc:
+            raise FigureAcceptanceError(str(exc)) from exc
+
+
+def _run_text_tool(
+    runtime: TrustedFigureRuntime, name: str, arguments: Sequence[str]
+) -> str:
     try:
-        completed = subprocess.run(
-            command,
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-    except FileNotFoundError as exc:
-        raise FigureAcceptanceError(
-            f"Required tool is unavailable: {command[0]}"
-        ) from exc
-    except subprocess.CalledProcessError as exc:
-        detail = (exc.stderr or exc.stdout or "unknown error").strip()
-        raise FigureAcceptanceError(f"{' '.join(command)} failed: {detail}") from exc
-    except subprocess.TimeoutExpired as exc:
-        raise FigureAcceptanceError(f"{' '.join(command)} timed out") from exc
-    return completed.stdout
+        return run_attested_tool(runtime, name, arguments)
+    except TrustedFigureRuntimeError as exc:
+        raise FigureAcceptanceError(str(exc)) from exc
 
 
-def pdf_page_info(path: Path) -> PdfPageInfo:
-    output = _run_text_tool(("pdfinfo", str(Path(path).resolve())))
+def pdf_page_info(
+    path: Path, *, runtime: Optional[TrustedFigureRuntime] = None
+) -> PdfPageInfo:
+    with _runtime_or_temporary(runtime) as active_runtime:
+        output = _run_text_tool(active_runtime, "pdfinfo", (str(Path(path).resolve()),))
     page_match = re.search(r"^Pages:\s+(\d+)\s*$", output, flags=re.MULTILINE)
     size_match = re.search(
         r"^Page size:\s+([0-9.]+) x ([0-9.]+) pts", output, flags=re.MULTILINE
@@ -457,25 +478,28 @@ def render_pdf_preview(
     *,
     dpi: int = 300,
     page: int = 1,
+    runtime: Optional[TrustedFigureRuntime] = None,
 ) -> None:
     output_path = Path(output_path).resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     prefix = output_path.with_suffix("")
-    _run_text_tool(
-        (
+    with _runtime_or_temporary(runtime) as active_runtime:
+        _run_text_tool(
+            active_runtime,
             "pdftocairo",
-            "-png",
-            "-singlefile",
-            "-r",
-            str(dpi),
-            "-f",
-            str(page),
-            "-l",
-            str(page),
-            str(Path(pdf_path).resolve()),
-            str(prefix),
+            (
+                "-png",
+                "-singlefile",
+                "-r",
+                str(dpi),
+                "-f",
+                str(page),
+                "-l",
+                str(page),
+                str(Path(pdf_path).resolve()),
+                str(prefix),
+            ),
         )
-    )
     if not output_path.is_file():
         raise FigureAcceptanceError(f"PDF renderer did not produce {output_path}")
 
@@ -631,6 +655,7 @@ def build_vector_review_pdf(
     output: Path,
     *,
     source_commit: str,
+    runtime: Optional[TrustedFigureRuntime] = None,
 ) -> None:
     output = Path(output).resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -641,10 +666,11 @@ def build_vector_review_pdf(
         index_pdf = temporary / "index.pdf"
         merged_pdf = temporary / "review.pdf"
         _write_vector_index(index_pdf, records, source_commit=source_commit)
-        command = ["pdfunite", str(index_pdf)]
-        command.extend(str(record.pdf_path) for record in records)
-        command.append(str(merged_pdf))
-        _run_text_tool(command)
+        arguments = [str(index_pdf)]
+        arguments.extend(str(record.pdf_path) for record in records)
+        arguments.append(str(merged_pdf))
+        with _runtime_or_temporary(runtime) as active_runtime:
+            _run_text_tool(active_runtime, "pdfunite", arguments)
         os.replace(merged_pdf, output)
 
 
@@ -792,7 +818,6 @@ def _accept_orchestrated_candidates(
     *,
     orchestration_state: _OrchestratedAcceptanceState,
     output_dir: Path,
-    allowlist_path: Path = DEFAULT_ALLOWLIST,
     pdf_inspector: Callable[..., PdfQaReport] = inspect_pdf,
     page_inspector: Callable[[Path], PdfPageInfo] = pdf_page_info,
     preview_renderer: Callable[..., None] = render_pdf_preview,
@@ -809,6 +834,11 @@ def _accept_orchestrated_candidates(
     }
     output_dir = Path(output_dir).resolve()
     _validate_invocation(roots, output_dir)
+    allowlist_path = orchestration_state.allowlist_path
+    if file_sha256(allowlist_path) != orchestration_state.allowlist_sha256:
+        raise FigureAcceptanceError(
+            "Private approved allowlist mutated before acceptance"
+        )
     specs = load_candidate_allowlist(allowlist_path)
     verify_candidate_inventory(specs, roots)
     provenance = _candidate_provenance_from_state(specs, roots, orchestration_state)
@@ -940,7 +970,7 @@ def _accept_orchestrated_candidates(
             "release_source_commit": source_commit,
             "release": anchor,
             "allowlist": {
-                "path": "submission/final_figure_candidates.json",
+                "path": allowlist_path.relative_to(snapshot_root).as_posix(),
                 "sha256": _sha256(Path(allowlist_path).resolve()),
                 "expected_counts": EXPECTED_COUNTS,
             },

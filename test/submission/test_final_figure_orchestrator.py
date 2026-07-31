@@ -4,9 +4,11 @@ import hashlib
 import csv
 import subprocess
 import sys
+import stat
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from experiments.static import run_perturbed_sweeps
 from submission.final_figure_orchestrator import (
@@ -17,6 +19,7 @@ from submission.final_figure_orchestrator import (
     MAINTEXT_CASES,
     MAINTEXT_METHODS,
     PROFILE,
+    ORCHESTRATION_SCHEMA_VERSION,
     RESOLUTION_CASES,
     RESOLUTION_VALUES,
     RESOLUTION_WIGGLES,
@@ -42,8 +45,14 @@ from submission.generator_checkout import (
     materialize_approved_source,
     verify_external_approval_record,
     verify_generator_checkout,
+    verify_materialized_source,
 )
-from submission.accept_figure_candidates import load_candidate_allowlist
+from submission.accept_figure_candidates import (
+    EXPECTED_COUNTS,
+    load_candidate_allowlist,
+    pdf_page_info,
+)
+from submission.trusted_figure_runtime import prepare_trusted_figure_runtime
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -184,12 +193,107 @@ def test_materialized_source_excludes_ignored_pyc_and_survives_live_edit(tmp_pat
         assert (source / "generator.py").read_text(
             encoding="utf-8"
         ) == "approved = True\n"
-        env = _generator_environment(repo, source)
+        runtime = prepare_trusted_figure_runtime(tmp_path / "trusted-runtime")
+        env = _generator_environment(repo, source, runtime)
         assert env["PYTHONPATH"] == str(source.resolve())
         assert env["PYTHONDONTWRITEBYTECODE"] == "1"
         assert env["GIT_NO_REPLACE_OBJECTS"] == "1"
+        assert env["HOME"].startswith(str(tmp_path / "trusted-runtime"))
     finally:
         _remove_tree(source)
+
+
+def test_materialized_source_reattestation_rejects_late_pyc(tmp_path):
+    repo, _tracked, _historical, release, approved = _git_repo(tmp_path)
+    attestation = verify_generator_checkout(repo, approved, release)
+    source = tmp_path / "materialized"
+    attestation = materialize_approved_source(repo, approved, source, attestation)
+    source.chmod(0o755)
+    pycache = source / "__pycache__"
+    pycache.mkdir()
+    (pycache / "generator.cpython-39.pyc").write_bytes(b"late malicious bytecode")
+    with pytest.raises(GeneratorCheckoutError, match="missing or unexpected"):
+        verify_materialized_source(repo, approved, source, attestation)
+    _remove_tree(source)
+
+
+def test_poppler_ignores_fake_caller_path_and_records_exact_tools(
+    tmp_path, monkeypatch
+):
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    marker = tmp_path / "fake-tool-ran"
+    for name in ("pdfinfo", "pdftocairo", "pdfunite", "pdfimages", "pdffonts"):
+        tool = fake_bin / name
+        tool.write_text(
+            f"#!/bin/sh\necho forged > {marker}\nexit 99\n", encoding="utf-8"
+        )
+        tool.chmod(0o755)
+    monkeypatch.setenv("PATH", str(fake_bin))
+
+    runtime = prepare_trusted_figure_runtime(tmp_path / "trusted-runtime")
+    assert set(runtime.tools) == {
+        "pdfinfo",
+        "pdftocairo",
+        "pdfunite",
+        "pdfimages",
+        "pdffonts",
+    }
+    assert all(
+        not record.path.startswith(str(fake_bin)) for record in runtime.tools.values()
+    )
+    assert all(
+        len(record.sha256) == 64 and record.version for record in runtime.tools.values()
+    )
+    assert all(font["version"] != "unknown" for font in runtime.attestation["fonts"])
+
+    from reportlab.pdfgen import canvas
+
+    pdf = tmp_path / "one-page.pdf"
+    drawing = canvas.Canvas(str(pdf), pagesize=(72, 72))
+    drawing.drawString(5, 36, "trusted")
+    drawing.save()
+    assert pdf_page_info(pdf, runtime=runtime).page_count == 1
+    assert not marker.exists()
+
+
+def test_generator_environment_ignores_hostile_matplotlib_and_home_config(
+    tmp_path, monkeypatch
+):
+    repo, _tracked, _historical, release, approved = _git_repo(tmp_path)
+    attestation = verify_generator_checkout(repo, approved, release)
+    source = tmp_path / "materialized"
+    materialize_approved_source(repo, approved, source, attestation)
+    attacker = tmp_path / "attacker-home"
+    attacker_mpl = attacker / ".config" / "matplotlib"
+    attacker_mpl.mkdir(parents=True)
+    (attacker_mpl / "matplotlibrc").write_text(
+        "figure.facecolor: red\nsavefig.facecolor: red\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("HOME", str(attacker))
+    monkeypatch.setenv("MPLCONFIGDIR", str(attacker_mpl))
+    monkeypatch.setenv("MPLBACKEND", "TkAgg")
+    monkeypatch.setenv("FONTCONFIG_PATH", str(attacker))
+    monkeypatch.setenv("TEXINPUTS", str(attacker))
+
+    runtime = prepare_trusted_figure_runtime(tmp_path / "trusted-runtime")
+    env = _generator_environment(repo, source, runtime)
+    output = tmp_path / "facecolor.png"
+    script = (
+        "import matplotlib, matplotlib.pyplot as plt; "
+        "assert matplotlib.rcParams['figure.facecolor'] == 'white'; "
+        "fig=plt.figure(figsize=(1,1)); fig.savefig(r'" + str(output) + "', dpi=20)"
+    )
+    subprocess.run([sys.executable, "-c", script], check=True, env=env)
+    with Image.open(output) as image:
+        image.load()
+        assert image.convert("RGB").getpixel((0, 0)) == (255, 255, 255)
+    assert env["HOME"] != str(attacker)
+    assert env["MPLCONFIGDIR"] != str(attacker_mpl)
+    assert env["MPLBACKEND"] == "Agg"
+    assert env["LC_ALL"] == "C" and env["TZ"] == "UTC"
+    assert env["PYTHONHASHSEED"] == "0"
+    _remove_tree(source)
 
 
 def test_external_approval_record_pins_final_commit_tree_and_digest(tmp_path):
@@ -198,13 +302,19 @@ def test_external_approval_record_pins_final_commit_tree_and_digest(tmp_path):
     allowlist = tmp_path / "allowlist.json"
     allowlist.write_text("{}\n", encoding="utf-8")
     approval = tmp_path / "approval.json"
+    release_ledger_sha256 = "b" * 64
     payload = {
-        "schema_version": 1,
-        "record_type": "final_figure_generator_approval",
+        "schema_version": 2,
+        "record_type": "final_figure_orchestration_approval",
+        "approval_status": "approved",
+        "revoked": False,
         "approved_generator_commit": approved,
         "approved_generator_tree": attestation.commit_tree,
         "scientific_release_commit": release,
+        "release_sha256sums_sha256": release_ledger_sha256,
         "allowlist_sha256": hashlib.sha256(allowlist.read_bytes()).hexdigest(),
+        "candidate_contract": EXPECTED_COUNTS,
+        "orchestrator_schema_version": ORCHESTRATION_SCHEMA_VERSION,
         "approved_by": "independent reviewer",
         "approved_at_utc": "2026-07-31T12:00:00Z",
     }
@@ -217,9 +327,14 @@ def test_external_approval_record_pins_final_commit_tree_and_digest(tmp_path):
         approved_commit=approved,
         approved_tree=attestation.commit_tree,
         scientific_release_commit=release,
+        release_sha256sums_sha256=release_ledger_sha256,
         allowlist_sha256=payload["allowlist_sha256"],
+        candidate_contract=EXPECTED_COUNTS,
+        orchestrator_schema_version=ORCHESTRATION_SCHEMA_VERSION,
     )
     assert record.approved_generator_commit == approved
+    assert record.release_sha256sums_sha256 == release_ledger_sha256
+    assert record.candidate_contract == EXPECTED_COUNTS
     payload["approved_generator_commit"] = release
     _write_json(approval, payload)
     with pytest.raises(GeneratorCheckoutError, match="SHA-256 does not match"):
@@ -230,7 +345,10 @@ def test_external_approval_record_pins_final_commit_tree_and_digest(tmp_path):
             approved_commit=approved,
             approved_tree=attestation.commit_tree,
             scientific_release_commit=release,
+            release_sha256sums_sha256=release_ledger_sha256,
             allowlist_sha256=record.allowlist_sha256,
+            candidate_contract=EXPECTED_COUNTS,
+            orchestrator_schema_version=ORCHESTRATION_SCHEMA_VERSION,
         )
     approval_link = tmp_path / "approval-link.json"
     approval_link.symlink_to(approval)
@@ -242,7 +360,61 @@ def test_external_approval_record_pins_final_commit_tree_and_digest(tmp_path):
             approved_commit=approved,
             approved_tree=attestation.commit_tree,
             scientific_release_commit=release,
+            release_sha256sums_sha256=release_ledger_sha256,
             allowlist_sha256=record.allowlist_sha256,
+            candidate_contract=EXPECTED_COUNTS,
+            orchestrator_schema_version=ORCHESTRATION_SCHEMA_VERSION,
+        )
+
+
+@pytest.mark.parametrize(
+    "mutation,match",
+    [
+        ({"approval_status": "pending"}, "approval_status"),
+        ({"revoked": True}, "revoked"),
+        ({"release_sha256sums_sha256": "c" * 64}, "release_sha256sums"),
+        ({"approved_by": "x"}, "approved_by"),
+        ({"approved_at_utc": "not-a-time"}, "approved_at_utc"),
+        ({"unexpected_authority": "forged"}, "unknown fields"),
+    ],
+)
+def test_external_approval_rejects_wrong_status_revocation_or_schema_fields(
+    tmp_path, mutation, match
+):
+    repo, _tracked, _historical, release, approved = _git_repo(tmp_path)
+    attestation = verify_generator_checkout(repo, approved, release)
+    allowlist_sha256 = "a" * 64
+    release_ledger_sha256 = "b" * 64
+    payload = {
+        "schema_version": 2,
+        "record_type": "final_figure_orchestration_approval",
+        "approval_status": "approved",
+        "revoked": False,
+        "approved_generator_commit": approved,
+        "approved_generator_tree": attestation.commit_tree,
+        "scientific_release_commit": release,
+        "release_sha256sums_sha256": release_ledger_sha256,
+        "allowlist_sha256": allowlist_sha256,
+        "candidate_contract": EXPECTED_COUNTS,
+        "orchestrator_schema_version": ORCHESTRATION_SCHEMA_VERSION,
+        "approved_by": "independent reviewer",
+        "approved_at_utc": "2026-07-31T12:00:00Z",
+    }
+    payload.update(mutation)
+    approval = tmp_path / "approval.json"
+    _write_json(approval, payload)
+    with pytest.raises(GeneratorCheckoutError, match=match):
+        verify_external_approval_record(
+            approval,
+            file_sha256(approval),
+            repository=repo,
+            approved_commit=approved,
+            approved_tree=attestation.commit_tree,
+            scientific_release_commit=release,
+            release_sha256sums_sha256=release_ledger_sha256,
+            allowlist_sha256=allowlist_sha256,
+            candidate_contract=EXPECTED_COUNTS,
+            orchestrator_schema_version=ORCHESTRATION_SCHEMA_VERSION,
         )
 
 
@@ -475,16 +647,36 @@ def test_resolution_inputs_require_quantitative_and_geometry_evidence(tmp_path):
         "w", newline="", encoding="utf-8"
     ) as stream:
         writer = csv.DictWriter(
-            stream, fieldnames=("case_index", "hausdorff", "facet_gap")
+            stream,
+            fieldnames=(
+                "case_index",
+                "hausdorff",
+                "facet_gap",
+                "area_error",
+                "curvature_error",
+                "tangent_error",
+                "curvature_proxy_error",
+            ),
         )
         writer.writeheader()
-        writer.writerow({"case_index": 0, "hausdorff": 0.0, "facet_gap": 0.0})
+        writer.writerow(
+            {
+                "case_index": 0,
+                "hausdorff": 0.0,
+                "facet_gap": 0.0,
+                "area_error": 0.0,
+                "curvature_error": 0.0,
+                "tangent_error": 0.0,
+                "curvature_proxy_error": 0.0,
+            }
+        )
     (metrics / "case_geometry.jsonl").write_text(
         json.dumps({"case_index": 0, "geometry_type": "line"}) + "\n",
         encoding="utf-8",
     )
     truth = run / "vtk" / "true" / "true_line0.vtp"
     truth.parent.mkdir(parents=True)
+    # Line truth is analytic in the plotter; a saved VTP must remain unclaimed.
     truth.write_bytes(b"truth")
     paths = resolution_input_paths(
         tmp_path / "plots",
@@ -492,7 +684,30 @@ def test_resolution_inputs_require_quantitative_and_geometry_evidence(tmp_path):
         save_name="resolution",
         case_index=0,
     )
-    assert len(paths) == 6
+    assert len(paths) == 5
+    assert all(role != "resolution_truth_geometry" for _path, role in paths)
+
+    square_truth = run / "vtk" / "true" / "true_square0.vtp"
+    square_truth.write_bytes(b"square truth consumed by the plot")
+    square_paths = resolution_input_paths(
+        tmp_path / "plots",
+        experiment="squares",
+        save_name="resolution",
+        case_index=0,
+        include_consumed_truth=True,
+    )
+    assert square_paths[-1] == (square_truth, "resolution_truth_geometry")
+
+    circle_truth = run / "vtk" / "true" / "true_circle0.vtp"
+    circle_truth.write_bytes(b"circle truth consumed by the plot")
+    circle_paths = resolution_input_paths(
+        tmp_path / "plots",
+        experiment="circles",
+        save_name="resolution",
+        case_index=0,
+        include_consumed_truth=True,
+    )
+    assert circle_paths[-1] == (circle_truth, "resolution_truth_geometry")
     (metrics / "case_geometry.jsonl").unlink()
     with pytest.raises(FinalFigureOrchestrationError, match="JSONL is missing"):
         resolution_input_paths(
@@ -732,6 +947,7 @@ def test_candidate_mutation_after_acceptance_cleans_up_and_publishes_nothing(tmp
             manifest_path=manifest,
             acceptance_runner=lambda **_kwargs: None,
             acceptance_kwargs={},
+            candidate_specs=load_candidate_allowlist(),
             after_acceptance_hook=mutate,
         )
     assert not output.exists()
@@ -764,6 +980,38 @@ def test_destination_race_never_replaces_competing_output(tmp_path):
     assert not staging.exists()
 
 
+def test_mutation_of_frozen_publish_tree_fails_final_locked_rehash(tmp_path):
+    staging = tmp_path / ".publication.staging-test"
+    staging.mkdir()
+    manifest = staging / "provenance" / "final_figure_orchestration.json"
+    atomic_write_json(manifest, {"snapshot_artifacts": [], "candidates": []})
+    output = tmp_path / "publication"
+    reservation = _reserve_publication(output)
+
+    def mutate_frozen_tree(root):
+        target = root / "provenance" / "final_figure_orchestration.json"
+        target.chmod(0o600)
+        target.write_text("late mutation\n", encoding="utf-8")
+        target.chmod(0o400)
+
+    with pytest.raises(
+        FinalFigureOrchestrationError, match="Frozen publication artifact mutated"
+    ):
+        finalize_publication(
+            staging=staging,
+            output_root=output,
+            reservation=reservation,
+            manifest_path=manifest,
+            acceptance_runner=lambda **_kwargs: None,
+            acceptance_kwargs={},
+            after_publish_freeze_hook=mutate_frozen_tree,
+        )
+    assert not output.exists()
+    assert not staging.exists()
+    assert not list(tmp_path.glob(".publication.publish-*"))
+    assert not list(tmp_path.glob(".publication.final-figure-reservation"))
+
+
 def test_publication_reservation_rejects_dangling_destination_symlink(tmp_path):
     output = tmp_path / "publication"
     output.symlink_to(tmp_path / "missing-target", target_is_directory=True)
@@ -789,4 +1037,9 @@ def test_successful_publication_uses_atomic_no_replace(tmp_path):
     )
     assert output.is_dir()
     assert (output / "provenance" / "published_tree_sha256.json").is_file()
+    assert stat.S_IMODE(output.stat().st_mode) == 0o500
+    assert all(
+        stat.S_IMODE(path.stat().st_mode) == (0o500 if path.is_dir() else 0o400)
+        for path in output.rglob("*")
+    )
     assert not staging.exists()

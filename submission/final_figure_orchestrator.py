@@ -7,6 +7,7 @@ import argparse
 import csv
 import ctypes
 import errno
+import fcntl
 import hashlib
 import json
 import os
@@ -18,7 +19,8 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
+from functools import partial
+from pathlib import Path, PurePosixPath
 from typing import Callable, Mapping, Optional, Sequence
 
 
@@ -28,10 +30,14 @@ if str(REPO_ROOT) not in sys.path:
 
 from submission.accept_figure_candidates import (
     DEFAULT_ALLOWLIST,
+    EXPECTED_COUNTS,
     FigureAcceptanceError,
     _accept_orchestrated_candidates,
     _create_orchestrated_acceptance_state,
+    build_vector_review_pdf,
     load_candidate_allowlist,
+    pdf_page_info,
+    render_pdf_preview,
 )
 from submission.audit_final_release import audit_final_release, verify_sha256_manifest
 from submission.final_figure_provenance import (
@@ -52,6 +58,13 @@ from submission.generator_checkout import (
     sanitized_git_environment,
     verify_external_approval_record,
     verify_generator_checkout,
+    verify_materialized_source,
+)
+from submission.pdf_vector_qa import inspect_pdf
+from submission.trusted_figure_runtime import (
+    TrustedFigureRuntime,
+    TrustedFigureRuntimeError,
+    prepare_trusted_figure_runtime,
 )
 
 
@@ -165,6 +178,9 @@ ALL_METHOD_FILES = {
     "zalesak": "zalesak_all_methods_2x2.pdf",
 }
 ORCHESTRATION_MANIFEST = "provenance/final_figure_orchestration.json"
+PRIVATE_ALLOWLIST = "provenance/approved_candidate_allowlist.json"
+PUBLISHED_TREE_LEDGER = "provenance/published_tree_sha256.json"
+ORCHESTRATION_SCHEMA_VERSION = 3
 C0_METRIC_BASES = {
     "ellipses": (
         "curvature_error",
@@ -211,11 +227,13 @@ def _remove_tree(path: Path) -> None:
     shutil.rmtree(path)
 
 
-@dataclass(frozen=True)
+@dataclass
 class PublicationReservation:
     path: Path
     device: int
     inode: int
+    descriptor: int
+    released: bool = False
 
 
 @dataclass(frozen=True)
@@ -240,7 +258,7 @@ def _reserve_publication(output_root: Path) -> PublicationReservation:
     try:
         descriptor = os.open(
             reservation,
-            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            os.O_RDWR | os.O_CREAT | os.O_EXCL,
             0o600,
         )
     except FileExistsError as exc:
@@ -248,21 +266,33 @@ def _reserve_publication(output_root: Path) -> PublicationReservation:
             f"Publication destination is already reserved: {output_root}"
         ) from exc
     try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         payload = f"pid={os.getpid()}\noutput={output_root}\n".encode("utf-8")
         os.write(descriptor, payload)
         os.fsync(descriptor)
         info = os.fstat(descriptor)
-    finally:
+    except Exception:
         os.close(descriptor)
-    if output_root.exists():
         reservation.unlink(missing_ok=True)
+        raise
+    if os.path.lexists(output_root):
+        reservation.unlink(missing_ok=True)
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
         raise FinalFigureOrchestrationError(
             f"Output root appeared during reservation: {output_root}"
         )
-    return PublicationReservation(reservation, info.st_dev, info.st_ino)
+    return PublicationReservation(reservation, info.st_dev, info.st_ino, descriptor)
 
 
 def _verify_reservation(reservation: PublicationReservation) -> None:
+    _require(not reservation.released, "Publication reservation is already released")
+    try:
+        descriptor_info = os.fstat(reservation.descriptor)
+    except OSError as exc:
+        raise FinalFigureOrchestrationError(
+            "Publication reservation lock descriptor is unavailable"
+        ) from exc
     try:
         info = reservation.path.lstat()
     except FileNotFoundError as exc:
@@ -274,15 +304,32 @@ def _verify_reservation(reservation: PublicationReservation) -> None:
         and (info.st_dev, info.st_ino) == (reservation.device, reservation.inode),
         "Publication reservation was replaced",
     )
+    _require(
+        (descriptor_info.st_dev, descriptor_info.st_ino)
+        == (reservation.device, reservation.inode),
+        "Publication reservation descriptor was replaced",
+    )
 
 
 def _release_reservation(reservation: PublicationReservation) -> None:
+    if reservation.released:
+        return
     try:
         info = reservation.path.lstat()
     except FileNotFoundError:
-        return
-    if (info.st_dev, info.st_ino) == (reservation.device, reservation.inode):
-        reservation.path.unlink()
+        info = None
+    try:
+        if info is not None and (info.st_dev, info.st_ino) == (
+            reservation.device,
+            reservation.inode,
+        ):
+            reservation.path.unlink()
+    finally:
+        try:
+            fcntl.flock(reservation.descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(reservation.descriptor)
+            reservation.released = True
 
 
 def _rename_directory_noreplace(source: Path, destination: Path) -> None:
@@ -839,6 +886,7 @@ def resolution_input_paths(
     experiment: str,
     save_name: str,
     case_index: int,
+    include_consumed_truth: bool = False,
 ) -> list[tuple[Path, str]]:
     """Validate and return exact quantitative/geometry inputs for one panel run."""
 
@@ -903,10 +951,11 @@ def resolution_input_paths(
         (facet, "resolution_reconstructed_geometry"),
         (facet_metadata, "resolution_facet_metadata"),
     ]
-    if experiment == "lines":
+    if include_consumed_truth and experiment in {"squares", "circles"}:
+        stem = {"squares": "true_square", "circles": "true_circle"}[experiment]
         paths.append(
             (
-                run_root / "vtk" / "true" / f"true_line{case_index}.vtp",
+                run_root / "vtk" / "true" / f"{stem}{case_index}.vtp",
                 "resolution_truth_geometry",
             )
         )
@@ -1274,11 +1323,12 @@ def _copy_config_tree(source: Path, destination: Path) -> None:
             target.write_bytes(path.read_bytes())
 
 
-def _generator_environment(repository: Path, immutable_source: Path) -> dict[str, str]:
-    env = dict(os.environ)
-    for key in list(env):
-        if key.startswith("GIT_") or key.startswith("PYTHON"):
-            env.pop(key, None)
+def _generator_environment(
+    repository: Path,
+    immutable_source: Path,
+    runtime: TrustedFigureRuntime,
+) -> dict[str, str]:
+    env = dict(runtime.environment)
     env.update(sanitized_git_environment(env))
     env["PYTHONPATH"] = str(Path(immutable_source).resolve())
     env["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -1319,7 +1369,10 @@ def _copy_manifest(
 
 
 def _rehash_before_publish(
-    staging: Path, manifest_path: Path, manifest_digest: str
+    staging: Path,
+    manifest_path: Path,
+    manifest_digest: str,
+    candidate_specs: Sequence[object],
 ) -> None:
     _require(
         file_sha256(manifest_path) == manifest_digest,
@@ -1332,13 +1385,139 @@ def _rehash_before_publish(
             path.is_file() and file_sha256(path) == record["sha256"],
             f"Snapshot mutated before publish: {record['path']}",
         )
-    specs = {spec.candidate_id: spec for spec in load_candidate_allowlist()}
+    specs = {spec.candidate_id: spec for spec in candidate_specs}
     for record in payload.get("candidates", []):
+        _require(
+            record.get("candidate_id") in specs,
+            "Orchestration manifest names a candidate outside the private allowlist",
+        )
         spec = specs[record["candidate_id"]]
         path = staging / "candidates" / spec.root / spec.pdf
         _require(
             path.is_file() and file_sha256(path) == record["sha256"],
             f"Candidate mutated before publish: {spec.candidate_id}",
+        )
+
+
+def _verify_tree_records(root: Path, records: Sequence[Mapping[str, object]]) -> None:
+    indexed = {str(record["path"]): record for record in records}
+    _require(
+        len(indexed) == len(records), "Accepted staging inventory contains duplicates"
+    )
+    actual = set()
+    for path in root.rglob("*"):
+        _require(not path.is_symlink(), f"Accepted staging contains symlink: {path}")
+        _require(
+            path.is_file() or path.is_dir(),
+            f"Accepted staging contains non-regular entry: {path}",
+        )
+        if path.is_file():
+            actual.add(path.relative_to(root).as_posix())
+    _require(
+        actual == set(indexed), "Accepted staging inventory changed after acceptance"
+    )
+    for relative, record in indexed.items():
+        path = root / relative
+        _require(
+            not path.is_symlink()
+            and path.stat().st_size == record["size_bytes"]
+            and file_sha256(path) == record["sha256"],
+            f"Accepted staging artifact mutated: {relative}",
+        )
+
+
+def _copy_publication_tree(
+    source: Path,
+    destination: Path,
+    accepted_records: Sequence[Mapping[str, object]],
+) -> None:
+    """Checksum-copy the accepted build into a distinct private tree."""
+
+    _require(destination.is_dir(), f"Publication tree is unavailable: {destination}")
+    _verify_tree_records(source, accepted_records)
+    for record in sorted(accepted_records, key=lambda item: str(item["path"])):
+        relative = Path(str(record["path"]))
+        path = source / relative
+        target = destination / relative
+        target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        copy_verified_file(path, target, expected_sha256=str(record["sha256"]))
+    _verify_tree_records(source, accepted_records)
+
+
+def _published_tree_records(root: Path) -> list[dict]:
+    ledger = root / PUBLISHED_TREE_LEDGER
+    return [
+        snapshot_record(path, root, "published_artifact")
+        for path in sorted(root.rglob("*"))
+        if path.is_file() and path != ledger
+    ]
+
+
+def _verify_frozen_publication_tree(root: Path, *, ledger_sha256: str) -> None:
+    """Rehash the exact sealed tree immediately before atomic publication."""
+
+    ledger = root / PUBLISHED_TREE_LEDGER
+    _require(
+        ledger.is_file() and file_sha256(ledger) == ledger_sha256,
+        "Published-tree ledger mutated before publication",
+    )
+    payload = load_json_object(ledger)
+    _require(
+        set(payload) == {"schema_version", "files"}
+        and payload.get("schema_version") == 1
+        and isinstance(payload.get("files"), list),
+        "Published-tree ledger schema is invalid",
+    )
+    records = payload["files"]
+    indexed: dict[str, dict] = {}
+    for record in records:
+        _require(
+            isinstance(record, dict)
+            and set(record) == {"role", "path", "sha256", "size_bytes"}
+            and record.get("role") == "published_artifact",
+            "Published-tree ledger contains a malformed record",
+        )
+        relative = record["path"]
+        pure = PurePosixPath(relative) if isinstance(relative, str) else None
+        _require(
+            pure is not None
+            and not pure.is_absolute()
+            and "." not in pure.parts
+            and ".." not in pure.parts
+            and relative not in indexed
+            and relative != PUBLISHED_TREE_LEDGER,
+            "Published-tree ledger contains an unsafe or duplicate path",
+        )
+        indexed[relative] = record
+
+    actual_files = {
+        path.relative_to(root).as_posix()
+        for path in root.rglob("*")
+        if path.is_file() and path != ledger
+    }
+    _require(
+        set(indexed) == actual_files,
+        "Published-tree inventory differs from its ledger",
+    )
+    for path in root.rglob("*"):
+        _require(not path.is_symlink(), f"Frozen publication contains symlink: {path}")
+        mode = stat.S_IMODE(path.lstat().st_mode)
+        if path.is_file():
+            _require(mode == 0o400, f"Frozen publication file mode changed: {path}")
+        elif path.is_dir():
+            _require(
+                mode == 0o500, f"Frozen publication directory mode changed: {path}"
+            )
+    _require(
+        stat.S_IMODE(root.lstat().st_mode) == 0o500,
+        "Frozen publication root mode changed",
+    )
+    for relative, record in indexed.items():
+        path = root / relative
+        _require(
+            path.stat().st_size == record["size_bytes"]
+            and file_sha256(path) == record["sha256"],
+            f"Frozen publication artifact mutated: {relative}",
         )
 
 
@@ -1350,34 +1529,55 @@ def finalize_publication(
     manifest_path: Path,
     acceptance_runner: Callable[..., object],
     acceptance_kwargs: Mapping[str, object],
+    candidate_specs: Sequence[object] = (),
     after_acceptance_hook: Optional[Callable[[Path], None]] = None,
+    after_publish_freeze_hook: Optional[Callable[[Path], None]] = None,
 ) -> None:
-    """Accept a private snapshot and atomically publish it after one last rehash."""
+    """Accept, clone, seal, rehash, and atomically publish one private tree."""
 
     manifest_digest = file_sha256(manifest_path)
+    publish_tree = None
     try:
         acceptance_runner(**dict(acceptance_kwargs))
-        if after_acceptance_hook is not None:
-            after_acceptance_hook(staging)
-        _rehash_before_publish(staging, manifest_path, manifest_digest)
-        tree_records = [
-            snapshot_record(path, staging, "published_artifact")
+        accepted_records = [
+            snapshot_record(path, staging, "accepted_artifact")
             for path in sorted(staging.rglob("*"))
             if path.is_file()
         ]
+        if after_acceptance_hook is not None:
+            after_acceptance_hook(staging)
+        _rehash_before_publish(staging, manifest_path, manifest_digest, candidate_specs)
+        publish_tree = Path(
+            tempfile.mkdtemp(
+                prefix=f".{output_root.name}.publish-", dir=output_root.parent
+            )
+        )
+        publish_tree.chmod(0o700)
+        _verify_tree_records(staging, accepted_records)
+        _copy_publication_tree(staging, publish_tree, accepted_records)
+        tree_records = _published_tree_records(publish_tree)
         atomic_write_json(
-            staging / "provenance" / "published_tree_sha256.json",
+            publish_tree / PUBLISHED_TREE_LEDGER,
             {"schema_version": 1, "files": tree_records},
         )
+        ledger_sha256 = file_sha256(publish_tree / PUBLISHED_TREE_LEDGER)
+        _remove_tree(staging)
+        make_tree_read_only(publish_tree)
+        if after_publish_freeze_hook is not None:
+            after_publish_freeze_hook(publish_tree)
         _verify_reservation(reservation)
         _require(
-            not output_root.exists(),
+            not os.path.lexists(output_root),
             f"Publication destination appeared before publish: {output_root}",
         )
-        _rename_directory_noreplace(staging, output_root)
+        _verify_frozen_publication_tree(publish_tree, ledger_sha256=ledger_sha256)
+        _rename_directory_noreplace(publish_tree, output_root)
+        publish_tree = None
     except Exception:
         if staging.exists():
             _remove_tree(staging)
+        if publish_tree is not None and publish_tree.exists():
+            _remove_tree(publish_tree)
         raise
     finally:
         _release_reservation(reservation)
@@ -1396,6 +1596,7 @@ def orchestrate_final_figures(
         [Sequence[str], Path, Mapping[str, str], Path], None
     ] = run_command,
     after_acceptance_hook: Optional[Callable[[Path], None]] = None,
+    after_publish_freeze_hook: Optional[Callable[[Path], None]] = None,
     source_materialized_hook: Optional[Callable[[Path, Path], None]] = None,
     release_after_open_hook: Optional[Callable[[Path], None]] = None,
 ) -> Path:
@@ -1422,16 +1623,6 @@ def orchestrate_final_figures(
     attestation = verify_generator_checkout(
         repository, approved_generator_commit, live_anchor["source_commit"]
     )
-    approval = verify_external_approval_record(
-        approval_record,
-        approval_record_sha256,
-        repository=repository,
-        approved_commit=approved_generator_commit,
-        approved_tree=attestation.commit_tree,
-        scientific_release_commit=live_anchor["source_commit"],
-        allowlist_sha256=file_sha256(expected_allowlist),
-    )
-
     reservation = _reserve_publication(output_root)
     staging = None
     execution = None
@@ -1449,15 +1640,35 @@ def orchestrate_final_figures(
             immutable_source,
             attestation,
         )
-        immutable_allowlist = (
+        materialized_allowlist = (
             immutable_source / "submission" / "final_figure_candidates.json"
         )
+        private_allowlist = _copy(materialized_allowlist, staging / PRIVATE_ALLOWLIST)
+        private_allowlist.chmod(0o400)
+        specs = load_candidate_allowlist(private_allowlist)
         _require(
-            file_sha256(immutable_allowlist) == approval.allowlist_sha256,
-            "Materialized allowlist differs from approved allowlist",
+            len(specs) == EXPECTED_COUNTS["candidate_pdfs"],
+            "Private allowlist does not encode the exact candidate contract",
         )
         if source_materialized_hook is not None:
             source_materialized_hook(repository, immutable_source)
+        verify_materialized_source(
+            repository, approved_generator_commit, immutable_source, attestation
+        )
+
+        def approved_command_runner(
+            command: Sequence[str],
+            cwd: Path,
+            command_environment: Mapping[str, str],
+            log_path: Path,
+        ) -> None:
+            verify_materialized_source(
+                repository, approved_generator_commit, immutable_source, attestation
+            )
+            command_runner(command, cwd, command_environment, log_path)
+            verify_materialized_source(
+                repository, approved_generator_commit, immutable_source, attestation
+            )
 
         figure_root = staging / "candidates" / "figure_root"
         c0_root = staging / "candidates" / "c0_root"
@@ -1480,11 +1691,33 @@ def orchestrate_final_figures(
         anchor = release_snapshot.anchor
         release_view = release_snapshot.plots_root
         release_aliases = release_snapshot.alias_sources
-        env = _generator_environment(repository, immutable_source)
-        python = sys.executable
+        release_sha256sums_sha256 = file_sha256(release_snapshot.root / "SHA256SUMS")
+        approval = verify_external_approval_record(
+            approval_record,
+            approval_record_sha256,
+            repository=repository,
+            approved_commit=approved_generator_commit,
+            approved_tree=attestation.commit_tree,
+            scientific_release_commit=anchor["source_commit"],
+            release_sha256sums_sha256=release_sha256sums_sha256,
+            allowlist_sha256=file_sha256(private_allowlist),
+            candidate_contract=EXPECTED_COUNTS,
+            orchestrator_schema_version=ORCHESTRATION_SCHEMA_VERSION,
+        )
+        runtime = prepare_trusted_figure_runtime(execution / "trusted_runtime")
+        env = _generator_environment(repository, immutable_source, runtime)
+        python = str(runtime.attestation["python"]["executable"])
         generated = execution / "generated"
         logs = staging / "provenance" / "logs"
         snapshot_artifacts: list[dict] = list(release_snapshot.artifact_records)
+        snapshot_artifacts.append(
+            snapshot_record(private_allowlist, staging, "approved_candidate_allowlist")
+        )
+        runtime_record = staging / "provenance" / "trusted_runtime.json"
+        atomic_write_json(runtime_record, runtime.attestation)
+        snapshot_artifacts.append(
+            snapshot_record(runtime_record, staging, "trusted_figure_runtime")
+        )
         candidates: list[dict] = []
         contracts: dict[str, dict] = {"final_release": release_contract}
         approval_snapshot = copy_verified_file(
@@ -1518,7 +1751,7 @@ def orchestrate_final_figures(
             "paired",
         ]
         _require(not main_out.exists(), "Main-text generator root already exists")
-        command_runner(main_cmd, execution, env, logs / "maintext.log")
+        approved_command_runner(main_cmd, execution, env, logs / "maintext.log")
         contracts["maintext"] = validate_maintext_manifest(
             main_out / "maintext_manifest.json"
         )
@@ -1539,7 +1772,6 @@ def orchestrate_final_figures(
             snapshot_artifacts,
         )
 
-        specs = load_candidate_allowlist(allowlist_path)
         by_id = {spec.candidate_id: spec for spec in specs}
         for experiment in EXPERIMENTS:
             for candidate_id, source in (
@@ -1600,7 +1832,7 @@ def orchestrate_final_figures(
             "--no-notify",
         ]
         _require(not all_out.exists(), "All-method generator root already exists")
-        command_runner(all_cmd, execution, env, logs / "all_methods.log")
+        approved_command_runner(all_cmd, execution, env, logs / "all_methods.log")
         staged_all = stage_all_method_candidates(
             all_out, figure_root / "all_method_summary_plots"
         )
@@ -1676,7 +1908,9 @@ def orchestrate_final_figures(
                 not out.exists(),
                 f"Resolution generator root already exists: {experiment}",
             )
-            command_runner(cmd, execution, env, logs / f"resolution_{experiment}.log")
+            approved_command_runner(
+                cmd, execution, env, logs / f"resolution_{experiment}.log"
+            )
             run_manifests = validate_resolution_manifest(
                 out / "manifest.json", plots_root, experiment, approved_generator_commit
             )
@@ -1722,6 +1956,11 @@ def orchestrate_final_figures(
                     experiment=experiment,
                     save_name=str(run["save_name"]),
                     case_index=case_index,
+                    include_consumed_truth=(
+                        experiment in {"squares", "circles"}
+                        and _same_number(run.get("resolution"), RESOLUTION_VALUES[0])
+                        and _same_number(run.get("wiggle"), RESOLUTION_WIGGLES[0])
+                    ),
                 ):
                     relative = input_path.relative_to(run_root)
                     _copy_manifest(
@@ -1791,7 +2030,9 @@ def orchestrate_final_figures(
                 not out.exists(),
                 f"Guarded-C0 generator root already exists: {experiment}",
             )
-            command_runner(cmd, execution, env, logs / f"guarded_c0_{experiment}.log")
+            approved_command_runner(
+                cmd, execution, env, logs / f"guarded_c0_{experiment}.log"
+            )
             c0_paths[experiment] = out / "manifest.json"
             c0_commands[experiment] = cmd
         c0_run_manifests = validate_c0_manifests(
@@ -1936,7 +2177,9 @@ def orchestrate_final_figures(
         _require(
             not deterministic.exists(), "Deterministic generator root already exists"
         )
-        command_runner(plic_cmd, execution, env, logs / "deterministic_plic.log")
+        approved_command_runner(
+            plic_cmd, execution, env, logs / "deterministic_plic.log"
+        )
         contracts["deterministic_plic"] = validate_plic_metadata(
             plic_base.with_name(f"{plic_base.name}_data.json"),
             approved_generator_commit,
@@ -1992,7 +2235,9 @@ def orchestrate_final_figures(
             "staged_reconstruction_zalesak",
         ]
         _require(not staged_out.exists(), "Staged generator root already exists")
-        command_runner(staged_cmd, execution, env, logs / "deterministic_staged.log")
+        approved_command_runner(
+            staged_cmd, execution, env, logs / "deterministic_staged.log"
+        )
         staged_data = staged_out / "staged_reconstruction_zalesak_data.json"
         contracts["deterministic_staged"] = validate_staged_metadata(
             staged_data, approved_generator_commit
@@ -2049,7 +2294,7 @@ def orchestrate_final_figures(
             "resolution_mesh_geometry": 30,
             "resolution_reconstructed_geometry": 30,
             "resolution_facet_metadata": 30,
-            "resolution_truth_geometry": 6,
+            "resolution_truth_geometry": 2,
             "guarded_c0_aggregate_metrics": 2,
             "guarded_c0_representative_case_geometry": 6,
             "guarded_c0_representative_mesh_geometry": 6,
@@ -2063,11 +2308,12 @@ def orchestrate_final_figures(
             )
 
         orchestration = {
-            "schema_version": 2,
+            "schema_version": ORCHESTRATION_SCHEMA_VERSION,
             "manifest_type": "final_figure_orchestration",
             "status": "ready_for_internal_acceptance",
             "created_at_utc": datetime.now(timezone.utc).isoformat(),
             "generator_checkout": attestation.to_dict(),
+            "trusted_figure_runtime": runtime.attestation,
             "external_approval": {
                 key: value for key, value in approval.to_dict().items() if key != "path"
             }
@@ -2082,8 +2328,9 @@ def orchestrate_final_figures(
             },
             "scientific_contracts": contracts,
             "allowlist": {
-                "path": "submission/final_figure_candidates.json",
-                "sha256": file_sha256(immutable_allowlist),
+                "path": PRIVATE_ALLOWLIST,
+                "sha256": file_sha256(private_allowlist),
+                "expected_counts": EXPECTED_COUNTS,
             },
             "candidates": sorted(
                 candidates,
@@ -2106,6 +2353,7 @@ def orchestrate_final_figures(
             release_anchor=anchor,
             generator_source_commit=approved_generator_commit,
             orchestration_record=manifest_path,
+            allowlist_path=private_allowlist,
             candidate_records=orchestration["candidates"],
         )
         finalize_publication(
@@ -2117,9 +2365,14 @@ def orchestrate_final_figures(
             acceptance_kwargs={
                 "orchestration_state": acceptance_state,
                 "output_dir": staging / "review",
-                "allowlist_path": immutable_allowlist,
+                "pdf_inspector": partial(inspect_pdf, runtime=runtime),
+                "page_inspector": partial(pdf_page_info, runtime=runtime),
+                "preview_renderer": partial(render_pdf_preview, runtime=runtime),
+                "review_builder": partial(build_vector_review_pdf, runtime=runtime),
             },
+            candidate_specs=specs,
             after_acceptance_hook=after_acceptance_hook,
+            after_publish_freeze_hook=after_publish_freeze_hook,
         )
     except Exception as exc:
         if staging is not None and staging.exists():
@@ -2131,6 +2384,7 @@ def orchestrate_final_figures(
                 FinalFigureOrchestrationError,
                 FigureAcceptanceError,
                 GeneratorCheckoutError,
+                TrustedFigureRuntimeError,
             ),
         ):
             raise
@@ -2197,6 +2451,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         FinalFigureOrchestrationError,
         FigureAcceptanceError,
         GeneratorCheckoutError,
+        TrustedFigureRuntimeError,
     ) as exc:
         print(f"FINAL FIGURE ORCHESTRATION ERROR: {exc}", file=sys.stderr)
         return 2

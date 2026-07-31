@@ -20,8 +20,13 @@ GENERATOR_TREE="$(git rev-parse HEAD^{tree})"
 An independent reviewer reviews `GENERATOR_COMMIT`, then creates the approval
 record described in `FINAL_FIGURE_PROVENANCE_CONTRACT.md` outside this
 repository. The reviewer records the exact commit/tree, the source commit in
-`$FINAL_ROOT/submission_config.resolved.json`, and the SHA-256 of
-`submission/final_figure_candidates.json`.
+`$FINAL_ROOT/submission_config.resolved.json`, the SHA-256 of the exact
+`$FINAL_ROOT/SHA256SUMS`, the SHA-256 of
+`submission/final_figure_candidates.json`, the exact 38-candidate count
+contract, and orchestration schema version 3. The record must use status
+`approved`, `revoked=false`, a reviewer identity of 3--200 printable
+characters, and a UTC timestamp formatted `YYYY-MM-DDTHH:MM:SSZ`; extra fields
+are rejected.
 
 The reviewer supplies two values through the submission sign-off channel:
 
@@ -33,6 +38,8 @@ FINAL_FIGURE_APPROVAL_SHA256=<separately-communicated-64-hex-digest>
 Do not derive the expected digest from an unreviewed replacement record in the
 same command. The wrapper requires the record to be outside the repository and
 owned by the current user, with no group/world write permission.
+Reviewer authentication and communication of this digest are intentionally
+out of band; the wrapper proves exact content, not human identity.
 
 ## 3. Run The Single Wrapper
 
@@ -56,14 +63,14 @@ The wrapper performs, in order:
 
 1. full final-release audit and checksum verification;
 2. exact commit, index, tracked-byte, and external-approval attestation;
-3. read-only source materialization from approved Git blobs;
-4. immutable checksum-verified release-input snapshot;
+3. read-only source materialization from approved Git blobs and repeated source re-attestation;
+4. one private read-only allowlist copy and immutable checksum-verified release-input snapshot;
 5. main-text and all-method generation from that snapshot;
 6. 30 fresh resolution runs plus quantitative/geometry evidence capture;
 7. 165 fresh guarded-C0 runs plus exact 2,700-row metrics validation;
 8. deterministic PLIC and staged figures;
-9. internal 38-PDF vector/preview/page-map acceptance; and
-10. final rehash plus atomic no-replace publication.
+9. internal 38-PDF vector/preview/page-map acceptance with absolute attested Poppler tools; and
+10. checksum-copy to a separate sealed publication tree, locked final rehash, and atomic no-replace publication.
 
 The dedicated studies are real fresh runs, so this is substantially longer
 than a plot refresh.
@@ -75,7 +82,9 @@ $FINAL_FIGURE_ROOT/
   candidates/figure_root/...
   candidates/c0_root/...
   provenance/final_figure_orchestration.json
+  provenance/approved_candidate_allowlist.json
   provenance/external_approval_record.json
+  provenance/trusted_runtime.json
   provenance/release_input_snapshot/...
   provenance/resolution/.../run_manifests/       # 30
   provenance/resolution/.../inputs/              # metrics + geometry

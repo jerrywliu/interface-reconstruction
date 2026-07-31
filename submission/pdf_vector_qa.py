@@ -6,11 +6,24 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import subprocess
 import sys
+import tempfile
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable, Iterator, Optional, Sequence
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from submission.trusted_figure_runtime import (
+    TrustedFigureRuntime,
+    TrustedFigureRuntimeError,
+    prepare_trusted_figure_runtime,
+    run_attested_tool,
+)
 
 
 class PdfQaError(RuntimeError):
@@ -64,39 +77,47 @@ def parse_pdffonts(output: str) -> tuple[FontRecord, ...]:
     return tuple(fonts)
 
 
-def _run_tool(command: Sequence[str]) -> str:
-    try:
-        result = subprocess.run(
-            command,
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-    except FileNotFoundError as exc:
-        raise PdfQaError(
-            f"Required Poppler tool is unavailable: {command[0]}"
-        ) from exc
-    except subprocess.CalledProcessError as exc:
-        detail = (exc.stderr or exc.stdout or "unknown error").strip()
-        raise PdfQaError(f"{' '.join(command)} failed: {detail}") from exc
-    except subprocess.TimeoutExpired as exc:
-        raise PdfQaError(f"{' '.join(command)} timed out") from exc
-    return result.stdout
+@contextmanager
+def _runtime_or_temporary(
+    runtime: Optional[TrustedFigureRuntime],
+) -> Iterator[TrustedFigureRuntime]:
+    if runtime is not None:
+        yield runtime
+        return
+    with tempfile.TemporaryDirectory(prefix="pdf-vector-qa-runtime-") as raw:
+        try:
+            yield prepare_trusted_figure_runtime(Path(raw) / "runtime")
+        except TrustedFigureRuntimeError as exc:
+            raise PdfQaError(str(exc)) from exc
 
 
 def inspect_pdf(
     path: Path,
     *,
     require_fonts: bool = True,
-    runner: Callable[[Sequence[str]], str] = _run_tool,
+    runner: Optional[Callable[[Sequence[str]], str]] = None,
+    runtime: Optional[TrustedFigureRuntime] = None,
 ) -> PdfQaReport:
     path = Path(path).resolve()
     if not path.is_file() or path.suffix.lower() != ".pdf":
         raise PdfQaError(f"Not a PDF file: {path}")
 
-    image_count = parse_pdfimages_list(runner(("pdfimages", "-list", str(path))))
-    fonts = parse_pdffonts(runner(("pdffonts", str(path))))
+    if runner is not None:
+        image_output = runner(("pdfimages", "-list", str(path)))
+        font_output = runner(("pdffonts", str(path)))
+    else:
+        with _runtime_or_temporary(runtime) as active_runtime:
+            try:
+                image_output = run_attested_tool(
+                    active_runtime, "pdfimages", ("-list", str(path)), timeout=30
+                )
+                font_output = run_attested_tool(
+                    active_runtime, "pdffonts", (str(path),), timeout=30
+                )
+            except TrustedFigureRuntimeError as exc:
+                raise PdfQaError(str(exc)) from exc
+    image_count = parse_pdfimages_list(image_output)
+    fonts = parse_pdffonts(font_output)
     issues = []
     if image_count:
         issues.append(f"contains {image_count} raster image object(s)")
