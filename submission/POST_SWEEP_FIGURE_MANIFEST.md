@@ -24,8 +24,9 @@ The final review inventory is defined only by
 Historical March, May, and July assets remain layout or comparison references.
 No existing figure directory may be passed into the submission gate. Run
 `submission/final_figure_orchestrator.py`; it starts from nonexistent candidate
-roots, invokes the exact generators, snapshots the outputs, and publishes only
-after the full acceptance gate passes.
+roots, requires the external approval record for the exact integrated commit,
+materializes source and release inputs into immutable snapshots, invokes the
+exact generators, and publishes only after its internal acceptance gate passes.
 
 The publication root and exact command are documented in
 `submission/FINAL_FIGURE_REGENERATION.md`. The machine-readable source map is

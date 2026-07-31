@@ -1,93 +1,127 @@
 # Final Figure Provenance Contract
 
 The submission figure set is produced only by
-`submission/final_figure_orchestrator.py`. Existing candidate directories and
-caller-authored source assertions are not accepted.
+`submission/final_figure_orchestrator.py`. The review builder in
+`submission/accept_figure_candidates.py` is internal-only: it accepts a
+process-local state created by the orchestrator and has no standalone
+acceptance CLI. A JSON manifest that merely claims `status=completed` has no
+authority.
 
-## Source Attestation
+## Two-Phase Approval
 
-The wrapper requires a full 40-hex approved generator commit and proves all of
-the following before it creates any output:
+Generator/orchestrator changes are integrated and committed first. An
+independent reviewer then approves that exact resulting commit, not a branch
+SHA from before cherry-pick or merge. The external approval record must be
+outside the repository, be a regular file that is not group/world writable,
+be owned by the current user, and have a separately communicated SHA-256.
 
-1. The approved and scientific-release commits exist locally.
-2. The approved generator commit descends from the scientific-release commit
-   recorded in the audited final release.
-3. The checkout `HEAD` and index tree equal the approved commit.
-4. `git status --porcelain --untracked-files=all` is empty.
-5. No tracked path has `assume-unchanged`, `skip-worktree`, or another
-   nonstandard index flag.
-6. Every tracked regular file, executable, and symlink has the Git blob bytes
-   and mode stored in the approved commit.
+The record schema is:
 
-The resulting `generator_checkout` record contains both commits, the commit
-tree, tracked-file count, and a SHA-256 digest of the complete tracked-byte
-inventory.
+```json
+{
+  "schema_version": 1,
+  "record_type": "final_figure_generator_approval",
+  "approved_generator_commit": "<full 40-hex commit>",
+  "approved_generator_tree": "<Git tree object ID>",
+  "scientific_release_commit": "<full 40-hex release commit>",
+  "allowlist_sha256": "<SHA-256 of submission/final_figure_candidates.json>",
+  "approved_by": "<reviewer identity>",
+  "approved_at_utc": "<timestamp>"
+}
+```
 
-## Controlled Generation
+The command-line commit, record fields, record digest, approved Git tree,
+release source commit, and allowlist digest must all agree.
 
-The wrapper creates private execution and publication staging directories. Each
-generator destination and both candidate roots must initially be nonexistent.
-The wrapper invokes the commands itself, validates their scientific manifests,
-and immediately copies the selected PDFs and manifests into private staging.
+## Source Trust
 
-The fixed scientific contracts are:
+Every Git command receives a scrubbed Git environment. Replacement objects are
+disabled, caller `GIT_*` configuration is removed, and object facts are read
+with `ls-tree` and `cat-file`. The wrapper verifies:
 
-- Final release: 970 completed runs, 24,250 cases, the exact method sets and
-  resolution/perturbation grids in `submission_config.resolved.json`, seed 0,
-  25 cases per setting, and the `LVIRA`/`pre_f8_corner`/
-  `exact_linear_support_only` profile.
-- Main text: all five experiments, exact method sets, paired endpoint variants,
-  and representative cases `lines=6`, `squares=24`, `circles=12`,
-  `ellipses=12`, `zalesak=12`.
-- Resolution appendix: exact cases `0/22/12/12/20`, the designated best method,
-  `N=16,32,64`, perturbations `0,0.1`, seed 0, and six newly completed runs per
-  benchmark. All 30 `run_manifest.json` files are copied and hashed.
-- Guarded C0 appendix: six ellipse and five Zalesak resolutions, five
-  perturbations, three exact variants, seed 0, and 25 cases per setting. All
-  165 settings must be newly completed; all 165 run manifests are copied and
-  hashed. `plot_from_csv`, planned, collected, missing, and partial manifests
-  are rejected.
-- Deterministic PLIC: line case 4, cell `(14,13)`, `N=32`, perturbation `0.3`,
-  seed 0.
-- Deterministic staged reconstruction: Zalesak case 22, `N=100`, perturbation
-  `0.1`, seed 0, radius 15, slot width 5, and relative slot top 10.
+1. The approved and release commits exist and hash to their requested object IDs.
+2. The approved commit descends from the scientific release commit.
+3. `HEAD`, the index entries, executable modes, and every live tracked byte
+   equal the approved commit.
+4. The checkout is clean and has no `assume-unchanged`, `skip-worktree`, or
+   nonstandard index flags.
 
-The ordinary plotting CLIs remain general-purpose. They do not require final
-release arguments and do not establish submission provenance on their own.
+Generation never imports the live checkout. The wrapper materializes a new,
+read-only source tree from the approved commit blobs. Ignored files and bytecode
+cannot enter that tree. Generator subprocesses use `-B`, disable bytecode and
+user site packages, discard inherited Python/Git environment variables, and
+use only this immutable tree as their module path. The execution configuration
+is a physical copy from the same tree; no live-source symlink is used.
 
-## Candidate And Publication Gate
+## Release Input Snapshot
 
-`submission/final_figure_candidates.json` is the exact allowlist: 14 unpaired
-PDFs plus 12 paired slots, for 38 PDFs total. The all-method plot command may
-create auxiliary PDFs; the wrapper copies only its five allowlisted outputs.
+The final release must first pass its complete audit and `SHA256SUMS` check. The
+wrapper then snapshots every release byte the generators consume before any
+figure generation:
 
-The sealed orchestration manifest records SHA-256 and size for every copied
-manifest, command record, release anchor, and candidate. Acceptance then:
+- resolved configuration, completed sweep manifest, aggregate CSV, and checksum ledger;
+- the complete raw run bundles required by all representative main-text panels.
 
-- rejects missing or unexpected candidate PDFs;
-- requires exactly one page per candidate;
-- runs `submission/pdf_vector_qa.py` fail-closed;
-- renders fresh 300-DPI previews directly from accepted PDFs and verifies their
-  dimensions;
-- builds the indexed vector review PDF;
-- measures its page count and verifies the candidate-to-review page map; and
-- writes JSON/CSV source maps and vector-QA JSON.
+Each file is opened without following a symlink, read once, checked for stable
+inode/size/timestamps during the read, verified against `SHA256SUMS`, and copied
+without replacement. The live ledger is checked again after the copy. The
+snapshot is made read-only. Main-text and all-method generators consume only
+the snapshotted CSV and physical raw-bundle copies, never a live CSV, symlink,
+or release directory.
 
-Immediately before publication, every candidate and snapshot artifact is
-rehashed. The complete staged tree is then checksummed and atomically renamed to
-the requested output root. Any failure removes staging and leaves the output
-root absent.
+## Scientific Contracts
 
-## Command
+The fixed contracts are:
 
-Run from the clean checkout at the approved generator commit:
+- Final release: 970 completed runs, 24,250 cases, exact method and grid sets,
+  seed 0, 25 cases per setting, and the
+  `LVIRA`/`pre_f8_corner`/`exact_linear_support_only` profile.
+- Main text: all five experiments, exact methods and representative cases, and
+  paired endpoint variants.
+- Resolution appendix: exact cases `0/22/12/12/20`, designated methods,
+  `N=16,32,64`, perturbations `0,0.1`, seed 0, and 30 newly completed runs. In
+  addition to all run manifests, the exact per-case quantitative CSV,
+  case-geometry JSONL, mesh, reconstructed VTP, facet metadata, and line truth
+  geometry consumed by the panels are validated and snapshotted.
+- Guarded C0 appendix: exact six/five resolution grids, five perturbations,
+  three variants, seed 0, and 25 cases per setting. All 165 runs must be newly
+  completed. The ellipse metrics CSV must contain exactly 90 settings x 20
+  metric keys (1,800 rows); Zalesak must contain exactly 75 settings x 12 metric
+  keys (900 rows). Missing, duplicate, extra, non-finite, partial, planned,
+  collected, or plot-only evidence fails. Representative geometry inputs are
+  also snapshotted.
+- Deterministic PLIC and staged reconstruction parameters are pinned to the
+  reviewed cases, cells, mesh settings, seed, and Zalesak dimensions.
+
+Ordinary plotting and historical merge/finalize CLIs remain general-purpose
+and do not establish submission provenance.
+
+## Acceptance And Publication
+
+The orchestrator's in-memory state covers exactly 38 allowlisted one-page PDFs.
+Internal acceptance runs vector QA fail-closed, renders fresh 300-DPI previews,
+verifies their dimensions, builds the indexed vector review PDF, measures its
+41 pages, verifies the page map, and writes JSON/CSV source maps.
+
+The requested destination is exclusively reserved before staging. Immediately
+before publication, every candidate and provenance snapshot is rehashed. The
+complete staged tree is checksummed and published with an atomic no-replace
+directory rename. A concurrent destination wins untouched; the wrapper fails
+and removes only its own staging and reservation.
+
+## Invocation
+
+After external approval of the exact integrated commit:
 
 ```bash
 GENERATOR_COMMIT="$(git rev-parse HEAD)"
+
 python submission/final_figure_orchestrator.py \
   --repository "$PWD" \
   --release-root "$FINAL_ROOT" \
   --approved-generator-commit "$GENERATOR_COMMIT" \
+  --approval-record "$FINAL_FIGURE_APPROVAL_RECORD" \
+  --approval-record-sha256 "$FINAL_FIGURE_APPROVAL_SHA256" \
   --output-root "$FINAL_FIGURE_ROOT"
 ```
 

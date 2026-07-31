@@ -5,13 +5,18 @@ from __future__ import annotations
 
 import argparse
 import csv
+import ctypes
+import errno
+import hashlib
 import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Mapping, Optional, Sequence
@@ -24,18 +29,30 @@ if str(REPO_ROOT) not in sys.path:
 from submission.accept_figure_candidates import (
     DEFAULT_ALLOWLIST,
     FigureAcceptanceError,
-    accept_figure_candidates,
+    _accept_orchestrated_candidates,
+    _create_orchestrated_acceptance_state,
     load_candidate_allowlist,
 )
 from submission.audit_final_release import audit_final_release, verify_sha256_manifest
 from submission.final_figure_provenance import (
+    RELEASE_ANCHOR_FILES,
     atomic_write_json,
+    copy_verified_file,
     file_sha256,
     load_json_object,
+    make_tree_read_only,
+    parse_sha256_manifest,
     release_figure_anchor,
     snapshot_record,
+    stable_file_bytes,
 )
-from submission.generator_checkout import verify_generator_checkout
+from submission.generator_checkout import (
+    GeneratorCheckoutError,
+    materialize_approved_source,
+    sanitized_git_environment,
+    verify_external_approval_record,
+    verify_generator_checkout,
+)
 
 
 class FinalFigureOrchestrationError(RuntimeError):
@@ -136,6 +153,10 @@ C0_VARIANTS = {
     },
 }
 C0_WIGGLES = (0.0, 0.05, 0.1, 0.2, 0.3)
+C0_REPRESENTATIVES = {
+    "ellipses": {"resolution": 0.32, "wiggle": 0.1, "seed": 0, "case_index": 12},
+    "zalesak": {"resolution": 1.0, "wiggle": 0.1, "seed": 0, "case_index": 12},
+}
 ALL_METHOD_FILES = {
     "lines": "lines_all_methods_2x2.pdf",
     "squares": "squares_all_methods_2x2.pdf",
@@ -144,6 +165,17 @@ ALL_METHOD_FILES = {
     "zalesak": "zalesak_all_methods_2x2.pdf",
 }
 ORCHESTRATION_MANIFEST = "provenance/final_figure_orchestration.json"
+C0_METRIC_BASES = {
+    "ellipses": (
+        "curvature_error",
+        "facet_gap",
+        "hausdorff",
+        "tangent_error",
+        "curvature_proxy_error",
+    ),
+    "zalesak": ("area_error", "facet_gap", "hausdorff"),
+}
+METRIC_STATS = ("mean", "median", "p25", "p75")
 
 
 def _numbers(values: Sequence[float]) -> str:
@@ -160,6 +192,330 @@ def _same_number(actual: object, expected: float) -> bool:
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise FinalFigureOrchestrationError(message)
+
+
+def _remove_tree(path: Path) -> None:
+    path = Path(path)
+    if not path.exists():
+        return
+    for candidate in path.rglob("*"):
+        if candidate.is_dir() and not candidate.is_symlink():
+            try:
+                candidate.chmod(0o700)
+            except OSError:
+                pass
+    try:
+        path.chmod(0o700)
+    except OSError:
+        pass
+    shutil.rmtree(path)
+
+
+@dataclass(frozen=True)
+class PublicationReservation:
+    path: Path
+    device: int
+    inode: int
+
+
+@dataclass(frozen=True)
+class ReleaseInputSnapshot:
+    root: Path
+    csv_path: Path
+    plots_root: Path
+    anchor: dict
+    artifact_records: tuple[dict, ...]
+    alias_sources: Mapping[str, str]
+
+
+def _reserve_publication(output_root: Path) -> PublicationReservation:
+    supplied = Path(output_root).expanduser().absolute()
+    _require(
+        not os.path.lexists(supplied),
+        f"Output root must not exist, including as a symlink: {supplied}",
+    )
+    output_root = supplied.resolve()
+    output_root.parent.mkdir(parents=True, exist_ok=True)
+    reservation = output_root.parent / f".{output_root.name}.final-figure-reservation"
+    try:
+        descriptor = os.open(
+            reservation,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+        )
+    except FileExistsError as exc:
+        raise FinalFigureOrchestrationError(
+            f"Publication destination is already reserved: {output_root}"
+        ) from exc
+    try:
+        payload = f"pid={os.getpid()}\noutput={output_root}\n".encode("utf-8")
+        os.write(descriptor, payload)
+        os.fsync(descriptor)
+        info = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    if output_root.exists():
+        reservation.unlink(missing_ok=True)
+        raise FinalFigureOrchestrationError(
+            f"Output root appeared during reservation: {output_root}"
+        )
+    return PublicationReservation(reservation, info.st_dev, info.st_ino)
+
+
+def _verify_reservation(reservation: PublicationReservation) -> None:
+    try:
+        info = reservation.path.lstat()
+    except FileNotFoundError as exc:
+        raise FinalFigureOrchestrationError(
+            "Publication reservation disappeared"
+        ) from exc
+    _require(
+        stat.S_ISREG(info.st_mode)
+        and (info.st_dev, info.st_ino) == (reservation.device, reservation.inode),
+        "Publication reservation was replaced",
+    )
+
+
+def _release_reservation(reservation: PublicationReservation) -> None:
+    try:
+        info = reservation.path.lstat()
+    except FileNotFoundError:
+        return
+    if (info.st_dev, info.st_ino) == (reservation.device, reservation.inode):
+        reservation.path.unlink()
+
+
+def _rename_directory_noreplace(source: Path, destination: Path) -> None:
+    """Atomically publish a directory and fail if destination exists."""
+
+    source_bytes = os.fsencode(source)
+    destination_bytes = os.fsencode(destination)
+    libc = ctypes.CDLL(None, use_errno=True)
+    if sys.platform == "darwin" and hasattr(libc, "renameatx_np"):
+        at_fdcwd = -2
+        rename_excl = 0x00000004
+        rename = libc.renameatx_np
+        rename.argtypes = (
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        )
+        rename.restype = ctypes.c_int
+        result = rename(
+            at_fdcwd,
+            ctypes.c_char_p(source_bytes),
+            at_fdcwd,
+            ctypes.c_char_p(destination_bytes),
+            rename_excl,
+        )
+    elif hasattr(libc, "renameat2"):
+        at_fdcwd = -100
+        rename_noreplace = 1
+        rename = libc.renameat2
+        rename.argtypes = (
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        )
+        rename.restype = ctypes.c_int
+        result = rename(
+            at_fdcwd,
+            ctypes.c_char_p(source_bytes),
+            at_fdcwd,
+            ctypes.c_char_p(destination_bytes),
+            rename_noreplace,
+        )
+    else:
+        raise FinalFigureOrchestrationError(
+            "Atomic no-replace directory publication is unavailable"
+        )
+    if result != 0:
+        error_number = ctypes.get_errno()
+        if error_number in {errno.EEXIST, errno.ENOTEMPTY}:
+            raise FinalFigureOrchestrationError(
+                f"Publication destination appeared before publish: {destination}"
+            )
+        raise FinalFigureOrchestrationError(
+            f"Atomic no-replace publication failed: {os.strerror(error_number)}"
+        )
+
+
+def _release_alias(row: Mapping[str, str]) -> str:
+    return "perturb_sweep_{}_{}_r{}_w{}_s{}".format(
+        row["experiment"],
+        row["algo"].lower().replace("+", "plus"),
+        row["resolution"].replace(".", "p"),
+        row["wiggle"].replace(".", "p"),
+        row["seed"],
+    )
+
+
+def _required_release_aliases(csv_path: Path) -> dict[str, str]:
+    rows = []
+    with Path(csv_path).open(newline="", encoding="utf-8") as stream:
+        rows = list(csv.DictReader(stream))
+    by_identity: dict[tuple, str] = {}
+    for row in rows:
+        required = ("experiment", "algo", "resolution", "wiggle", "seed", "save_name")
+        _require(
+            all(row.get(key) for key in required), "Release CSV lacks run identity"
+        )
+        identity = (
+            row["experiment"],
+            row["algo"],
+            float(row["resolution"]),
+            float(row["wiggle"]),
+            int(row["seed"]),
+        )
+        previous = by_identity.setdefault(identity, row["save_name"])
+        _require(previous == row["save_name"], "Release CSV identity is ambiguous")
+
+    aliases: dict[str, str] = {}
+    for experiment, expected in MAINTEXT_CASES.items():
+        for method in MAINTEXT_METHODS[experiment]:
+            identity = (
+                experiment,
+                method,
+                float(expected["resolution"]),
+                float(expected["wiggle"]),
+                int(expected["seed"]),
+            )
+            _require(
+                identity in by_identity,
+                f"Release CSV lacks representative run {identity}",
+            )
+            row = {
+                "experiment": experiment,
+                "algo": method,
+                "resolution": str(expected["resolution"]),
+                "wiggle": str(expected["wiggle"]),
+                "seed": str(expected["seed"]),
+            }
+            alias = _release_alias(row)
+            previous = aliases.setdefault(alias, by_identity[identity])
+            _require(
+                previous == by_identity[identity], f"Release alias {alias} is ambiguous"
+            )
+    return aliases
+
+
+def _snapshot_release_inputs(
+    release_root: Path,
+    destination: Path,
+    *,
+    staging_root: Path,
+    after_open_hook: Optional[Callable[[Path], None]] = None,
+) -> ReleaseInputSnapshot:
+    """Copy every release byte consumed by generators into immutable staging."""
+
+    release_root = Path(release_root).resolve()
+    destination = Path(destination).resolve()
+    _require(
+        not destination.exists(), f"Release snapshot already exists: {destination}"
+    )
+    destination.mkdir(parents=True)
+    try:
+        live_manifest = release_root / "SHA256SUMS"
+        manifest_bytes = stable_file_bytes(live_manifest)
+        manifest_target = destination / "SHA256SUMS"
+        manifest_target.write_bytes(manifest_bytes)
+        manifest_digest = file_sha256(manifest_target)
+        ledger = parse_sha256_manifest(manifest_target)
+
+        for relative in RELEASE_ANCHOR_FILES[:-1]:
+            expected = ledger.get(relative)
+            _require(expected is not None, f"Release ledger lacks {relative}")
+            copy_verified_file(
+                release_root / relative,
+                destination / relative,
+                expected_sha256=expected,
+                after_open_hook=after_open_hook,
+            )
+
+        aliases = _required_release_aliases(destination / "perturbed_sweep.csv")
+        plots_root = destination / "plots"
+        plots_root.mkdir()
+        for alias, save_name in sorted(aliases.items()):
+            source_bundle = release_root / "raw_runs" / save_name
+            _require(
+                source_bundle.is_dir(), f"Release raw bundle is missing: {save_name}"
+            )
+            target_bundle = plots_root / alias
+            target_bundle.mkdir(parents=True)
+            source_files = []
+            for path in sorted(source_bundle.rglob("*")):
+                _require(
+                    not path.is_symlink(), f"Release bundle contains symlink: {path}"
+                )
+                if path.is_file():
+                    source_files.append(path)
+            _require(source_files, f"Release raw bundle is empty: {save_name}")
+            prefix = f"raw_runs/{save_name}/"
+            expected_bundle_paths = {
+                relative for relative in ledger if relative.startswith(prefix)
+            }
+            actual_bundle_paths = {
+                (
+                    Path("raw_runs") / save_name / path.relative_to(source_bundle)
+                ).as_posix()
+                for path in source_files
+            }
+            _require(
+                actual_bundle_paths == expected_bundle_paths,
+                f"Release raw bundle inventory changed: {save_name}",
+            )
+            for source in source_files:
+                bundle_relative = source.relative_to(source_bundle)
+                release_relative = (
+                    Path("raw_runs") / save_name / bundle_relative
+                ).as_posix()
+                expected = ledger.get(release_relative)
+                _require(
+                    expected is not None,
+                    f"Release ledger lacks required bundle file: {release_relative}",
+                )
+                copy_verified_file(
+                    source,
+                    target_bundle / bundle_relative,
+                    expected_sha256=expected,
+                    after_open_hook=after_open_hook,
+                )
+
+        _require(
+            stable_file_bytes(live_manifest) == manifest_bytes
+            and file_sha256(manifest_target) == manifest_digest,
+            "Release checksum ledger changed during input snapshot",
+        )
+        snapshot_anchor = release_figure_anchor(destination)
+        snapshot_anchor["root"] = "provenance/release_input_snapshot"
+        for relative, record in snapshot_anchor["artifacts"].items():
+            record["path"] = f"provenance/release_input_snapshot/{relative}"
+        make_tree_read_only(destination)
+        artifact_records = tuple(
+            snapshot_record(path, staging_root, "release_input_snapshot")
+            for path in sorted(destination.rglob("*"))
+            if path.is_file()
+        )
+    except Exception:
+        if destination.exists():
+            for path in destination.rglob("*"):
+                if path.is_dir() and not path.is_symlink():
+                    path.chmod(0o700)
+            destination.chmod(0o700)
+            shutil.rmtree(destination)
+        raise
+    return ReleaseInputSnapshot(
+        root=destination,
+        csv_path=destination / "perturbed_sweep.csv",
+        plots_root=destination / "plots",
+        anchor=snapshot_anchor,
+        artifact_records=artifact_records,
+        alias_sources=aliases,
+    )
 
 
 def _profile_from_generation(payload: Mapping[str, object], label: str) -> dict:
@@ -449,6 +805,257 @@ def validate_resolution_manifest(
     return manifests
 
 
+def _read_csv_rows(path: Path) -> list[dict[str, str]]:
+    _require(Path(path).is_file(), f"Required CSV is missing: {path}")
+    with Path(path).open(newline="", encoding="utf-8") as stream:
+        rows = list(csv.DictReader(stream))
+    _require(rows, f"Required CSV is empty: {path}")
+    return rows
+
+
+def _read_jsonl(path: Path) -> list[dict]:
+    _require(Path(path).is_file(), f"Required JSONL is missing: {path}")
+    rows = []
+    for line_number, line in enumerate(
+        Path(path).read_text(encoding="utf-8").splitlines(), start=1
+    ):
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise FinalFigureOrchestrationError(
+                f"Malformed JSONL {path}:{line_number}: {exc}"
+            ) from exc
+        _require(isinstance(value, dict), f"JSONL row is not an object: {path}")
+        rows.append(value)
+    _require(rows, f"Required JSONL is empty: {path}")
+    return rows
+
+
+def resolution_input_paths(
+    plots_root: Path,
+    *,
+    experiment: str,
+    save_name: str,
+    case_index: int,
+) -> list[tuple[Path, str]]:
+    """Validate and return exact quantitative/geometry inputs for one panel run."""
+
+    run_root = Path(plots_root) / save_name
+    case_metrics = run_root / "metrics" / "case_metrics.csv"
+    metric_rows = _read_csv_rows(case_metrics)
+    selected = [row for row in metric_rows if row.get("case_index") == str(case_index)]
+    _require(
+        len(selected) == 1 and len(metric_rows) == 1,
+        f"Resolution case metrics must contain exactly case {case_index}: {case_metrics}",
+    )
+    required_metrics = {
+        "lines": ("hausdorff", "facet_gap"),
+        "squares": ("hausdorff", "facet_gap", "area_error"),
+        "circles": (
+            "hausdorff",
+            "facet_gap",
+            "curvature_error",
+            "tangent_error",
+            "curvature_proxy_error",
+        ),
+        "ellipses": (
+            "hausdorff",
+            "facet_gap",
+            "curvature_error",
+            "tangent_error",
+            "curvature_proxy_error",
+        ),
+        "zalesak": ("hausdorff", "facet_gap", "area_error"),
+    }[experiment]
+    for metric in required_metrics:
+        try:
+            value = float(selected[0][metric])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise FinalFigureOrchestrationError(
+                f"Resolution metric {metric} is missing/non-numeric: {case_metrics}"
+            ) from exc
+        _require(value == value and abs(value) != float("inf"), f"Non-finite {metric}")
+
+    geometry_path = run_root / "metrics" / "case_geometry.jsonl"
+    geometry_rows = _read_jsonl(geometry_path)
+    geometry_selected = [
+        row for row in geometry_rows if row.get("case_index") == case_index
+    ]
+    _require(
+        len(geometry_selected) == 1 and len(geometry_rows) == 1,
+        f"Resolution geometry must contain exactly case {case_index}: {geometry_path}",
+    )
+
+    facet = run_root / "vtk" / "reconstructed" / "facets" / f"{case_index}.vtp"
+    facet_metadata = facet.with_suffix(".facet_metadata.json")
+    metadata = load_json_object(facet_metadata)
+    _require(
+        metadata.get("schema_version", 0) >= 2
+        and isinstance(metadata.get("primitives"), list),
+        f"Resolution facet metadata is incomplete: {facet_metadata}",
+    )
+    paths = [
+        (case_metrics, "resolution_case_metrics"),
+        (geometry_path, "resolution_case_geometry"),
+        (run_root / "vtk" / "mesh.vtk", "resolution_mesh_geometry"),
+        (facet, "resolution_reconstructed_geometry"),
+        (facet_metadata, "resolution_facet_metadata"),
+    ]
+    if experiment == "lines":
+        paths.append(
+            (
+                run_root / "vtk" / "true" / f"true_line{case_index}.vtp",
+                "resolution_truth_geometry",
+            )
+        )
+    for path, _role in paths:
+        _require(
+            path.is_file() and not path.is_symlink(),
+            f"Resolution input missing: {path}",
+        )
+    return paths
+
+
+def validate_c0_metrics(
+    path: Path, experiment: str, producer_manifest: Optional[Path] = None
+) -> dict:
+    """Require exact setting-by-metric coverage for one guarded-C0 CSV."""
+
+    rows = _read_csv_rows(path)
+    variants = C0_VARIANTS[experiment]
+    expected_settings = {
+        (experiment, label, method, int(do_c0), resolution, wiggle, 0)
+        for resolution in C0_RESOLUTIONS[experiment]
+        for wiggle in C0_WIGGLES
+        for label, (method, do_c0) in variants.items()
+    }
+    expected_metric_keys = {
+        f"{base}_{stat}"
+        for base in C0_METRIC_BASES[experiment]
+        for stat in METRIC_STATS
+    }
+    expected_save_names = None
+    if producer_manifest is not None:
+        producer = load_json_object(producer_manifest)
+        producer_runs = producer.get("runs")
+        _require(
+            isinstance(producer_runs, list),
+            f"Guarded-C0 producer manifest lacks runs: {producer_manifest}",
+        )
+        expected_save_names = {}
+        for run in producer_runs:
+            _require(isinstance(run, dict), "Malformed guarded-C0 producer run")
+            key = (
+                run.get("experiment"),
+                run.get("variant"),
+                C0_VARIANTS[experiment].get(run.get("variant"), (None, None))[0],
+                int(C0_VARIANTS[experiment].get(run.get("variant"), (None, False))[1]),
+                float(run.get("resolution")),
+                float(run.get("wiggle")),
+                int(run.get("seed")),
+            )
+            save_name = run.get("save_name")
+            _require(
+                isinstance(save_name, str) and save_name,
+                "Guarded-C0 producer run lacks save_name",
+            )
+            previous = expected_save_names.setdefault(key, save_name)
+            _require(previous == save_name, "Guarded-C0 producer run is ambiguous")
+        _require(
+            set(expected_save_names) == expected_settings,
+            "Guarded-C0 producer settings differ from metric contract",
+        )
+    actual: dict[tuple, set[str]] = {}
+    seen_rows = set()
+    for row in rows:
+        try:
+            setting = (
+                row["experiment"],
+                row["algo"],
+                row["facet_algo"],
+                int(row["do_c0"]),
+                float(row["resolution"]),
+                float(row["wiggle"]),
+                int(row["seed"]),
+            )
+            metric_key = row["metric_key"]
+            metric_value = float(row["metric_value"])
+            save_name = row["save_name"]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise FinalFigureOrchestrationError(
+                f"Guarded-C0 metrics row is malformed: {path}"
+            ) from exc
+        _require(
+            metric_value == metric_value and abs(metric_value) != float("inf"),
+            f"Guarded-C0 metric is non-finite: {path}",
+        )
+        if expected_save_names is not None:
+            _require(
+                save_name == expected_save_names.get(setting),
+                f"Guarded-C0 metric save_name differs for {setting}: {path}",
+            )
+        row_key = setting + (metric_key, save_name)
+        _require(
+            row_key not in seen_rows, f"Duplicate guarded-C0 metric row: {row_key}"
+        )
+        seen_rows.add(row_key)
+        actual.setdefault(setting, set()).add(metric_key)
+    _require(
+        set(actual) == expected_settings, f"Guarded-C0 setting coverage differs: {path}"
+    )
+    for setting, keys in actual.items():
+        _require(
+            keys == expected_metric_keys,
+            f"Guarded-C0 metric coverage differs for {setting}: {path}",
+        )
+    expected_rows = len(expected_settings) * len(expected_metric_keys)
+    _require(len(rows) == expected_rows, f"Guarded-C0 metric row count differs: {path}")
+    return {
+        "status": "validated",
+        "experiment": experiment,
+        "setting_count": len(expected_settings),
+        "metric_keys": sorted(expected_metric_keys),
+        "row_count": expected_rows,
+        "sha256": file_sha256(path),
+    }
+
+
+def representative_geometry_input_paths(
+    run_root: Path, *, case_index: int
+) -> list[tuple[Path, str]]:
+    """Return exact mesh/facet/metadata inputs consumed by a representative panel."""
+
+    run_root = Path(run_root)
+    geometry_path = run_root / "metrics" / "case_geometry.jsonl"
+    rows = _read_jsonl(geometry_path)
+    _require(
+        sum(row.get("case_index") == case_index for row in rows) == 1,
+        f"Representative geometry lacks exact case {case_index}: {geometry_path}",
+    )
+    facet = run_root / "vtk" / "reconstructed" / "facets" / f"{case_index}.vtp"
+    metadata_path = facet.with_suffix(".facet_metadata.json")
+    metadata = load_json_object(metadata_path)
+    _require(
+        metadata.get("schema_version", 0) >= 2
+        and isinstance(metadata.get("primitives"), list),
+        f"Representative facet metadata is incomplete: {metadata_path}",
+    )
+    paths = [
+        (geometry_path, "representative_case_geometry"),
+        (run_root / "vtk" / "mesh.vtk", "representative_mesh_geometry"),
+        (facet, "representative_reconstructed_geometry"),
+        (metadata_path, "representative_facet_metadata"),
+    ]
+    for path, _role in paths:
+        _require(
+            path.is_file() and not path.is_symlink(),
+            f"Representative geometry input is missing: {path}",
+        )
+    return paths
+
+
 def validate_c0_manifests(
     paths: Mapping[str, Path], plots_root: Path, commit: str
 ) -> list[Path]:
@@ -617,20 +1224,24 @@ def stage_all_method_candidates(source: Path, destination: Path) -> list[Path]:
         source_pdf = Path(source) / filename
         _require(source_pdf.is_file(), f"All-method candidate is missing: {source_pdf}")
         target = Path(destination) / filename
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source_pdf, target)
+        _copy(source_pdf, target)
         copied.append(target)
     return copied
 
 
 def _copy(source: Path, destination: Path) -> Path:
-    _require(Path(source).is_file(), f"Generated artifact is missing: {source}")
-    destination = Path(destination)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source, destination)
+    source = Path(source)
     _require(
-        file_sha256(source) == file_sha256(destination),
-        f"Snapshot copy changed bytes: {source}",
+        source.is_file() and not source.is_symlink(),
+        f"Generated artifact is missing or is a symlink: {source}",
+    )
+    destination = Path(destination)
+    data = stable_file_bytes(source)
+    digest = hashlib.sha256(data).hexdigest()
+    copy_verified_file(
+        source,
+        destination,
+        expected_sha256=digest,
     )
     return destination
 
@@ -649,59 +1260,41 @@ def _write_command_record(path: Path, command: Sequence[str], commit: str) -> Pa
     return path
 
 
-def _prepare_release_plot_view(release_root: Path, view: Path) -> dict[str, Path]:
-    view.mkdir(parents=True)
-    aliases: dict[str, Path] = {}
-    with (Path(release_root) / "perturbed_sweep.csv").open(
-        newline="", encoding="utf-8"
-    ) as stream:
-        for row in csv.DictReader(stream):
-            required = (
-                "experiment",
-                "algo",
-                "resolution",
-                "wiggle",
-                "seed",
-                "save_name",
-            )
-            _require(
-                all(row.get(key) for key in required),
-                "Release CSV lacks run identity columns",
-            )
-            alias = "perturb_sweep_{}_{}_r{}_w{}_s{}".format(
-                row["experiment"],
-                row["algo"].lower().replace("+", "plus"),
-                row["resolution"].replace(".", "p"),
-                row["wiggle"].replace(".", "p"),
-                row["seed"],
-            )
-            source = Path(release_root) / "raw_runs" / row["save_name"]
-            _require(source.is_dir(), f"Release run bundle is missing: {source}")
-            previous = aliases.setdefault(alias, source)
-            _require(
-                previous == source, f"Release CSV maps {alias} to multiple bundles"
-            )
-    for alias, source in aliases.items():
-        (view / alias).symlink_to(source, target_is_directory=True)
-    return aliases
+def _copy_config_tree(source: Path, destination: Path) -> None:
+    _require(not destination.exists(), f"Config snapshot already exists: {destination}")
+    destination.mkdir(parents=True)
+    for path in sorted(Path(source).rglob("*")):
+        _require(not path.is_symlink(), f"Approved config contains symlink: {path}")
+        relative = path.relative_to(source)
+        target = destination / relative
+        if path.is_dir():
+            target.mkdir(exist_ok=True)
+        elif path.is_file():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(path.read_bytes())
 
 
-def _generator_environment(repository: Path) -> dict[str, str]:
+def _generator_environment(repository: Path, immutable_source: Path) -> dict[str, str]:
     env = dict(os.environ)
-    existing = env.get("PYTHONPATH")
-    env["PYTHONPATH"] = (
-        str(repository) if not existing else f"{repository}{os.pathsep}{existing}"
-    )
+    for key in list(env):
+        if key.startswith("GIT_") or key.startswith("PYTHON"):
+            env.pop(key, None)
+    env.update(sanitized_git_environment(env))
+    env["PYTHONPATH"] = str(Path(immutable_source).resolve())
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["PYTHONNOUSERSITE"] = "1"
     env["SLACK_NOTIFY"] = "0"
     git_dir = subprocess.run(
-        ["git", "rev-parse", "--absolute-git-dir"],
+        ["git", "--no-pager", "rev-parse", "--absolute-git-dir"],
         cwd=repository,
+        env=sanitized_git_environment(),
         check=True,
         capture_output=True,
         text=True,
     ).stdout.strip()
     env["GIT_DIR"] = git_dir
-    env["GIT_WORK_TREE"] = str(repository)
+    env["GIT_WORK_TREE"] = str(Path(immutable_source).resolve())
+    env["GIT_NO_REPLACE_OBJECTS"] = "1"
     return env
 
 
@@ -753,6 +1346,7 @@ def finalize_publication(
     *,
     staging: Path,
     output_root: Path,
+    reservation: PublicationReservation,
     manifest_path: Path,
     acceptance_runner: Callable[..., object],
     acceptance_kwargs: Mapping[str, object],
@@ -775,11 +1369,18 @@ def finalize_publication(
             staging / "provenance" / "published_tree_sha256.json",
             {"schema_version": 1, "files": tree_records},
         )
-        os.replace(staging, output_root)
+        _verify_reservation(reservation)
+        _require(
+            not output_root.exists(),
+            f"Publication destination appeared before publish: {output_root}",
+        )
+        _rename_directory_noreplace(staging, output_root)
     except Exception:
         if staging.exists():
-            shutil.rmtree(staging)
+            _remove_tree(staging)
         raise
+    finally:
+        _release_reservation(reservation)
 
 
 def orchestrate_final_figures(
@@ -787,76 +1388,122 @@ def orchestrate_final_figures(
     repository: Path,
     release_root: Path,
     approved_generator_commit: str,
+    approval_record: Path,
+    approval_record_sha256: str,
     output_root: Path,
     allowlist_path: Path = DEFAULT_ALLOWLIST,
     command_runner: Callable[
         [Sequence[str], Path, Mapping[str, str], Path], None
     ] = run_command,
-    acceptance_runner: Callable[..., object] = accept_figure_candidates,
     after_acceptance_hook: Optional[Callable[[Path], None]] = None,
+    source_materialized_hook: Optional[Callable[[Path, Path], None]] = None,
+    release_after_open_hook: Optional[Callable[[Path], None]] = None,
 ) -> Path:
     repository = Path(repository).resolve()
     release_root = Path(release_root).resolve()
-    output_root = Path(output_root).resolve()
+    supplied_output = Path(output_root).expanduser().absolute()
+    _require(
+        not os.path.lexists(supplied_output),
+        f"Output root must not exist, including as a symlink: {supplied_output}",
+    )
+    output_root = supplied_output.resolve()
     _require(
         repository == REPO_ROOT.resolve(),
         "--repository must be the checkout containing this reviewed wrapper",
     )
+    expected_allowlist = repository / "submission" / "final_figure_candidates.json"
+    _require(
+        Path(allowlist_path).resolve() == expected_allowlist.resolve(),
+        "Final acceptance must use the approved repository allowlist",
+    )
     _require(not output_root.exists(), f"Output root must not exist: {output_root}")
     release_contract = validate_final_release_contract(release_root)
-    anchor = release_figure_anchor(release_root)
+    live_anchor = release_figure_anchor(release_root)
     attestation = verify_generator_checkout(
-        repository, approved_generator_commit, anchor["source_commit"]
+        repository, approved_generator_commit, live_anchor["source_commit"]
+    )
+    approval = verify_external_approval_record(
+        approval_record,
+        approval_record_sha256,
+        repository=repository,
+        approved_commit=approved_generator_commit,
+        approved_tree=attestation.commit_tree,
+        scientific_release_commit=live_anchor["source_commit"],
+        allowlist_sha256=file_sha256(expected_allowlist),
     )
 
-    output_root.parent.mkdir(parents=True, exist_ok=True)
-    staging = Path(
-        tempfile.mkdtemp(prefix=f".{output_root.name}.staging-", dir=output_root.parent)
-    )
-    execution = Path(tempfile.mkdtemp(prefix="final-figure-execution-"))
+    reservation = _reserve_publication(output_root)
+    staging = None
+    execution = None
     try:
+        staging = Path(
+            tempfile.mkdtemp(
+                prefix=f".{output_root.name}.staging-", dir=output_root.parent
+            )
+        )
+        execution = Path(tempfile.mkdtemp(prefix="final-figure-execution-"))
+        immutable_source = execution / "approved_source"
+        attestation = materialize_approved_source(
+            repository,
+            approved_generator_commit,
+            immutable_source,
+            attestation,
+        )
+        immutable_allowlist = (
+            immutable_source / "submission" / "final_figure_candidates.json"
+        )
+        _require(
+            file_sha256(immutable_allowlist) == approval.allowlist_sha256,
+            "Materialized allowlist differs from approved allowlist",
+        )
+        if source_materialized_hook is not None:
+            source_materialized_hook(repository, immutable_source)
+
         figure_root = staging / "candidates" / "figure_root"
         c0_root = staging / "candidates" / "c0_root"
         _require(
             not figure_root.exists() and not c0_root.exists(),
             "Candidate roots must start nonexistent",
         )
-        (execution / "config").symlink_to(
-            repository / "config", target_is_directory=True
+        _copy_config_tree(
+            immutable_source / "config",
+            execution / "config",
         )
         plots_root = execution / "plots"
         plots_root.mkdir()
-        release_view = execution / "release_plots"
-        release_aliases = _prepare_release_plot_view(release_root, release_view)
-        env = _generator_environment(repository)
+        release_snapshot = _snapshot_release_inputs(
+            release_root,
+            staging / "provenance" / "release_input_snapshot",
+            staging_root=staging,
+            after_open_hook=release_after_open_hook,
+        )
+        anchor = release_snapshot.anchor
+        release_view = release_snapshot.plots_root
+        release_aliases = release_snapshot.alias_sources
+        env = _generator_environment(repository, immutable_source)
         python = sys.executable
         generated = execution / "generated"
         logs = staging / "provenance" / "logs"
-        snapshot_artifacts: list[dict] = []
+        snapshot_artifacts: list[dict] = list(release_snapshot.artifact_records)
         candidates: list[dict] = []
         contracts: dict[str, dict] = {"final_release": release_contract}
-
-        for filename in (
-            "submission_config.resolved.json",
-            "sweep_manifest.json",
-            "perturbed_sweep.csv",
-            "SHA256SUMS",
-        ):
-            _copy_manifest(
-                release_root / filename,
-                staging,
-                f"provenance/release/{filename}",
-                f"release_{filename}",
-                snapshot_artifacts,
-            )
+        approval_snapshot = copy_verified_file(
+            Path(approval.path),
+            staging / "provenance" / "external_approval_record.json",
+            expected_sha256=approval.sha256,
+        )
+        snapshot_artifacts.append(
+            snapshot_record(approval_snapshot, staging, "external_approval_record")
+        )
 
         main_out = generated / "maintext"
         main_cmd = [
             python,
+            "-B",
             "-m",
             "experiments.static.generate_section6_maintext_figures",
             "--csv",
-            str(release_root / "perturbed_sweep.csv"),
+            str(release_snapshot.csv_path),
             "--plots_root",
             str(release_view),
             "--out_dir",
@@ -927,7 +1574,10 @@ def orchestrate_final_figures(
                     str(expected["wiggle"]).replace(".", "p"),
                     expected["seed"],
                 )
-                source_manifest = release_aliases[alias] / "run_manifest.json"
+                _require(
+                    alias in release_aliases, f"Release snapshot lacks alias {alias}"
+                )
+                source_manifest = release_view / alias / "run_manifest.json"
                 safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", alias)
                 _copy_manifest(
                     source_manifest,
@@ -940,10 +1590,11 @@ def orchestrate_final_figures(
         all_out = generated / "all_methods"
         all_cmd = [
             python,
+            "-B",
             "-m",
             "experiments.static.run_perturbed_sweeps",
             "--plot_from_csv",
-            str(release_root / "perturbed_sweep.csv"),
+            str(release_snapshot.csv_path),
             "--summary_dir",
             str(all_out),
             "--no-notify",
@@ -999,6 +1650,7 @@ def orchestrate_final_figures(
             prefix = f"final_resolution_{experiment}"
             cmd = [
                 python,
+                "-B",
                 "-m",
                 "experiments.static.run_appendix_resolution_visuals",
                 "--only",
@@ -1059,6 +1711,33 @@ def orchestrate_final_figures(
                     "resolution_companion_run_manifest",
                     snapshot_artifacts,
                 )
+            resolution_payload = load_json_object(out / "manifest.json")
+            input_count = 0
+            for run_index, run in enumerate(
+                sorted(resolution_payload["runs"], key=lambda item: item["save_name"])
+            ):
+                run_root = plots_root / str(run["save_name"])
+                for input_path, role in resolution_input_paths(
+                    plots_root,
+                    experiment=experiment,
+                    save_name=str(run["save_name"]),
+                    case_index=case_index,
+                ):
+                    relative = input_path.relative_to(run_root)
+                    _copy_manifest(
+                        input_path,
+                        staging,
+                        (
+                            f"provenance/resolution/{experiment}/inputs/"
+                            f"{run_index:02d}/{relative.as_posix()}"
+                        ),
+                        role,
+                        snapshot_artifacts,
+                    )
+                    input_count += 1
+            resolution_contract["experiments"][experiment][
+                "snapshotted_input_files"
+            ] = input_count
             for variant in ("with_endpoints", "clean"):
                 candidate_id = f"{experiment}_resolution_{variant}"
                 source = (
@@ -1080,6 +1759,7 @@ def orchestrate_final_figures(
             prefix = f"final_guarded_c0_{experiment}"
             cmd = [
                 python,
+                "-B",
                 "-m",
                 "experiments.static.run_appendix_c0_study",
                 "--only",
@@ -1117,6 +1797,14 @@ def orchestrate_final_figures(
         c0_run_manifests = validate_c0_manifests(
             c0_paths, plots_root, approved_generator_commit
         )
+        c0_metric_contracts = {
+            experiment: validate_c0_metrics(
+                generated / "guarded_c0" / experiment / "metrics.csv",
+                experiment,
+                c0_paths[experiment],
+            )
+            for experiment in ("ellipses", "zalesak")
+        }
         contracts["guarded_c0"] = {
             "status": "validated",
             "setting_count": 165,
@@ -1130,6 +1818,7 @@ def orchestrate_final_figures(
                 }
                 for key in C0_RESOLUTIONS
             },
+            "metrics": c0_metric_contracts,
         }
         for experiment in ("ellipses", "zalesak"):
             out = generated / "guarded_c0" / experiment
@@ -1151,6 +1840,45 @@ def orchestrate_final_figures(
                 "generator_command",
                 snapshot_artifacts,
             )
+            _copy_manifest(
+                out / "metrics.csv",
+                staging,
+                f"provenance/guarded_c0/{experiment}/metrics.csv",
+                "guarded_c0_aggregate_metrics",
+                snapshot_artifacts,
+            )
+            representative = C0_REPRESENTATIVES[experiment]
+            c0_payload = load_json_object(c0_paths[experiment])
+            representative_runs = [
+                run
+                for run in c0_payload["runs"]
+                if _same_number(run.get("resolution"), representative["resolution"])
+                and _same_number(run.get("wiggle"), representative["wiggle"])
+                and run.get("seed") == representative["seed"]
+            ]
+            _require(
+                {run.get("variant") for run in representative_runs}
+                == set(C0_VARIANTS[experiment]),
+                f"Guarded-C0 representative run set differs for {experiment}",
+            )
+            for run_index, run in enumerate(
+                sorted(representative_runs, key=lambda item: item["variant"])
+            ):
+                run_root = plots_root / str(run["save_name"])
+                for input_path, role in representative_geometry_input_paths(
+                    run_root, case_index=representative["case_index"]
+                ):
+                    relative = input_path.relative_to(run_root)
+                    _copy_manifest(
+                        input_path,
+                        staging,
+                        (
+                            f"provenance/guarded_c0/{experiment}/representative_inputs/"
+                            f"{run_index:02d}/{relative.as_posix()}"
+                        ),
+                        f"guarded_c0_{role}",
+                        snapshot_artifacts,
+                    )
             for candidate_id, source in (
                 (
                     f"{experiment}_appendix_c0_metrics",
@@ -1187,6 +1915,7 @@ def orchestrate_final_figures(
         plic_base = deterministic / "perfect_reconstruction_plic_stencil"
         plic_cmd = [
             python,
+            "-B",
             "-m",
             "experiments.static.generate_plic_baseline_stencil_figure",
             "--out",
@@ -1240,6 +1969,7 @@ def orchestrate_final_figures(
         staged_out = deterministic / "staged"
         staged_cmd = [
             python,
+            "-B",
             "-m",
             "experiments.static.generate_staged_reconstruction_figure",
             "--case-index",
@@ -1313,18 +2043,47 @@ def orchestrate_final_figures(
             == 165,
             "Exactly 165 C0 run manifests must be snapshotted",
         )
+        for role, expected_count in {
+            "resolution_case_metrics": 30,
+            "resolution_case_geometry": 30,
+            "resolution_mesh_geometry": 30,
+            "resolution_reconstructed_geometry": 30,
+            "resolution_facet_metadata": 30,
+            "resolution_truth_geometry": 6,
+            "guarded_c0_aggregate_metrics": 2,
+            "guarded_c0_representative_case_geometry": 6,
+            "guarded_c0_representative_mesh_geometry": 6,
+            "guarded_c0_representative_reconstructed_geometry": 6,
+            "guarded_c0_representative_facet_metadata": 6,
+        }.items():
+            actual_count = sum(row["role"] == role for row in snapshot_artifacts)
+            _require(
+                actual_count == expected_count,
+                f"Snapshot role {role} has {actual_count}, expected {expected_count}",
+            )
 
         orchestration = {
-            "schema_version": 1,
+            "schema_version": 2,
             "manifest_type": "final_figure_orchestration",
-            "status": "completed",
+            "status": "ready_for_internal_acceptance",
             "created_at_utc": datetime.now(timezone.utc).isoformat(),
             "generator_checkout": attestation.to_dict(),
+            "external_approval": {
+                key: value for key, value in approval.to_dict().items() if key != "path"
+            }
+            | {"snapshot_path": "provenance/external_approval_record.json"},
             "scientific_release": anchor,
+            "release_input_snapshot": {
+                "root": "provenance/release_input_snapshot",
+                "representative_alias_sources": dict(
+                    sorted(release_snapshot.alias_sources.items())
+                ),
+                "artifact_count": len(release_snapshot.artifact_records),
+            },
             "scientific_contracts": contracts,
             "allowlist": {
-                "path": str(Path(allowlist_path).resolve()),
-                "sha256": file_sha256(allowlist_path),
+                "path": "submission/final_figure_candidates.json",
+                "sha256": file_sha256(immutable_allowlist),
             },
             "candidates": sorted(
                 candidates,
@@ -1340,30 +2099,55 @@ def orchestrate_final_figures(
         }
         manifest_path = staging / ORCHESTRATION_MANIFEST
         atomic_write_json(manifest_path, orchestration)
+        acceptance_state = _create_orchestrated_acceptance_state(
+            figure_root=figure_root,
+            c0_root=c0_root,
+            snapshot_root=staging,
+            release_anchor=anchor,
+            generator_source_commit=approved_generator_commit,
+            orchestration_record=manifest_path,
+            candidate_records=orchestration["candidates"],
+        )
         finalize_publication(
             staging=staging,
             output_root=output_root,
+            reservation=reservation,
             manifest_path=manifest_path,
-            acceptance_runner=acceptance_runner,
+            acceptance_runner=_accept_orchestrated_candidates,
             acceptance_kwargs={
-                "figure_root": figure_root,
-                "c0_root": c0_root,
-                "release_root": release_root,
-                "orchestration_manifest": manifest_path,
+                "orchestration_state": acceptance_state,
                 "output_dir": staging / "review",
-                "allowlist_path": allowlist_path,
+                "allowlist_path": immutable_allowlist,
             },
             after_acceptance_hook=after_acceptance_hook,
         )
     except Exception as exc:
-        if staging.exists():
-            shutil.rmtree(staging)
-        if isinstance(exc, (FinalFigureOrchestrationError, FigureAcceptanceError)):
+        if staging is not None and staging.exists():
+            _remove_tree(staging)
+        _release_reservation(reservation)
+        if isinstance(
+            exc,
+            (
+                FinalFigureOrchestrationError,
+                FigureAcceptanceError,
+                GeneratorCheckoutError,
+            ),
+        ):
             raise
         raise FinalFigureOrchestrationError(str(exc)) from exc
     finally:
-        if execution.exists():
-            shutil.rmtree(execution)
+        if execution is not None and execution.exists():
+            for path in execution.rglob("*"):
+                if path.is_dir() and not path.is_symlink():
+                    try:
+                        path.chmod(0o700)
+                    except OSError:
+                        pass
+            try:
+                (execution / "approved_source").chmod(0o700)
+            except OSError:
+                pass
+            _remove_tree(execution)
     return output_root
 
 
@@ -1375,6 +2159,17 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         "--approved-generator-commit",
         required=True,
         help="full 40-hex reviewed generator commit",
+    )
+    parser.add_argument(
+        "--approval-record",
+        type=Path,
+        required=True,
+        help="external reviewer approval JSON for the exact final generator commit",
+    )
+    parser.add_argument(
+        "--approval-record-sha256",
+        required=True,
+        help="externally recorded SHA-256 of --approval-record",
     )
     parser.add_argument(
         "--output-root",
@@ -1393,10 +2188,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             repository=args.repository,
             release_root=args.release_root,
             approved_generator_commit=args.approved_generator_commit,
+            approval_record=args.approval_record,
+            approval_record_sha256=args.approval_record_sha256,
             output_root=args.output_root,
             allowlist_path=args.allowlist,
         )
-    except (FinalFigureOrchestrationError, FigureAcceptanceError) as exc:
+    except (
+        FinalFigureOrchestrationError,
+        FigureAcceptanceError,
+        GeneratorCheckoutError,
+    ) as exc:
         print(f"FINAL FIGURE ORCHESTRATION ERROR: {exc}", file=sys.stderr)
         return 2
     print(f"Final figure publication: {output}")

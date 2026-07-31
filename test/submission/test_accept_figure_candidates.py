@@ -19,14 +19,13 @@ from submission.accept_figure_candidates import (
     PdfPageInfo,
     PreviewRecord,
     ProvenanceEvidence,
-    accept_figure_candidates,
+    _accept_orchestrated_candidates,
+    _create_orchestrated_acceptance_state,
     build_vector_review_pdf,
     load_candidate_allowlist,
-    release_figure_anchor,
     render_pdf_preview,
     verify_review_page_map,
 )
-from submission.audit_final_release import AuditReport
 from submission.pdf_vector_qa import FontRecord, PdfQaReport, inspect_pdf
 
 
@@ -59,63 +58,6 @@ def _passing_report(path, *, require_fonts=True):
     )
 
 
-def _passing_release_audit(path):
-    return AuditReport(Path(path))
-
-
-def _generation():
-    return {
-        "generated_at_utc": "2026-07-31T00:00:00+00:00",
-        "source_commit": SOURCE_COMMIT,
-        "source_branch": "submission-source",
-        "source_dirty": False,
-        "source_status": [],
-        "reconstruction_profile": dict(PROFILE),
-        "profile_application": "test fixture",
-    }
-
-
-def _make_release(tmp_path):
-    root = tmp_path / "release"
-    root.mkdir()
-    _write_json(
-        root / "submission_config.resolved.json",
-        {
-            "source": {"target_commit": SOURCE_COMMIT},
-            "production_method": {
-                "unresolved_orientation_fallback": PROFILE["plic_fallback"],
-                "corner_behavior_profile": PROFILE["corner_behavior_profile"],
-                "rescue_profile": PROFILE["rescue_profile"],
-            },
-        },
-    )
-    _write_json(root / "sweep_manifest.json", {"status": "completed"})
-    (root / "perturbed_sweep.csv").write_text("metric,value\nhausdorff,0\n")
-    (root / "representative_geometry.dat").write_bytes(b"final release geometry")
-    files = sorted(path for path in root.rglob("*") if path.is_file())
-    (root / "SHA256SUMS").write_text(
-        "".join(
-            f"{_sha256(path)}  {path.relative_to(root).as_posix()}\n" for path in files
-        ),
-        encoding="utf-8",
-    )
-    return root
-
-
-def _provenance_input(path, role, release_root):
-    path = Path(path).resolve()
-    try:
-        release_relative = path.relative_to(release_root.resolve()).as_posix()
-    except ValueError:
-        release_relative = None
-    return {
-        "role": role,
-        "path": str(path),
-        "sha256": _sha256(path),
-        "release_relative_path": release_relative,
-    }
-
-
 def _populate_candidate_roots(tmp_path):
     snapshot = tmp_path / "snapshot"
     roots = {
@@ -131,8 +73,7 @@ def _populate_candidate_roots(tmp_path):
     return roots
 
 
-def _populate_authoritative_provenance(roots, release_root):
-    anchor = release_figure_anchor(release_root)
+def _orchestrated_state(roots):
     snapshot = roots["figure_root"].parents[1]
     candidates = []
     for spec in load_candidate_allowlist():
@@ -146,60 +87,28 @@ def _populate_authoritative_provenance(roots, release_root):
                 "generator": "test_generator",
             }
         )
-    contracts = {
-        name: {"status": "validated"}
-        for name in (
-            "final_release",
-            "maintext",
-            "all_methods",
-            "resolution",
-            "guarded_c0",
-            "deterministic_plic",
-            "deterministic_staged",
-        )
-    }
-    snapshot_artifacts = []
-    for role, count in (
-        ("resolution_companion_run_manifest", 30),
-        ("guarded_c0_companion_run_manifest", 165),
-    ):
-        for index in range(count):
-            path = snapshot / "provenance" / "fixture" / role / f"{index:03d}.json"
-            _write_json(path, {"role": role, "index": index})
-            snapshot_artifacts.append(
-                {
-                    "role": role,
-                    "path": path.relative_to(snapshot).as_posix(),
-                    "sha256": _sha256(path),
-                    "size_bytes": path.stat().st_size,
-                }
-            )
     manifest_path = snapshot / "provenance" / "final_figure_orchestration.json"
-    _write_json(
-        manifest_path,
-        {
-            "schema_version": 1,
-            "manifest_type": "final_figure_orchestration",
-            "status": "completed",
-            "generator_checkout": {
-                "approved_commit": APPROVED_COMMIT,
-                "scientific_release_commit": SOURCE_COMMIT,
-                "checkout_manifest_sha256": "a" * 64,
-            },
-            "scientific_release": anchor,
-            "scientific_contracts": contracts,
-            "snapshot_artifacts": snapshot_artifacts,
-            "candidates": candidates,
+    _write_json(manifest_path, {"record": "created by orchestrator test fixture"})
+    return _create_orchestrated_acceptance_state(
+        figure_root=roots["figure_root"],
+        c0_root=roots["c0_root"],
+        snapshot_root=snapshot,
+        release_anchor={
+            "name": "release",
+            "source_commit": SOURCE_COMMIT,
+            "reconstruction_profile": PROFILE,
+            "artifacts": {},
         },
+        generator_source_commit=APPROVED_COMMIT,
+        orchestration_record=manifest_path,
+        candidate_records=candidates,
     )
-    return manifest_path
 
 
 def _acceptance_fixture(tmp_path):
-    release_root = _make_release(tmp_path)
     roots = _populate_candidate_roots(tmp_path)
-    manifest = _populate_authoritative_provenance(roots, release_root)
-    return roots, release_root, manifest
+    state = _orchestrated_state(roots)
+    return roots, state
 
 
 def _fake_page_inspector(path):
@@ -221,22 +130,18 @@ def _fake_review_builder(records, output, *, source_commit):
     output.write_bytes(b"%PDF-1.4\nsynthetic vector review\n%%EOF\n")
 
 
-def _accept(tmp_path, roots, release_root, manifest, **overrides):
+def _accept(tmp_path, state, **overrides):
     options = {
-        "figure_root": roots["figure_root"],
-        "c0_root": roots["c0_root"],
-        "release_root": release_root,
-        "orchestration_manifest": manifest,
+        "orchestration_state": state,
         "output_dir": tmp_path / "review",
         "pdf_inspector": _passing_report,
         "page_inspector": _fake_page_inspector,
         "preview_renderer": _fake_preview_renderer,
         "review_builder": _fake_review_builder,
         "review_map_verifier": lambda *args, **kwargs: None,
-        "release_auditor": _passing_release_audit,
     }
     options.update(overrides)
-    return accept_figure_candidates(**options)
+    return _accept_orchestrated_candidates(**options)
 
 
 def test_explicit_allowlist_has_exact_38_candidate_contract():
@@ -255,14 +160,14 @@ def test_explicit_allowlist_has_exact_38_candidate_contract():
 
 
 def test_acceptance_fails_on_missing_and_unexpected_candidate_pdfs(tmp_path):
-    roots, release_root, manifest = _acceptance_fixture(tmp_path)
+    roots, state = _acceptance_fixture(tmp_path)
     missing = roots["figure_root"] / load_candidate_allowlist()[0].pdf
     missing.unlink()
     unexpected = roots["c0_root"] / "summary_plots/unexpected.pdf"
     unexpected.write_bytes(b"%PDF-1.4\n%%EOF\n")
 
     with pytest.raises(FigureAcceptanceError) as caught:
-        _accept(tmp_path, roots, release_root, manifest)
+        _accept(tmp_path, state)
     message = str(caught.value)
     assert "Missing candidate PDFs" in message
     assert "Unexpected candidate PDFs" in message
@@ -271,26 +176,41 @@ def test_acceptance_fails_on_missing_and_unexpected_candidate_pdfs(tmp_path):
 
 
 def test_historical_file_masquerade_fails_provenance_checksum(tmp_path):
-    roots, release_root, manifest = _acceptance_fixture(tmp_path)
+    roots, state = _acceptance_fixture(tmp_path)
     spec = load_candidate_allowlist()[0]
     candidate = roots[spec.root] / spec.pdf
     candidate.write_bytes(b"%PDF-1.4\nhistorical candidate with same name\n%%EOF\n")
 
     with pytest.raises(FigureAcceptanceError, match="candidate checksum mismatch"):
-        _accept(tmp_path, roots, release_root, manifest)
+        _accept(tmp_path, state)
 
 
-def test_release_input_checksum_must_be_proven(tmp_path):
-    roots, release_root, manifest = _acceptance_fixture(tmp_path)
-    (release_root / "representative_geometry.dat").write_bytes(b"stale geometry")
-
-    with pytest.raises(FigureAcceptanceError, match="checksum verification failed"):
-        _accept(tmp_path, roots, release_root, manifest)
+def test_forged_standalone_manifest_cannot_invoke_acceptance(tmp_path):
+    forged = tmp_path / "forged.json"
+    _write_json(forged, {"status": "completed", "scientific_contracts": {}})
+    output = tmp_path / "review"
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "submission/accept_figure_candidates.py",
+            "--orchestration-manifest",
+            str(forged),
+            "--output-dir",
+            str(output),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 2
+    assert "internal-only" in completed.stderr
+    assert not output.exists()
 
 
 @pytest.mark.parametrize("size", [(1, 1), (300, 150)])
 def test_tiny_or_stale_rendered_preview_fails(tmp_path, size):
-    roots, release_root, manifest = _acceptance_fixture(tmp_path)
+    _roots, state = _acceptance_fixture(tmp_path)
 
     def bad_renderer(pdf_path, output_path, *, dpi, page):
         Image.new("RGB", size, "white").save(output_path)
@@ -298,16 +218,14 @@ def test_tiny_or_stale_rendered_preview_fails(tmp_path, size):
     with pytest.raises(FigureAcceptanceError, match="tiny|dimensions do not match"):
         _accept(
             tmp_path,
-            roots,
-            release_root,
-            manifest,
+            state,
             preview_renderer=bad_renderer,
         )
     assert not (tmp_path / "review").exists()
 
 
 def test_multi_page_candidate_fails(tmp_path):
-    roots, release_root, manifest = _acceptance_fixture(tmp_path)
+    _roots, state = _acceptance_fixture(tmp_path)
     failed_name = load_candidate_allowlist()[3].candidate_id
 
     def page_inspector(path):
@@ -316,11 +234,11 @@ def test_multi_page_candidate_fails(tmp_path):
         return _fake_page_inspector(path)
 
     with pytest.raises(FigureAcceptanceError, match="exactly one page"):
-        _accept(tmp_path, roots, release_root, manifest, page_inspector=page_inspector)
+        _accept(tmp_path, state, page_inspector=page_inspector)
 
 
 def test_wrong_merged_review_page_count_fails(tmp_path):
-    roots, release_root, manifest = _acceptance_fixture(tmp_path)
+    _roots, state = _acceptance_fixture(tmp_path)
 
     def page_inspector(path):
         if Path(path).name == "figure_candidate_review.pdf":
@@ -328,12 +246,12 @@ def test_wrong_merged_review_page_count_fails(tmp_path):
         return PdfPageInfo(1, 72.0, 72.0)
 
     with pytest.raises(FigureAcceptanceError, match="Merged review page count"):
-        _accept(tmp_path, roots, release_root, manifest, page_inspector=page_inspector)
+        _accept(tmp_path, state, page_inspector=page_inspector)
     assert not (tmp_path / "review").exists()
 
 
 def test_acceptance_reuses_pdf_qa_and_fails_closed(tmp_path):
-    roots, release_root, manifest = _acceptance_fixture(tmp_path)
+    _roots, state = _acceptance_fixture(tmp_path)
     failed_name = load_candidate_allowlist()[7].candidate_id
 
     def inspector(path, *, require_fonts=True):
@@ -342,18 +260,18 @@ def test_acceptance_reuses_pdf_qa_and_fails_closed(tmp_path):
         return _passing_report(path, require_fonts=require_fonts)
 
     with pytest.raises(FigureAcceptanceError, match="contains 1 raster image"):
-        _accept(tmp_path, roots, release_root, manifest, pdf_inspector=inspector)
+        _accept(tmp_path, state, pdf_inspector=inspector)
 
 
 def test_success_writes_hash_source_maps_and_generated_previews(tmp_path):
-    roots, release_root, manifest = _acceptance_fixture(tmp_path)
+    _roots, state = _acceptance_fixture(tmp_path)
     inspected = []
 
     def inspector(path, *, require_fonts=True):
         inspected.append(Path(path))
         return _passing_report(path, require_fonts=require_fonts)
 
-    outputs = _accept(tmp_path, roots, release_root, manifest, pdf_inspector=inspector)
+    outputs = _accept(tmp_path, state, pdf_inspector=inspector)
 
     assert len(inspected) == 39
     assert len(list((tmp_path / "review" / "previews").glob("*.png"))) == 38
@@ -390,7 +308,7 @@ def test_success_writes_hash_source_maps_and_generated_previews(tmp_path):
 def test_late_write_failure_removes_staging_and_publishes_nothing(
     tmp_path, monkeypatch
 ):
-    roots, release_root, manifest = _acceptance_fixture(tmp_path)
+    _roots, state = _acceptance_fixture(tmp_path)
     module = importlib.import_module("submission.accept_figure_candidates")
 
     def fail_late(*args, **kwargs):
@@ -398,7 +316,7 @@ def test_late_write_failure_removes_staging_and_publishes_nothing(
 
     monkeypatch.setattr(module, "_write_csv", fail_late)
     with pytest.raises(FigureAcceptanceError, match="simulated late write failure"):
-        _accept(tmp_path, roots, release_root, manifest)
+        _accept(tmp_path, state)
     assert not (tmp_path / "review").exists()
     assert not list(tmp_path.glob(".review.staging-*"))
 
@@ -525,15 +443,14 @@ def test_vector_review_builder_concatenates_pdf_pages_without_rasterizing(tmp_pa
     assert inspect_pdf(output).passed
 
 
-def test_documented_direct_cli_entry_point_runs():
+def test_standalone_acceptance_cli_is_deliberately_disabled():
     completed = subprocess.run(
         [sys.executable, "submission/accept_figure_candidates.py", "--help"],
         cwd=REPO_ROOT,
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
     )
-    assert "Fail-closed acceptance gate" in completed.stdout
-    assert "--release-root" in completed.stdout
-    assert "--orchestration-manifest" in completed.stdout
-    assert "--source-commit" not in completed.stdout
+    assert completed.returncode == 2
+    assert "internal-only" in completed.stderr
+    assert "final_figure_orchestrator.py" in completed.stderr

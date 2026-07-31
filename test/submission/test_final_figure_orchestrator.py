@@ -1,5 +1,7 @@
 import json
 import os
+import hashlib
+import csv
 import subprocess
 import sys
 from pathlib import Path
@@ -13,14 +15,21 @@ from submission.final_figure_orchestrator import (
     C0_VARIANTS,
     C0_WIGGLES,
     MAINTEXT_CASES,
+    MAINTEXT_METHODS,
     PROFILE,
     RESOLUTION_CASES,
     RESOLUTION_VALUES,
     RESOLUTION_WIGGLES,
     FinalFigureOrchestrationError,
+    _generator_environment,
     _numbers,
+    _remove_tree,
+    _reserve_publication,
+    _snapshot_release_inputs,
     finalize_publication,
+    resolution_input_paths,
     stage_all_method_candidates,
+    validate_c0_metrics,
     validate_c0_manifests,
     validate_maintext_manifest,
     validate_plic_metadata,
@@ -30,6 +39,8 @@ from submission.final_figure_orchestrator import (
 from submission.final_figure_provenance import atomic_write_json, file_sha256
 from submission.generator_checkout import (
     GeneratorCheckoutError,
+    materialize_approved_source,
+    verify_external_approval_record,
     verify_generator_checkout,
 )
 from submission.accept_figure_candidates import load_candidate_allowlist
@@ -100,8 +111,9 @@ def _git_repo(tmp_path):
     _git(repo, "config", "user.email", "test@example.com")
     _git(repo, "config", "user.name", "Test")
     tracked = repo / "generator.py"
+    (repo / ".gitignore").write_text("__pycache__/\n*.pyc\n", encoding="utf-8")
     tracked.write_text("old = True\n", encoding="utf-8")
-    _git(repo, "add", "generator.py")
+    _git(repo, "add", "generator.py", ".gitignore")
     _git(repo, "commit", "-m", "historical")
     historical = _git(repo, "rev-parse", "HEAD")
     tracked.write_text("release = True\n", encoding="utf-8")
@@ -121,7 +133,7 @@ def test_checkout_rejects_nonexistent_and_historical_generator_commits(tmp_path)
         verify_generator_checkout(repo, historical, release)
     attestation = verify_generator_checkout(repo, approved, release)
     assert attestation.approved_commit == approved
-    assert attestation.tracked_file_count == 1
+    assert attestation.tracked_file_count == 2
 
 
 def test_checkout_rejects_coherent_old_bytes_hidden_by_assume_unchanged(tmp_path):
@@ -132,6 +144,106 @@ def test_checkout_rejects_coherent_old_bytes_hidden_by_assume_unchanged(tmp_path
     assert _git(repo, "status", "--porcelain") == ""
     with pytest.raises(GeneratorCheckoutError, match="assume-unchanged/skip-worktree"):
         verify_generator_checkout(repo, approved, release)
+
+
+def test_git_replace_refs_and_caller_git_environment_cannot_substitute_source(
+    tmp_path, monkeypatch
+):
+    repo, _tracked, historical, release, approved = _git_repo(tmp_path)
+    _git(repo, "replace", approved, historical)
+    monkeypatch.setenv("GIT_NO_REPLACE_OBJECTS", "0")
+    monkeypatch.setenv("GIT_DIR", str(tmp_path / "attacker.git"))
+    monkeypatch.setenv("GIT_OBJECT_DIRECTORY", str(tmp_path / "objects"))
+    monkeypatch.setenv("PATH", str(tmp_path / "attacker-bin"))
+
+    attestation = verify_generator_checkout(repo, approved, release)
+    source = tmp_path / "materialized"
+    materialized = materialize_approved_source(repo, approved, source, attestation)
+    try:
+        assert (source / "generator.py").read_text(
+            encoding="utf-8"
+        ) == "approved = True\n"
+        assert materialized.materialized_manifest_sha256 == (
+            attestation.checkout_manifest_sha256
+        )
+    finally:
+        _remove_tree(source)
+
+
+def test_materialized_source_excludes_ignored_pyc_and_survives_live_edit(tmp_path):
+    repo, tracked, _historical, release, approved = _git_repo(tmp_path)
+    pycache = repo / "__pycache__"
+    pycache.mkdir()
+    (pycache / "generator.cpython-39.pyc").write_bytes(b"malicious ignored bytecode")
+    attestation = verify_generator_checkout(repo, approved, release)
+    source = tmp_path / "materialized"
+    materialize_approved_source(repo, approved, source, attestation)
+    try:
+        assert not (source / "__pycache__").exists()
+        tracked.write_text("concurrent = 'live edit'\n", encoding="utf-8")
+        assert (source / "generator.py").read_text(
+            encoding="utf-8"
+        ) == "approved = True\n"
+        env = _generator_environment(repo, source)
+        assert env["PYTHONPATH"] == str(source.resolve())
+        assert env["PYTHONDONTWRITEBYTECODE"] == "1"
+        assert env["GIT_NO_REPLACE_OBJECTS"] == "1"
+    finally:
+        _remove_tree(source)
+
+
+def test_external_approval_record_pins_final_commit_tree_and_digest(tmp_path):
+    repo, _tracked, _historical, release, approved = _git_repo(tmp_path)
+    attestation = verify_generator_checkout(repo, approved, release)
+    allowlist = tmp_path / "allowlist.json"
+    allowlist.write_text("{}\n", encoding="utf-8")
+    approval = tmp_path / "approval.json"
+    payload = {
+        "schema_version": 1,
+        "record_type": "final_figure_generator_approval",
+        "approved_generator_commit": approved,
+        "approved_generator_tree": attestation.commit_tree,
+        "scientific_release_commit": release,
+        "allowlist_sha256": hashlib.sha256(allowlist.read_bytes()).hexdigest(),
+        "approved_by": "independent reviewer",
+        "approved_at_utc": "2026-07-31T12:00:00Z",
+    }
+    _write_json(approval, payload)
+    digest = hashlib.sha256(approval.read_bytes()).hexdigest()
+    record = verify_external_approval_record(
+        approval,
+        digest,
+        repository=repo,
+        approved_commit=approved,
+        approved_tree=attestation.commit_tree,
+        scientific_release_commit=release,
+        allowlist_sha256=payload["allowlist_sha256"],
+    )
+    assert record.approved_generator_commit == approved
+    payload["approved_generator_commit"] = release
+    _write_json(approval, payload)
+    with pytest.raises(GeneratorCheckoutError, match="SHA-256 does not match"):
+        verify_external_approval_record(
+            approval,
+            digest,
+            repository=repo,
+            approved_commit=approved,
+            approved_tree=attestation.commit_tree,
+            scientific_release_commit=release,
+            allowlist_sha256=record.allowlist_sha256,
+        )
+    approval_link = tmp_path / "approval-link.json"
+    approval_link.symlink_to(approval)
+    with pytest.raises(GeneratorCheckoutError, match="symbolic link"):
+        verify_external_approval_record(
+            approval_link,
+            hashlib.sha256(approval.read_bytes()).hexdigest(),
+            repository=repo,
+            approved_commit=approved,
+            approved_tree=attestation.commit_tree,
+            scientific_release_commit=release,
+            allowlist_sha256=record.allowlist_sha256,
+        )
 
 
 def test_parameterless_or_wrong_maintext_manifest_fails(tmp_path):
@@ -278,6 +390,119 @@ def test_guarded_c0_requires_exactly_165_completed_settings(tmp_path):
         validate_c0_manifests(paths, plots, COMMIT)
 
 
+def _write_complete_c0_metrics(path, experiment):
+    metric_bases = {
+        "ellipses": (
+            "curvature_error",
+            "facet_gap",
+            "hausdorff",
+            "tangent_error",
+            "curvature_proxy_error",
+        ),
+        "zalesak": ("area_error", "facet_gap", "hausdorff"),
+    }[experiment]
+    fieldnames = (
+        "experiment",
+        "algo",
+        "facet_algo",
+        "do_c0",
+        "resolution",
+        "wiggle",
+        "seed",
+        "metric_key",
+        "metric_value",
+        "save_name",
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=fieldnames)
+        writer.writeheader()
+        for resolution in C0_RESOLUTIONS[experiment]:
+            for wiggle in C0_WIGGLES:
+                for label, (method, do_c0) in C0_VARIANTS[experiment].items():
+                    for metric in metric_bases:
+                        for statistic in ("mean", "median", "p25", "p75"):
+                            writer.writerow(
+                                {
+                                    "experiment": experiment,
+                                    "algo": label,
+                                    "facet_algo": method,
+                                    "do_c0": int(do_c0),
+                                    "resolution": resolution,
+                                    "wiggle": wiggle,
+                                    "seed": 0,
+                                    "metric_key": f"{metric}_{statistic}",
+                                    "metric_value": 0.0,
+                                    "save_name": (
+                                        f"c0_{experiment}_{label}_{resolution}_{wiggle}"
+                                    ),
+                                }
+                            )
+
+
+@pytest.mark.parametrize(
+    "experiment,expected_rows", [("ellipses", 1800), ("zalesak", 900)]
+)
+def test_guarded_c0_metrics_require_exact_setting_metric_coverage(
+    tmp_path, experiment, expected_rows
+):
+    path = tmp_path / experiment / "metrics.csv"
+    _write_complete_c0_metrics(path, experiment)
+    contract = validate_c0_metrics(path, experiment)
+    assert contract["row_count"] == expected_rows
+
+    rows = path.read_text(encoding="utf-8").splitlines()
+    path.write_text("\n".join(rows[:-1]) + "\n", encoding="utf-8")
+    with pytest.raises(
+        FinalFigureOrchestrationError, match="metric coverage|row count"
+    ):
+        validate_c0_metrics(path, experiment)
+
+
+def test_resolution_inputs_require_quantitative_and_geometry_evidence(tmp_path):
+    run = tmp_path / "plots" / "resolution"
+    metrics = run / "metrics"
+    facets = run / "vtk" / "reconstructed" / "facets"
+    facets.mkdir(parents=True)
+    metrics.mkdir(parents=True)
+    (run / "vtk" / "mesh.vtk").write_bytes(b"mesh")
+    (facets / "0.vtp").write_bytes(b"facet")
+    _write_json(
+        facets / "0.facet_metadata.json",
+        {"schema_version": 2, "primitives": []},
+    )
+    with (metrics / "case_metrics.csv").open(
+        "w", newline="", encoding="utf-8"
+    ) as stream:
+        writer = csv.DictWriter(
+            stream, fieldnames=("case_index", "hausdorff", "facet_gap")
+        )
+        writer.writeheader()
+        writer.writerow({"case_index": 0, "hausdorff": 0.0, "facet_gap": 0.0})
+    (metrics / "case_geometry.jsonl").write_text(
+        json.dumps({"case_index": 0, "geometry_type": "line"}) + "\n",
+        encoding="utf-8",
+    )
+    truth = run / "vtk" / "true" / "true_line0.vtp"
+    truth.parent.mkdir(parents=True)
+    truth.write_bytes(b"truth")
+    paths = resolution_input_paths(
+        tmp_path / "plots",
+        experiment="lines",
+        save_name="resolution",
+        case_index=0,
+    )
+    assert len(paths) == 6
+    (metrics / "case_geometry.jsonl").unlink()
+    with pytest.raises(FinalFigureOrchestrationError, match="JSONL is missing"):
+        resolution_input_paths(
+            tmp_path / "plots",
+            experiment="lines",
+            save_name="resolution",
+            case_index=0,
+        )
+
+
 def test_wrong_deterministic_parameters_fail(tmp_path):
     plic = tmp_path / "plic.json"
     _write_json(
@@ -312,6 +537,92 @@ def test_wrong_deterministic_parameters_fail(tmp_path):
     )
     with pytest.raises(FinalFigureOrchestrationError, match="slot_width"):
         validate_staged_metadata(staged, COMMIT)
+
+
+def _release_snapshot_fixture(tmp_path):
+    release = tmp_path / "release"
+    raw = release / "raw_runs"
+    raw.mkdir(parents=True)
+    _write_json(
+        release / "submission_config.resolved.json",
+        {
+            "source": {"target_commit": COMMIT},
+            "production_method": {
+                "unresolved_orientation_fallback": PROFILE["plic_fallback"],
+                "corner_behavior_profile": PROFILE["corner_behavior_profile"],
+                "rescue_profile": PROFILE["rescue_profile"],
+            },
+        },
+    )
+    _write_json(release / "sweep_manifest.json", {"status": "completed"})
+    fields = (
+        "experiment",
+        "algo",
+        "resolution",
+        "wiggle",
+        "seed",
+        "metric_key",
+        "metric_value",
+        "save_name",
+    )
+    with (release / "perturbed_sweep.csv").open(
+        "w", newline="", encoding="utf-8"
+    ) as stream:
+        writer = csv.DictWriter(stream, fieldnames=fields)
+        writer.writeheader()
+        for experiment, expected in MAINTEXT_CASES.items():
+            for method in MAINTEXT_METHODS[experiment]:
+                save_name = (
+                    f"release_{experiment}_{method.lower().replace('+', 'plus')}"
+                )
+                bundle = raw / save_name
+                bundle.mkdir()
+                _write_json(bundle / "run_manifest.json", {"save_name": save_name})
+                (bundle / "geometry.bin").write_bytes(save_name.encode("utf-8"))
+                writer.writerow(
+                    {
+                        "experiment": experiment,
+                        "algo": method,
+                        "resolution": expected["resolution"],
+                        "wiggle": expected["wiggle"],
+                        "seed": expected["seed"],
+                        "metric_key": "hausdorff_median",
+                        "metric_value": 0.0,
+                        "save_name": save_name,
+                    }
+                )
+    files = sorted(path for path in release.rglob("*") if path.is_file())
+    (release / "SHA256SUMS").write_text(
+        "".join(
+            f"{hashlib.sha256(path.read_bytes()).hexdigest()}  "
+            f"{path.relative_to(release).as_posix()}\n"
+            for path in files
+        ),
+        encoding="utf-8",
+    )
+    return release
+
+
+def test_release_snapshot_rejects_transient_input_mutation(tmp_path):
+    release = _release_snapshot_fixture(tmp_path)
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    mutated = False
+
+    def mutate_after_open(path):
+        nonlocal mutated
+        if not mutated and path.name == "perturbed_sweep.csv":
+            mutated = True
+            path.write_bytes(path.read_bytes() + b"# concurrent mutation\n")
+
+    with pytest.raises(ValueError, match="changed while being read|checksum mismatch"):
+        _snapshot_release_inputs(
+            release,
+            staging / "provenance" / "release_input_snapshot",
+            staging_root=staging,
+            after_open_hook=mutate_after_open,
+        )
+    assert not (staging / "provenance" / "release_input_snapshot").exists()
 
 
 def test_48_pdf_all_method_output_stages_only_five(tmp_path):
@@ -407,6 +718,7 @@ def test_candidate_mutation_after_acceptance_cleans_up_and_publishes_nothing(tmp
     manifest = staging / "provenance" / "final_figure_orchestration.json"
     atomic_write_json(manifest, {"snapshot_artifacts": [], "candidates": candidates})
     output = tmp_path / "publication"
+    reservation = _reserve_publication(output)
 
     def mutate(root):
         first = load_candidate_allowlist()[0]
@@ -416,10 +728,65 @@ def test_candidate_mutation_after_acceptance_cleans_up_and_publishes_nothing(tmp
         finalize_publication(
             staging=staging,
             output_root=output,
+            reservation=reservation,
             manifest_path=manifest,
             acceptance_runner=lambda **_kwargs: None,
             acceptance_kwargs={},
             after_acceptance_hook=mutate,
         )
     assert not output.exists()
+    assert not staging.exists()
+
+
+def test_destination_race_never_replaces_competing_output(tmp_path):
+    staging = tmp_path / ".publication.staging-test"
+    staging.mkdir()
+    manifest = staging / "provenance" / "final_figure_orchestration.json"
+    atomic_write_json(manifest, {"snapshot_artifacts": [], "candidates": []})
+    output = tmp_path / "publication"
+    reservation = _reserve_publication(output)
+
+    def create_competing_destination(_root):
+        output.mkdir()
+        (output / "sentinel.txt").write_text("winner\n", encoding="utf-8")
+
+    with pytest.raises(FinalFigureOrchestrationError, match="destination appeared"):
+        finalize_publication(
+            staging=staging,
+            output_root=output,
+            reservation=reservation,
+            manifest_path=manifest,
+            acceptance_runner=lambda **_kwargs: None,
+            acceptance_kwargs={},
+            after_acceptance_hook=create_competing_destination,
+        )
+    assert (output / "sentinel.txt").read_text(encoding="utf-8") == "winner\n"
+    assert not staging.exists()
+
+
+def test_publication_reservation_rejects_dangling_destination_symlink(tmp_path):
+    output = tmp_path / "publication"
+    output.symlink_to(tmp_path / "missing-target", target_is_directory=True)
+    with pytest.raises(FinalFigureOrchestrationError, match="including as a symlink"):
+        _reserve_publication(output)
+    assert output.is_symlink()
+
+
+def test_successful_publication_uses_atomic_no_replace(tmp_path):
+    staging = tmp_path / ".publication.staging-test"
+    staging.mkdir()
+    manifest = staging / "provenance" / "final_figure_orchestration.json"
+    atomic_write_json(manifest, {"snapshot_artifacts": [], "candidates": []})
+    output = tmp_path / "publication"
+    reservation = _reserve_publication(output)
+    finalize_publication(
+        staging=staging,
+        output_root=output,
+        reservation=reservation,
+        manifest_path=manifest,
+        acceptance_runner=lambda **_kwargs: None,
+        acceptance_kwargs={},
+    )
+    assert output.is_dir()
+    assert (output / "provenance" / "published_tree_sha256.json").is_file()
     assert not staging.exists()

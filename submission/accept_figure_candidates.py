@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
-"""Fail-closed acceptance gate for the 38 final paper-figure candidates.
+"""Internal review builder for orchestrated final paper-figure candidates.
 
-The command validates the explicit candidate allowlist, authoritative source
-provenance, and vector PDF properties. It then renders fresh 300-DPI previews
-and creates an indexed review packet by concatenating source PDF pages directly.
+This module deliberately has no standalone acceptance command. The final-figure
+orchestrator passes an in-memory state derived from its own trusted generation
+run. Caller-authored provenance manifests are never an acceptance input.
 """
 
 from __future__ import annotations
 
-import argparse
 import csv
 import hashlib
 import json
@@ -30,15 +29,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from submission.final_figure_provenance import (
-    file_sha256,
-    release_figure_anchor,
-)
-from submission.audit_final_release import (
-    AuditReport,
-    audit_final_release,
-    verify_sha256_manifest,
-)
+from submission.final_figure_provenance import file_sha256
 from submission.pdf_vector_qa import PdfQaError, PdfQaReport, inspect_pdf
 
 
@@ -99,7 +90,20 @@ class ProvenanceEvidence:
     generator_source_commit: str
 
 
-ORCHESTRATION_MANIFEST_TYPE = "final_figure_orchestration"
+_ORCHESTRATION_AUTHORITY = object()
+
+
+@dataclass(frozen=True)
+class _OrchestratedAcceptanceState:
+    authority: object
+    figure_root: Path
+    c0_root: Path
+    snapshot_root: Path
+    release_anchor: Mapping[str, object]
+    generator_source_commit: str
+    orchestration_record: Path
+    orchestration_record_sha256: str
+    candidate_records: Tuple[Mapping[str, object], ...]
 
 
 @dataclass(frozen=True)
@@ -124,6 +128,56 @@ class AcceptanceOutputs:
     source_map_json: Path
     source_map_csv: Path
     vector_qa_json: Path
+
+
+def _create_orchestrated_acceptance_state(
+    *,
+    figure_root: Path,
+    c0_root: Path,
+    snapshot_root: Path,
+    release_anchor: Mapping[str, object],
+    generator_source_commit: str,
+    orchestration_record: Path,
+    candidate_records: Sequence[Mapping[str, object]],
+) -> _OrchestratedAcceptanceState:
+    """Create the process-local capability consumed by internal acceptance."""
+
+    snapshot_root = Path(snapshot_root).resolve()
+    figure_root = Path(figure_root).resolve()
+    c0_root = Path(c0_root).resolve()
+    orchestration_record = Path(orchestration_record).resolve()
+    expected_roots = {
+        "figure_root": (snapshot_root / "candidates" / "figure_root").resolve(),
+        "c0_root": (snapshot_root / "candidates" / "c0_root").resolve(),
+    }
+    if (
+        figure_root != expected_roots["figure_root"]
+        or c0_root != expected_roots["c0_root"]
+    ):
+        raise FigureAcceptanceError(
+            "Acceptance roots are not the orchestrator's private candidate roots"
+        )
+    if not orchestration_record.is_file() or not _root_contains(
+        snapshot_root, orchestration_record
+    ):
+        raise FigureAcceptanceError("Orchestration record is outside private staging")
+    if not isinstance(release_anchor.get("source_commit"), str):
+        raise FigureAcceptanceError("Orchestration state lacks a release source commit")
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", generator_source_commit or ""):
+        raise FigureAcceptanceError(
+            "Orchestration state lacks an approved generator commit"
+        )
+    return _OrchestratedAcceptanceState(
+        authority=_ORCHESTRATION_AUTHORITY,
+        figure_root=figure_root,
+        c0_root=c0_root,
+        snapshot_root=snapshot_root,
+        release_anchor=dict(release_anchor),
+        generator_source_commit=generator_source_commit,
+        orchestration_record=orchestration_record,
+        orchestration_record_sha256=file_sha256(orchestration_record),
+        candidate_records=tuple(dict(record) for record in candidate_records),
+    )
 
 
 def _safe_relative_path(raw: object, *, field: str) -> str:
@@ -315,174 +369,47 @@ def verify_candidate_inventory(
         raise FigureAcceptanceError("\n".join(errors))
 
 
-def _load_json_object(path: Path) -> dict:
-    try:
-        value = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise FigureAcceptanceError(
-            f"Could not read JSON object {path}: {exc}"
-        ) from exc
-    if not isinstance(value, dict):
-        raise FigureAcceptanceError(f"JSON root must be an object: {path}")
-    return value
-
-
-def verify_orchestration_provenance(
+def _candidate_provenance_from_state(
     specs: Sequence[CandidateSpec],
     roots: Mapping[str, Path],
-    release_root: Path,
-    orchestration_manifest: Path,
-    *,
-    release_auditor: Callable[[Path], AuditReport] = audit_final_release,
-    checksum_verifier: Callable[[Path], List[str]] = verify_sha256_manifest,
-) -> tuple[dict, Dict[str, ProvenanceEvidence]]:
-    """Verify the sealed snapshot created by the orchestration wrapper."""
-
-    release_root = Path(release_root).resolve()
-    report = release_auditor(release_root)
-    if not report.ok:
-        detail = "; ".join(report.errors) or f"{report.total_errors} audit errors"
-        raise FigureAcceptanceError(f"Final release audit failed: {detail}")
-    checksum_errors = checksum_verifier(release_root)
-    if checksum_errors:
-        raise FigureAcceptanceError(
-            "Final release checksum verification failed: " + "; ".join(checksum_errors)
-        )
-    try:
-        anchor = release_figure_anchor(release_root)
-    except ValueError as exc:
-        raise FigureAcceptanceError(str(exc)) from exc
-
-    manifest_path = Path(orchestration_manifest).resolve()
-    manifest = _load_json_object(manifest_path)
-    if manifest.get("schema_version") != 1:
-        raise FigureAcceptanceError("Orchestration manifest has an unsupported schema")
-    if manifest.get("manifest_type") != ORCHESTRATION_MANIFEST_TYPE:
-        raise FigureAcceptanceError("Orchestration manifest has the wrong type")
-    if manifest.get("status") != "completed":
-        raise FigureAcceptanceError("Orchestration manifest is not completed")
-    if manifest.get("scientific_release") != anchor:
-        raise FigureAcceptanceError("Orchestration release anchor does not match")
-
-    checkout = manifest.get("generator_checkout")
-    if not isinstance(checkout, dict):
-        raise FigureAcceptanceError("Orchestration manifest lacks checkout attestation")
-    approved_commit = checkout.get("approved_commit")
-    if (
-        not isinstance(approved_commit, str)
-        or not re.fullmatch(r"[0-9a-fA-F]{40}", approved_commit)
-        or checkout.get("scientific_release_commit") != anchor["source_commit"]
-        or not isinstance(checkout.get("checkout_manifest_sha256"), str)
-    ):
-        raise FigureAcceptanceError("Orchestration checkout attestation is incomplete")
-
-    contracts = manifest.get("scientific_contracts")
-    required_contracts = {
-        "final_release",
-        "maintext",
-        "all_methods",
-        "resolution",
-        "guarded_c0",
-        "deterministic_plic",
-        "deterministic_staged",
-    }
-    if not isinstance(contracts, dict) or set(contracts) != required_contracts:
-        raise FigureAcceptanceError(
-            "Orchestration scientific contract set is incomplete"
-        )
-    if any(
-        not isinstance(contract, dict) or contract.get("status") != "validated"
-        for contract in contracts.values()
-    ):
-        raise FigureAcceptanceError(
-            "An orchestration scientific contract is not validated"
-        )
-
-    snapshot_root = manifest_path.parent.parent
-    expected_roots = {
-        key: (snapshot_root / "candidates" / key).resolve() for key in ROOT_KEYS
-    }
-    if dict(roots) != expected_roots:
-        raise FigureAcceptanceError(
-            "Candidate roots are not the private orchestration snapshot roots"
-        )
-    artifact_records = manifest.get("snapshot_artifacts")
-    if not isinstance(artifact_records, list):
-        raise FigureAcceptanceError("Orchestration snapshot artifact list is missing")
-    seen_artifacts = set()
-    for record in artifact_records:
-        if not isinstance(record, dict):
-            raise FigureAcceptanceError("Malformed orchestration snapshot artifact")
-        relative = record.get("path")
-        digest = record.get("sha256")
-        if not isinstance(relative, str) or not isinstance(digest, str):
-            raise FigureAcceptanceError("Incomplete orchestration snapshot artifact")
-        artifact = (snapshot_root / relative).resolve()
-        if not _root_contains(snapshot_root, artifact) or not artifact.is_file():
-            raise FigureAcceptanceError(f"Snapshot artifact is missing: {relative}")
-        if relative in seen_artifacts:
-            raise FigureAcceptanceError(f"Duplicate snapshot artifact: {relative}")
-        seen_artifacts.add(relative)
-        if _sha256(artifact) != digest or artifact.stat().st_size != record.get(
-            "size_bytes"
-        ):
-            raise FigureAcceptanceError(
-                f"Snapshot artifact checksum failed: {relative}"
-            )
-    role_counts = {
-        role: sum(record.get("role") == role for record in artifact_records)
-        for role in (
-            "resolution_companion_run_manifest",
-            "guarded_c0_companion_run_manifest",
-        )
-    }
-    if role_counts != {
-        "resolution_companion_run_manifest": 30,
-        "guarded_c0_companion_run_manifest": 165,
-    }:
-        raise FigureAcceptanceError(
-            "Orchestration snapshot must contain all 30 resolution and 165 C0 run manifests"
-        )
-
+    state: _OrchestratedAcceptanceState,
+) -> Dict[str, ProvenanceEvidence]:
     expected = {spec.candidate_id: spec for spec in specs}
-    raw_candidates = manifest.get("candidates")
-    if not isinstance(raw_candidates, list) or len(raw_candidates) != len(expected):
-        raise FigureAcceptanceError("Orchestration candidate set is incomplete")
+    if len(state.candidate_records) != len(expected):
+        raise FigureAcceptanceError("Orchestrated candidate set is incomplete")
     evidence: Dict[str, ProvenanceEvidence] = {}
-    for raw in raw_candidates:
-        if not isinstance(raw, dict):
-            raise FigureAcceptanceError("Malformed orchestration candidate record")
+    for raw in state.candidate_records:
         candidate_id = raw.get("candidate_id")
         if candidate_id not in expected or candidate_id in evidence:
             raise FigureAcceptanceError(
-                "Orchestration has an unknown or duplicate candidate"
+                "Orchestrated candidate is unknown or duplicated"
             )
         spec = expected[candidate_id]
         if raw.get("root") != spec.root or raw.get("pdf") != spec.pdf:
             raise FigureAcceptanceError(
-                f"Orchestration candidate path mismatch for {candidate_id}"
+                f"Orchestrated candidate path mismatch for {candidate_id}"
             )
-        candidate_path = (roots[spec.root] / spec.pdf).resolve()
+        candidate_path = roots[spec.root] / spec.pdf
         if raw.get("sha256") != _sha256(candidate_path):
             raise FigureAcceptanceError(
-                f"Orchestration candidate checksum mismatch for {candidate_id}"
+                f"Orchestrated candidate checksum mismatch for {candidate_id}"
             )
         generator = raw.get("generator")
         if not isinstance(generator, str) or not generator:
             raise FigureAcceptanceError(
-                f"Orchestration candidate lacks generator for {candidate_id}"
+                f"Orchestrated candidate lacks generator for {candidate_id}"
             )
         evidence[candidate_id] = ProvenanceEvidence(
-            manifest_path=manifest_path,
-            manifest_sha256=_sha256(manifest_path),
+            manifest_path=state.orchestration_record,
+            manifest_sha256=state.orchestration_record_sha256,
             generator=generator,
-            generator_source_commit=approved_commit,
+            generator_source_commit=state.generator_source_commit,
         )
     if set(evidence) != set(expected):
         raise FigureAcceptanceError(
             "Orchestration does not cover exactly 38 candidates"
         )
-    return anchor, evidence
+    return evidence
 
 
 def _run_text_tool(command: Sequence[str]) -> str:
@@ -771,13 +698,9 @@ def _root_contains(root: Path, candidate: Path) -> bool:
     return True
 
 
-def _validate_invocation(
-    roots: Mapping[str, Path], release_root: Path, output_dir: Path
-) -> None:
+def _validate_invocation(roots: Mapping[str, Path], output_dir: Path) -> None:
     if roots["figure_root"] == roots["c0_root"]:
         raise FigureAcceptanceError("figure_root and c0_root must be distinct")
-    if not release_root.is_dir():
-        raise FigureAcceptanceError(f"release_root is not a directory: {release_root}")
     for key, root in roots.items():
         if not root.is_dir():
             raise FigureAcceptanceError(f"{key} is not a directory: {root}")
@@ -865,12 +788,9 @@ def _write_csv(
             )
 
 
-def accept_figure_candidates(
+def _accept_orchestrated_candidates(
     *,
-    figure_root: Path,
-    c0_root: Path,
-    release_root: Path,
-    orchestration_manifest: Path,
+    orchestration_state: _OrchestratedAcceptanceState,
     output_dir: Path,
     allowlist_path: Path = DEFAULT_ALLOWLIST,
     pdf_inspector: Callable[..., PdfQaReport] = inspect_pdf,
@@ -878,28 +798,23 @@ def accept_figure_candidates(
     preview_renderer: Callable[..., None] = render_pdf_preview,
     review_builder: Callable[..., None] = build_vector_review_pdf,
     review_map_verifier: Callable[..., None] = verify_review_page_map,
-    release_auditor: Callable[[Path], AuditReport] = audit_final_release,
-    checksum_verifier: Callable[[Path], List[str]] = verify_sha256_manifest,
 ) -> AcceptanceOutputs:
+    if orchestration_state.authority is not _ORCHESTRATION_AUTHORITY:
+        raise FigureAcceptanceError(
+            "Acceptance requires process-local state created by the final-figure orchestrator"
+        )
     roots = {
-        "figure_root": Path(figure_root).resolve(),
-        "c0_root": Path(c0_root).resolve(),
+        "figure_root": Path(orchestration_state.figure_root).resolve(),
+        "c0_root": Path(orchestration_state.c0_root).resolve(),
     }
-    release_root = Path(release_root).resolve()
     output_dir = Path(output_dir).resolve()
-    _validate_invocation(roots, release_root, output_dir)
+    _validate_invocation(roots, output_dir)
     specs = load_candidate_allowlist(allowlist_path)
     verify_candidate_inventory(specs, roots)
-    anchor, provenance = verify_orchestration_provenance(
-        specs,
-        roots,
-        release_root,
-        orchestration_manifest,
-        release_auditor=release_auditor,
-        checksum_verifier=checksum_verifier,
-    )
+    provenance = _candidate_provenance_from_state(specs, roots, orchestration_state)
+    anchor = dict(orchestration_state.release_anchor)
     source_commit = anchor["source_commit"]
-    snapshot_root = Path(orchestration_manifest).resolve().parent.parent
+    snapshot_root = Path(orchestration_state.snapshot_root).resolve()
 
     candidate_audits = []
     errors: List[str] = []
@@ -1025,7 +940,7 @@ def accept_figure_candidates(
             "release_source_commit": source_commit,
             "release": anchor,
             "allowlist": {
-                "path": str(Path(allowlist_path).resolve()),
+                "path": "submission/final_figure_candidates.json",
                 "sha256": _sha256(Path(allowlist_path).resolve()),
                 "expected_counts": EXPECTED_COUNTS,
             },
@@ -1120,57 +1035,14 @@ def accept_figure_candidates(
     )
 
 
-def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--figure-root", type=Path, required=True)
-    parser.add_argument("--c0-root", type=Path, required=True)
-    parser.add_argument(
-        "--orchestration-manifest",
-        type=Path,
-        required=True,
-        help="sealed manifest written by final_figure_orchestrator.py",
-    )
-    parser.add_argument(
-        "--release-root",
-        type=Path,
-        required=True,
-        help="audited final release root that anchors source/profile/input provenance",
-    )
-    parser.add_argument(
-        "--output-dir",
-        type=Path,
-        required=True,
-        help="new, nonexistent directory outside both candidate roots",
-    )
-    parser.add_argument(
-        "--allowlist",
-        type=Path,
-        default=DEFAULT_ALLOWLIST,
-        help="explicit 38-candidate allowlist JSON",
-    )
-    return parser.parse_args(argv)
-
-
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    args = parse_args(argv)
-    try:
-        outputs = accept_figure_candidates(
-            figure_root=args.figure_root,
-            c0_root=args.c0_root,
-            release_root=args.release_root,
-            orchestration_manifest=args.orchestration_manifest,
-            output_dir=args.output_dir,
-            allowlist_path=args.allowlist,
-        )
-    except FigureAcceptanceError as exc:
-        print(f"FIGURE ACCEPTANCE ERROR: {exc}", file=sys.stderr)
-        return 2
-    print("FIGURE CANDIDATES ACCEPTED: 38/38 PDFs and 38/38 PNG previews")
-    print(f"Review PDF: {outputs.review_pdf}")
-    print(f"Source map JSON: {outputs.source_map_json}")
-    print(f"Source map CSV: {outputs.source_map_csv}")
-    print(f"Vector QA JSON: {outputs.vector_qa_json}")
-    return 0
+    del argv
+    print(
+        "FIGURE ACCEPTANCE ERROR: this module is internal-only; run "
+        "submission/final_figure_orchestrator.py",
+        file=sys.stderr,
+    )
+    return 2
 
 
 if __name__ == "__main__":
