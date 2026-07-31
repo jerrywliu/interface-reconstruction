@@ -180,7 +180,7 @@ ALL_METHOD_FILES = {
 ORCHESTRATION_MANIFEST = "provenance/final_figure_orchestration.json"
 PRIVATE_ALLOWLIST = "provenance/approved_candidate_allowlist.json"
 PUBLISHED_TREE_LEDGER = "provenance/published_tree_sha256.json"
-ORCHESTRATION_SCHEMA_VERSION = 3
+ORCHESTRATION_SCHEMA_VERSION = 4
 C0_METRIC_BASES = {
     "ellipses": (
         "curvature_error",
@@ -244,6 +244,102 @@ class ReleaseInputSnapshot:
     anchor: dict
     artifact_records: tuple[dict, ...]
     alias_sources: Mapping[str, str]
+
+
+@dataclass(frozen=True)
+class ReleaseAuditPin:
+    root: Path
+    device: int
+    inode: int
+    source_commit: str
+    sha256sums_bytes: bytes
+    sha256sums_sha256: str
+    resolved_config_sha256: str
+    contract: Mapping[str, object]
+
+
+def _capture_release_audit_pin(
+    release_root: Path, *, contract: Optional[Mapping[str, object]] = None
+) -> ReleaseAuditPin:
+    """Capture the exact release identity and authority bytes used by an audit."""
+
+    supplied = Path(release_root).expanduser().absolute()
+    _require(
+        not supplied.is_symlink(), f"Release root must not be a symlink: {supplied}"
+    )
+    try:
+        root_info = supplied.lstat()
+    except FileNotFoundError as exc:
+        raise FinalFigureOrchestrationError(
+            f"Release root does not exist: {supplied}"
+        ) from exc
+    _require(
+        stat.S_ISDIR(root_info.st_mode), f"Release root is not a directory: {supplied}"
+    )
+    manifest_bytes = stable_file_bytes(supplied / "SHA256SUMS")
+    config_bytes = stable_file_bytes(supplied / "submission_config.resolved.json")
+    try:
+        config = json.loads(config_bytes.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise FinalFigureOrchestrationError(
+            f"Resolved release config is invalid JSON: {exc}"
+        ) from exc
+    _require(isinstance(config, dict), "Resolved release config must be an object")
+    source = config.get("source")
+    source_commit = source.get("target_commit") if isinstance(source, dict) else None
+    _require(
+        isinstance(source_commit, str)
+        and re.fullmatch(r"[0-9a-fA-F]{40}", source_commit) is not None,
+        "Resolved release config lacks a full source commit",
+    )
+    after = supplied.lstat()
+    _require(
+        (after.st_dev, after.st_ino) == (root_info.st_dev, root_info.st_ino),
+        "Release root changed while audit authority was captured",
+    )
+    return ReleaseAuditPin(
+        root=supplied,
+        device=root_info.st_dev,
+        inode=root_info.st_ino,
+        source_commit=source_commit,
+        sha256sums_bytes=manifest_bytes,
+        sha256sums_sha256=hashlib.sha256(manifest_bytes).hexdigest(),
+        resolved_config_sha256=hashlib.sha256(config_bytes).hexdigest(),
+        contract=dict(contract or {}),
+    )
+
+
+def _assert_release_matches_audit_pin(
+    release_root: Path, audit_pin: ReleaseAuditPin
+) -> None:
+    supplied = Path(release_root).expanduser().absolute()
+    _require(supplied == audit_pin.root, "Release root differs from audited root")
+    _require(not supplied.is_symlink(), "Audited release root became a symlink")
+    try:
+        info = supplied.lstat()
+    except FileNotFoundError as exc:
+        raise FinalFigureOrchestrationError("Audited release root disappeared") from exc
+    _require(
+        stat.S_ISDIR(info.st_mode)
+        and (info.st_dev, info.st_ino) == (audit_pin.device, audit_pin.inode),
+        "Audited release root was replaced",
+    )
+    manifest_bytes = stable_file_bytes(supplied / "SHA256SUMS")
+    _require(
+        manifest_bytes == audit_pin.sha256sums_bytes
+        and hashlib.sha256(manifest_bytes).hexdigest() == audit_pin.sha256sums_sha256,
+        "Release SHA256SUMS differs from the audited bytes",
+    )
+    config_bytes = stable_file_bytes(supplied / "submission_config.resolved.json")
+    _require(
+        hashlib.sha256(config_bytes).hexdigest() == audit_pin.resolved_config_sha256,
+        "Resolved release config differs from the audited bytes",
+    )
+    config = json.loads(config_bytes.decode("utf-8"))
+    _require(
+        config.get("source", {}).get("target_commit") == audit_pin.source_commit,
+        "Release source commit differs from the audited source commit",
+    )
 
 
 def _reserve_publication(output_root: Path) -> PublicationReservation:
@@ -454,13 +550,15 @@ def _snapshot_release_inputs(
     release_root: Path,
     destination: Path,
     *,
+    audit_pin: ReleaseAuditPin,
     staging_root: Path,
     after_open_hook: Optional[Callable[[Path], None]] = None,
 ) -> ReleaseInputSnapshot:
     """Copy every release byte consumed by generators into immutable staging."""
 
-    release_root = Path(release_root).resolve()
+    release_root = Path(release_root).expanduser().absolute()
     destination = Path(destination).resolve()
+    _assert_release_matches_audit_pin(release_root, audit_pin)
     _require(
         not destination.exists(), f"Release snapshot already exists: {destination}"
     )
@@ -468,6 +566,10 @@ def _snapshot_release_inputs(
     try:
         live_manifest = release_root / "SHA256SUMS"
         manifest_bytes = stable_file_bytes(live_manifest)
+        _require(
+            manifest_bytes == audit_pin.sha256sums_bytes,
+            "Release snapshot ledger differs byte-for-byte from the live audit",
+        )
         manifest_target = destination / "SHA256SUMS"
         manifest_target.write_bytes(manifest_bytes)
         manifest_digest = file_sha256(manifest_target)
@@ -537,7 +639,18 @@ def _snapshot_release_inputs(
             and file_sha256(manifest_target) == manifest_digest,
             "Release checksum ledger changed during input snapshot",
         )
+        _assert_release_matches_audit_pin(release_root, audit_pin)
+        _require(
+            manifest_target.read_bytes() == audit_pin.sha256sums_bytes
+            and file_sha256(destination / "submission_config.resolved.json")
+            == audit_pin.resolved_config_sha256,
+            "Private release snapshot differs from the audited authority bytes",
+        )
         snapshot_anchor = release_figure_anchor(destination)
+        _require(
+            snapshot_anchor["source_commit"] == audit_pin.source_commit,
+            "Private release snapshot has a different audited source commit",
+        )
         snapshot_anchor["root"] = "provenance/release_input_snapshot"
         for relative, record in snapshot_anchor["artifacts"].items():
             record["path"] = f"provenance/release_input_snapshot/{relative}"
@@ -586,16 +699,17 @@ def _validate_generation(
     )
 
 
-def validate_final_release_contract(release_root: Path) -> dict:
-    report = audit_final_release(release_root)
+def validate_final_release_contract(release_root: Path) -> ReleaseAuditPin:
+    audit_pin = _capture_release_audit_pin(release_root)
+    report = audit_final_release(audit_pin.root)
     _require(report.ok, "Final release audit failed: " + "; ".join(report.errors))
-    checksum_errors = verify_sha256_manifest(release_root)
+    checksum_errors = verify_sha256_manifest(audit_pin.root)
     _require(
         not checksum_errors,
         "Final release checksum failed: " + "; ".join(checksum_errors),
     )
-    config = load_json_object(Path(release_root) / "submission_config.resolved.json")
-    sweep = load_json_object(Path(release_root) / "sweep_manifest.json")
+    config = load_json_object(audit_pin.root / "submission_config.resolved.json")
+    sweep = load_json_object(audit_pin.root / "sweep_manifest.json")
     grid = config.get("benchmark_grid")
     benchmarks = config.get("benchmarks")
     totals = config.get("planned_totals")
@@ -654,8 +768,10 @@ def validate_final_release_contract(release_root: Path) -> dict:
         sweep.get("failure_count") == 0 and not sweep.get("failures"),
         "Sweep contains failures",
     )
-    return {
+    contract = {
         "status": "validated",
+        "audited_source_commit": audit_pin.source_commit,
+        "audited_sha256sums_sha256": audit_pin.sha256sums_sha256,
         "methods": {key: list(value) for key, value in RELEASE_METHODS.items()},
         "run_counts": RELEASE_RUN_COUNTS,
         "seed": 0,
@@ -664,6 +780,13 @@ def validate_final_release_contract(release_root: Path) -> dict:
         "total_cases": 24250,
         "profile": PROFILE,
     }
+    _assert_release_matches_audit_pin(audit_pin.root, audit_pin)
+    return ReleaseAuditPin(
+        **{
+            **audit_pin.__dict__,
+            "contract": contract,
+        }
+    )
 
 
 def validate_maintext_manifest(path: Path) -> dict:
@@ -1295,14 +1418,39 @@ def _copy(source: Path, destination: Path) -> Path:
     return destination
 
 
-def _write_command_record(path: Path, command: Sequence[str], commit: str) -> Path:
+def _portable_command(
+    command: Sequence[str], *, staging_root: Path, execution_root: Path
+) -> list[str]:
+    replacements = (
+        (str(Path(staging_root).resolve()), "<publication-root>"),
+        (str(Path(execution_root).resolve()), "<private-execution>"),
+    )
+    portable = []
+    for raw in command:
+        value = str(raw)
+        for prefix, replacement in replacements:
+            value = value.replace(prefix, replacement)
+        portable.append(value)
+    return portable
+
+
+def _write_command_record(
+    path: Path,
+    command: Sequence[str],
+    commit: str,
+    *,
+    staging_root: Path,
+    execution_root: Path,
+) -> Path:
     atomic_write_json(
         path,
         {
             "schema_version": 1,
             "status": "completed",
             "approved_generator_commit": commit,
-            "command": list(command),
+            "command": _portable_command(
+                command, staging_root=staging_root, execution_root=execution_root
+            ),
             "recorded_at_utc": datetime.now(timezone.utc).isoformat(),
         },
     )
@@ -1353,8 +1501,7 @@ def _stage_candidate(source: Path, staging: Path, spec, generator: str) -> dict:
     _copy(source, target)
     return {
         "candidate_id": spec.candidate_id,
-        "root": spec.root,
-        "pdf": spec.pdf,
+        "path": target.relative_to(staging).as_posix(),
         "sha256": file_sha256(target),
         "generator": generator,
     }
@@ -1392,7 +1539,12 @@ def _rehash_before_publish(
             "Orchestration manifest names a candidate outside the private allowlist",
         )
         spec = specs[record["candidate_id"]]
-        path = staging / "candidates" / spec.root / spec.pdf
+        expected_relative = (Path("candidates") / spec.root / spec.pdf).as_posix()
+        _require(
+            record.get("path") == expected_relative,
+            f"Candidate path changed before publish: {spec.candidate_id}",
+        )
+        path = staging / expected_relative
         _require(
             path.is_file() and file_sha256(path) == record["sha256"],
             f"Candidate mutated before publish: {spec.candidate_id}",
@@ -1521,6 +1673,132 @@ def _verify_frozen_publication_tree(root: Path, *, ledger_sha256: str) -> None:
         )
 
 
+def _published_logical_path(
+    root: Path, raw: object, *, label: str, directory: bool = False
+) -> str:
+    _require(
+        isinstance(raw, str) and raw and "\\" not in raw,
+        f"{label} must be a nonempty publication-root-relative POSIX path",
+    )
+    pure = PurePosixPath(raw)
+    _require(
+        not pure.is_absolute() and "." not in pure.parts and ".." not in pure.parts,
+        f"{label} is not a safe publication-root-relative path: {raw}",
+    )
+    target = root.joinpath(*pure.parts)
+    _require(not target.is_symlink(), f"{label} resolves through a symlink: {raw}")
+    _require(
+        target.is_dir() if directory else target.is_file(),
+        f"{label} does not resolve to an existing {'directory' if directory else 'file'}: {raw}",
+    )
+    return pure.as_posix()
+
+
+def validate_published_logical_paths(root: Path) -> tuple[str, ...]:
+    """Verify that every wrapper-owned artifact path resolves in the final tree."""
+
+    root = Path(root).resolve()
+    _require(root.is_dir(), f"Publication root does not exist: {root}")
+    checked: list[str] = []
+
+    def check(raw: object, label: str, *, directory: bool = False) -> None:
+        checked.append(
+            _published_logical_path(root, raw, label=label, directory=directory)
+        )
+
+    orchestration_path = root / ORCHESTRATION_MANIFEST
+    if orchestration_path.is_file():
+        orchestration = load_json_object(orchestration_path)
+        external_approval = orchestration.get("external_approval", {})
+        if isinstance(external_approval, dict) and "snapshot_path" in external_approval:
+            check(
+                external_approval["snapshot_path"],
+                "orchestration external approval snapshot_path",
+            )
+        scientific_release = orchestration.get("scientific_release", {})
+        if isinstance(scientific_release, dict):
+            if "root" in scientific_release:
+                check(
+                    scientific_release["root"],
+                    "orchestration scientific release root",
+                    directory=True,
+                )
+            artifacts = scientific_release.get("artifacts", {})
+            if isinstance(artifacts, dict):
+                for name, record in artifacts.items():
+                    if isinstance(record, dict) and "path" in record:
+                        check(
+                            record["path"],
+                            f"orchestration scientific release artifact {name}",
+                        )
+        release_snapshot = orchestration.get("release_input_snapshot", {})
+        if isinstance(release_snapshot, dict) and "root" in release_snapshot:
+            check(
+                release_snapshot["root"],
+                "orchestration release input snapshot root",
+                directory=True,
+            )
+        allowlist = orchestration.get("allowlist", {})
+        if isinstance(allowlist, dict) and "path" in allowlist:
+            check(allowlist["path"], "orchestration allowlist path")
+        for index, record in enumerate(orchestration.get("candidates", [])):
+            if isinstance(record, dict) and "path" in record:
+                check(record["path"], f"orchestration candidate {index} path")
+        for index, record in enumerate(orchestration.get("snapshot_artifacts", [])):
+            if isinstance(record, dict) and "path" in record:
+                check(record["path"], f"orchestration snapshot artifact {index} path")
+
+    source_map_path = root / "review" / "figure_candidate_source_map.json"
+    if source_map_path.is_file():
+        source_map = load_json_object(source_map_path)
+        release = source_map.get("release", {})
+        if isinstance(release, dict):
+            if "root" in release:
+                check(release["root"], "source map release root", directory=True)
+            artifacts = release.get("artifacts", {})
+            if isinstance(artifacts, dict):
+                for name, record in artifacts.items():
+                    if isinstance(record, dict) and "path" in record:
+                        check(record["path"], f"source map release artifact {name}")
+        check(source_map["allowlist"]["path"], "source map allowlist path")
+        for name, path in source_map.get("roots", {}).items():
+            check(path, f"source map root {name}", directory=True)
+        check(source_map["review"]["path"], "source map review PDF path")
+        check(source_map["vector_qa"]["path"], "source map vector QA path")
+        for index, record in enumerate(source_map.get("candidates", [])):
+            check(record["pdf_path"], f"source map candidate {index} PDF path")
+            check(record["png_path"], f"source map candidate {index} preview path")
+            check(
+                record["provenance_manifest"],
+                f"source map candidate {index} provenance path",
+            )
+
+    qa_path = root / "review" / "figure_candidate_vector_qa.json"
+    if qa_path.is_file():
+        qa = load_json_object(qa_path)
+        for index, report in enumerate(qa.get("candidate_reports", [])):
+            check(report["path"], f"vector QA candidate {index} path")
+        check(qa["review_report"]["path"], "vector QA review PDF path")
+
+    source_csv = root / "review" / "figure_candidate_source_map.csv"
+    if source_csv.is_file():
+        with source_csv.open(newline="", encoding="utf-8") as stream:
+            for index, row in enumerate(csv.DictReader(stream)):
+                check(row["pdf_relative_path"], f"source CSV candidate {index} PDF")
+                check(row["png_relative_path"], f"source CSV candidate {index} preview")
+                check(
+                    row["provenance_manifest"],
+                    f"source CSV candidate {index} provenance",
+                )
+
+    ledger_path = root / PUBLISHED_TREE_LEDGER
+    if ledger_path.is_file():
+        ledger = load_json_object(ledger_path)
+        for index, record in enumerate(ledger.get("files", [])):
+            check(record["path"], f"published ledger artifact {index}")
+    return tuple(checked)
+
+
 def finalize_publication(
     *,
     staging: Path,
@@ -1561,6 +1839,7 @@ def finalize_publication(
             {"schema_version": 1, "files": tree_records},
         )
         ledger_sha256 = file_sha256(publish_tree / PUBLISHED_TREE_LEDGER)
+        validate_published_logical_paths(publish_tree)
         _remove_tree(staging)
         make_tree_read_only(publish_tree)
         if after_publish_freeze_hook is not None:
@@ -1601,7 +1880,7 @@ def orchestrate_final_figures(
     release_after_open_hook: Optional[Callable[[Path], None]] = None,
 ) -> Path:
     repository = Path(repository).resolve()
-    release_root = Path(release_root).resolve()
+    release_root = Path(release_root).expanduser().absolute()
     supplied_output = Path(output_root).expanduser().absolute()
     _require(
         not os.path.lexists(supplied_output),
@@ -1618,10 +1897,9 @@ def orchestrate_final_figures(
         "Final acceptance must use the approved repository allowlist",
     )
     _require(not output_root.exists(), f"Output root must not exist: {output_root}")
-    release_contract = validate_final_release_contract(release_root)
-    live_anchor = release_figure_anchor(release_root)
+    release_audit_pin = validate_final_release_contract(release_root)
     attestation = verify_generator_checkout(
-        repository, approved_generator_commit, live_anchor["source_commit"]
+        repository, approved_generator_commit, release_audit_pin.source_commit
     )
     reservation = _reserve_publication(output_root)
     staging = None
@@ -1685,6 +1963,7 @@ def orchestrate_final_figures(
         release_snapshot = _snapshot_release_inputs(
             release_root,
             staging / "provenance" / "release_input_snapshot",
+            audit_pin=release_audit_pin,
             staging_root=staging,
             after_open_hook=release_after_open_hook,
         )
@@ -1692,6 +1971,11 @@ def orchestrate_final_figures(
         release_view = release_snapshot.plots_root
         release_aliases = release_snapshot.alias_sources
         release_sha256sums_sha256 = file_sha256(release_snapshot.root / "SHA256SUMS")
+        _require(
+            release_sha256sums_sha256 == release_audit_pin.sha256sums_sha256
+            and anchor["source_commit"] == release_audit_pin.source_commit,
+            "Private release snapshot differs from the completed live audit",
+        )
         approval = verify_external_approval_record(
             approval_record,
             approval_record_sha256,
@@ -1719,7 +2003,7 @@ def orchestrate_final_figures(
             snapshot_record(runtime_record, staging, "trusted_figure_runtime")
         )
         candidates: list[dict] = []
-        contracts: dict[str, dict] = {"final_release": release_contract}
+        contracts: dict[str, dict] = {"final_release": dict(release_audit_pin.contract)}
         approval_snapshot = copy_verified_file(
             Path(approval.path),
             staging / "provenance" / "external_approval_record.json",
@@ -1764,7 +2048,11 @@ def orchestrate_final_figures(
         )
         _copy_manifest(
             _write_command_record(
-                execution / "maintext_command.json", main_cmd, approved_generator_commit
+                execution / "maintext_command.json",
+                main_cmd,
+                approved_generator_commit,
+                staging_root=staging,
+                execution_root=execution,
             ),
             staging,
             "provenance/maintext/command.json",
@@ -1850,6 +2138,8 @@ def orchestrate_final_figures(
                 execution / "all_methods_command.json",
                 all_cmd,
                 approved_generator_commit,
+                staging_root=staging,
+                execution_root=execution,
             ),
             staging,
             "provenance/all_methods/command.json",
@@ -1862,8 +2152,7 @@ def orchestrate_final_figures(
             candidates.append(
                 {
                     "candidate_id": spec.candidate_id,
-                    "root": spec.root,
-                    "pdf": spec.pdf,
+                    "path": target.relative_to(staging).as_posix(),
                     "sha256": file_sha256(target),
                     "generator": "all_method_summary_plots",
                 }
@@ -1931,6 +2220,8 @@ def orchestrate_final_figures(
                     execution / f"resolution_{experiment}_command.json",
                     cmd,
                     approved_generator_commit,
+                    staging_root=staging,
+                    execution_root=execution,
                 ),
                 staging,
                 f"provenance/resolution/{experiment}/command.json",
@@ -2075,6 +2366,8 @@ def orchestrate_final_figures(
                     execution / f"guarded_c0_{experiment}_command.json",
                     c0_commands[experiment],
                     approved_generator_commit,
+                    staging_root=staging,
+                    execution_root=execution,
                 ),
                 staging,
                 f"provenance/guarded_c0/{experiment}/command.json",
@@ -2201,7 +2494,11 @@ def orchestrate_final_figures(
         )
         _copy_manifest(
             _write_command_record(
-                execution / "plic_command.json", plic_cmd, approved_generator_commit
+                execution / "plic_command.json",
+                plic_cmd,
+                approved_generator_commit,
+                staging_root=staging,
+                execution_root=execution,
             ),
             staging,
             "provenance/deterministic/plic_command.json",
@@ -2259,7 +2556,11 @@ def orchestrate_final_figures(
         )
         _copy_manifest(
             _write_command_record(
-                execution / "staged_command.json", staged_cmd, approved_generator_commit
+                execution / "staged_command.json",
+                staged_cmd,
+                approved_generator_commit,
+                staging_root=staging,
+                execution_root=execution,
             ),
             staging,
             "provenance/deterministic/staged_command.json",
@@ -2319,6 +2620,11 @@ def orchestrate_final_figures(
             }
             | {"snapshot_path": "provenance/external_approval_record.json"},
             "scientific_release": anchor,
+            "audited_release_authority": {
+                "source_commit": release_audit_pin.source_commit,
+                "sha256sums_sha256": release_audit_pin.sha256sums_sha256,
+                "resolved_config_sha256": release_audit_pin.resolved_config_sha256,
+            },
             "release_input_snapshot": {
                 "root": "provenance/release_input_snapshot",
                 "representative_alias_sources": dict(

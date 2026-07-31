@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import hashlib
 import csv
 import subprocess
@@ -24,11 +25,13 @@ from submission.final_figure_orchestrator import (
     RESOLUTION_VALUES,
     RESOLUTION_WIGGLES,
     FinalFigureOrchestrationError,
+    _capture_release_audit_pin,
     _generator_environment,
     _numbers,
     _remove_tree,
     _reserve_publication,
     _snapshot_release_inputs,
+    _write_command_record,
     finalize_publication,
     resolution_input_paths,
     stage_all_method_candidates,
@@ -820,6 +823,7 @@ def _release_snapshot_fixture(tmp_path):
 
 def test_release_snapshot_rejects_transient_input_mutation(tmp_path):
     release = _release_snapshot_fixture(tmp_path)
+    audit_pin = _capture_release_audit_pin(release)
     staging = tmp_path / "staging"
     staging.mkdir()
     mutated = False
@@ -834,8 +838,69 @@ def test_release_snapshot_rejects_transient_input_mutation(tmp_path):
         _snapshot_release_inputs(
             release,
             staging / "provenance" / "release_input_snapshot",
+            audit_pin=audit_pin,
             staging_root=staging,
             after_open_hook=mutate_after_open,
+        )
+    assert not (staging / "provenance" / "release_input_snapshot").exists()
+
+
+def test_release_snapshot_preserves_audited_ledger_and_source_commit(tmp_path):
+    release = _release_snapshot_fixture(tmp_path)
+    audit_pin = _capture_release_audit_pin(release)
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    snapshot = _snapshot_release_inputs(
+        release,
+        staging / "provenance" / "release_input_snapshot",
+        audit_pin=audit_pin,
+        staging_root=staging,
+    )
+
+    assert audit_pin.source_commit == COMMIT
+    assert (
+        audit_pin.sha256sums_sha256
+        == hashlib.sha256((release / "SHA256SUMS").read_bytes()).hexdigest()
+    )
+    assert (snapshot.root / "SHA256SUMS").read_bytes() == audit_pin.sha256sums_bytes
+    assert snapshot.anchor["source_commit"] == audit_pin.source_commit
+
+
+def test_release_snapshot_rejects_release_root_replacement_after_audit(tmp_path):
+    release = _release_snapshot_fixture(tmp_path)
+    audit_pin = _capture_release_audit_pin(release)
+    original = tmp_path / "release-before-replacement"
+    release.rename(original)
+    shutil.copytree(original, release)
+    staging = tmp_path / "staging"
+    staging.mkdir()
+
+    with pytest.raises(
+        FinalFigureOrchestrationError, match="release root was replaced"
+    ):
+        _snapshot_release_inputs(
+            release,
+            staging / "provenance" / "release_input_snapshot",
+            audit_pin=audit_pin,
+            staging_root=staging,
+        )
+    assert not (staging / "provenance" / "release_input_snapshot").exists()
+
+
+def test_release_snapshot_rejects_release_ledger_change_after_audit(tmp_path):
+    release = _release_snapshot_fixture(tmp_path)
+    audit_pin = _capture_release_audit_pin(release)
+    ledger = release / "SHA256SUMS"
+    ledger.write_bytes(ledger.read_bytes() + b"# coherent-looking replacement\n")
+    staging = tmp_path / "staging"
+    staging.mkdir()
+
+    with pytest.raises(FinalFigureOrchestrationError, match="SHA256SUMS differs"):
+        _snapshot_release_inputs(
+            release,
+            staging / "provenance" / "release_input_snapshot",
+            audit_pin=audit_pin,
+            staging_root=staging,
         )
     assert not (staging / "provenance" / "release_input_snapshot").exists()
 
@@ -853,6 +918,30 @@ def test_48_pdf_all_method_output_stages_only_five(tmp_path):
     assert {path.name for path in destination.glob("*.pdf")} == set(
         ALL_METHOD_FILES.values()
     )
+
+
+def test_command_provenance_does_not_record_deleted_private_roots(tmp_path):
+    staging = tmp_path / "private-staging"
+    execution = tmp_path / "private-execution"
+    staging.mkdir()
+    execution.mkdir()
+    record = _write_command_record(
+        execution / "command.json",
+        [
+            "python",
+            str(staging / "provenance" / "release_input_snapshot" / "data.csv"),
+            f"--out={execution / 'generated' / 'figure.pdf'}",
+        ],
+        COMMIT,
+        staging_root=staging,
+        execution_root=execution,
+    )
+
+    text = record.read_text(encoding="utf-8")
+    assert str(staging) not in text
+    assert str(execution) not in text
+    assert "<publication-root>/provenance/release_input_snapshot/data.csv" in text
+    assert "--out=<private-execution>/generated/figure.pdf" in text
 
 
 def test_existing_plot_from_csv_callers_remain_compatible(tmp_path, monkeypatch):
@@ -924,8 +1013,7 @@ def test_candidate_mutation_after_acceptance_cleans_up_and_publishes_nothing(tmp
         candidates.append(
             {
                 "candidate_id": spec.candidate_id,
-                "root": spec.root,
-                "pdf": spec.pdf,
+                "path": (Path("candidates") / spec.root / spec.pdf).as_posix(),
                 "sha256": file_sha256(path),
                 "generator": "test",
             }

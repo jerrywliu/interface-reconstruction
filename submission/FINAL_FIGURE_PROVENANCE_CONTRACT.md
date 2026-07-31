@@ -34,7 +34,7 @@ The record schema is:
     "paired_slots": 12,
     "paired_candidates": 24
   },
-  "orchestrator_schema_version": 3,
+  "orchestrator_schema_version": 4,
   "approved_by": "<reviewer identity>",
   "approved_at_utc": "YYYY-MM-DDTHH:MM:SSZ"
 }
@@ -94,19 +94,22 @@ SHA-256, Python/package versions, tool versions, and configuration digests in
 
 ## Release Input Snapshot
 
-The final release must first pass its complete audit and `SHA256SUMS` check. The
-wrapper then snapshots every release byte the generators consume before any
-figure generation:
+Before the complete release audit starts, the wrapper pins the release-root
+device/inode, the exact `SHA256SUMS` bytes and SHA-256, the exact resolved-config
+SHA-256, and the resolved scientific source commit. The completed audit must
+still match that pin. The wrapper then snapshots every release byte the
+generators consume before any figure generation:
 
 - resolved configuration, completed sweep manifest, aggregate CSV, and checksum ledger;
 - the complete raw run bundles required by all representative main-text panels.
 
 Each file is opened without following a symlink, read once, checked for stable
 inode/size/timestamps during the read, verified against `SHA256SUMS`, and copied
-without replacement. The live ledger is checked again after the copy. The
-snapshot is made read-only. Main-text and all-method generators consume only
-the snapshotted CSV and physical raw-bundle copies, never a live CSV, symlink,
-or release directory.
+without replacement. Before the snapshot is accepted, the live release root is
+re-attested and the private ledger bytes, resolved-config digest, and source
+commit must equal the audit pin exactly. The snapshot is made read-only.
+Main-text and all-method generators consume only the snapshotted CSV and
+physical raw-bundle copies, never a live CSV, symlink, or release directory.
 
 ## Scientific Contracts
 
@@ -144,7 +147,11 @@ and do not establish submission provenance.
 The orchestrator's in-memory state covers exactly 38 allowlisted one-page PDFs.
 Internal acceptance runs vector QA fail-closed, renders fresh 300-DPI previews,
 verifies their dimensions, builds the indexed vector review PDF, measures its
-41 pages, verifies the page map, and writes JSON/CSV source maps.
+41 pages, verifies the page map, and writes JSON/CSV source maps. Every
+wrapper-owned PDF, preview, QA, source-map, candidate, snapshot, and provenance
+artifact path is a publication-root-relative POSIX path. Before publication,
+each recorded path must resolve inside the frozen publication tree and exist;
+temporary staging paths are never accepted as logical artifact paths.
 
 The requested destination is exclusively reserved with an open advisory lock
 before staging. After acceptance, the complete accepted inventory is captured

@@ -23,7 +23,7 @@ repository. The reviewer records the exact commit/tree, the source commit in
 `$FINAL_ROOT/submission_config.resolved.json`, the SHA-256 of the exact
 `$FINAL_ROOT/SHA256SUMS`, the SHA-256 of
 `submission/final_figure_candidates.json`, the exact 38-candidate count
-contract, and orchestration schema version 3. The record must use status
+contract, and orchestration schema version 4. The record must use status
 `approved`, `revoked=false`, a reviewer identity of 3--200 printable
 characters, and a UTC timestamp formatted `YYYY-MM-DDTHH:MM:SSZ`; extra fields
 are rejected.
@@ -61,16 +61,20 @@ python submission/final_figure_orchestrator.py \
 
 The wrapper performs, in order:
 
-1. full final-release audit and checksum verification;
+1. pin the live release root, exact checksum-ledger bytes/digest, resolved-config
+   digest, and scientific source commit, then complete the full release audit;
 2. exact commit, index, tracked-byte, and external-approval attestation;
 3. read-only source materialization from approved Git blobs and repeated source re-attestation;
-4. one private read-only allowlist copy and immutable checksum-verified release-input snapshot;
+4. one private read-only allowlist copy and immutable release-input snapshot that
+   re-attests the live root and exactly matches the audited ledger and source;
 5. main-text and all-method generation from that snapshot;
 6. 30 fresh resolution runs plus quantitative/geometry evidence capture;
 7. 165 fresh guarded-C0 runs plus exact 2,700-row metrics validation;
 8. deterministic PLIC and staged figures;
 9. internal 38-PDF vector/preview/page-map acceptance with absolute attested Poppler tools; and
-10. checksum-copy to a separate sealed publication tree, locked final rehash, and atomic no-replace publication.
+10. publication-root-relative path resolution for every wrapper-owned artifact,
+    checksum-copy to a separate sealed publication tree, locked final rehash, and
+    atomic no-replace publication.
 
 The dedicated studies are real fresh runs, so this is substantially longer
 than a plot refresh.

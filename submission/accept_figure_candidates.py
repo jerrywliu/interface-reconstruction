@@ -401,7 +401,8 @@ def _candidate_provenance_from_state(
                 "Orchestrated candidate is unknown or duplicated"
             )
         spec = expected[candidate_id]
-        if raw.get("root") != spec.root or raw.get("pdf") != spec.pdf:
+        expected_path = _candidate_pdf_logical_path(spec).as_posix()
+        if raw.get("path") != expected_path:
             raise FigureAcceptanceError(
                 f"Orchestrated candidate path mismatch for {candidate_id}"
             )
@@ -538,7 +539,7 @@ def inspect_generated_preview(
     ):
         raise FigureAcceptanceError(f"Generated preview aspect ratio is stale: {path}")
     return PreviewRecord(
-        path=(logical_path or path).resolve(),
+        path=Path(logical_path) if logical_path is not None else path,
         sha256=_sha256(path),
         width_px=width,
         height_px=height,
@@ -712,8 +713,19 @@ def verify_review_page_map(
                 )
 
 
-def _qa_dict(report: PdfQaReport) -> dict:
-    return asdict(report) | {"passed": report.passed}
+def _candidate_pdf_logical_path(spec: CandidateSpec) -> Path:
+    return Path("candidates") / spec.root / spec.pdf
+
+
+def _candidate_preview_logical_path(spec: CandidateSpec) -> Path:
+    return Path("review") / "previews" / f"{spec.candidate_id}.png"
+
+
+def _qa_dict(report: PdfQaReport, *, logical_path: Path) -> dict:
+    return asdict(report) | {
+        "path": logical_path.as_posix(),
+        "passed": report.passed,
+    }
 
 
 def _root_contains(root: Path, candidate: Path) -> bool:
@@ -787,12 +799,16 @@ def _write_csv(
                     "variant": record.spec.variant,
                     "root": record.spec.root,
                     "source_commit": source_commit,
-                    "pdf_relative_path": record.spec.pdf,
+                    "pdf_relative_path": _candidate_pdf_logical_path(
+                        record.spec
+                    ).as_posix(),
                     "pdf_sha256": record.pdf_sha256,
                     "pdf_page_count": record.pdf_page_count,
                     "pdf_width_points": f"{record.pdf_width_points:.3f}",
                     "pdf_height_points": f"{record.pdf_height_points:.3f}",
-                    "png_relative_path": f"previews/{record.spec.candidate_id}.png",
+                    "png_relative_path": _candidate_preview_logical_path(
+                        record.spec
+                    ).as_posix(),
                     "png_sha256": record.preview.sha256,
                     "png_width_px": record.preview.width_px,
                     "png_height_px": record.preview.height_px,
@@ -893,7 +909,7 @@ def _accept_orchestrated_candidates(
         for order, spec, pdf_path, digest, page_info, report in candidate_audits:
             staged_preview = preview_dir / f"{spec.candidate_id}.png"
             preview_renderer(pdf_path, staged_preview, dpi=300, page=1)
-            logical_preview = Path("review") / "previews" / staged_preview.name
+            logical_preview = _candidate_preview_logical_path(spec)
             preview = inspect_generated_preview(
                 staged_preview,
                 page_info,
@@ -953,9 +969,15 @@ def _accept_orchestrated_candidates(
             "passed": True,
             "candidate_pdf_count": len(numbered_records),
             "candidate_reports": [
-                _qa_dict(record.pdf_qa) for record in numbered_records
+                _qa_dict(
+                    record.pdf_qa,
+                    logical_path=_candidate_pdf_logical_path(record.spec),
+                )
+                for record in numbered_records
             ],
-            "review_report": _qa_dict(review_report),
+            "review_report": _qa_dict(
+                review_report, logical_path=Path("review") / REVIEW_PDF
+            ),
             "measured_review_page_count": review_info.page_count,
             "review_page_map_verified": True,
         }
@@ -992,13 +1014,18 @@ def _accept_orchestrated_candidates(
             "candidates": [
                 {
                     "order": record.order,
-                    **asdict(record.spec),
-                    "pdf_path": record.pdf_path.relative_to(snapshot_root).as_posix(),
+                    "candidate_id": record.spec.candidate_id,
+                    "slot_id": record.spec.slot_id,
+                    "section": record.spec.section,
+                    "title": record.spec.title,
+                    "variant": record.spec.variant,
+                    "root": record.spec.root,
+                    "pdf_path": _candidate_pdf_logical_path(record.spec).as_posix(),
                     "pdf_sha256": record.pdf_sha256,
                     "pdf_page_count": record.pdf_page_count,
                     "pdf_width_points": record.pdf_width_points,
                     "pdf_height_points": record.pdf_height_points,
-                    "png_path": str(record.preview.path),
+                    "png_path": record.preview.path.as_posix(),
                     "png_sha256": record.preview.sha256,
                     "png_width_px": record.preview.width_px,
                     "png_height_px": record.preview.height_px,
