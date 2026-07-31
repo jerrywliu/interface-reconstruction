@@ -34,7 +34,6 @@ from experiments.static.figure_generation_provenance import (
     generation_provenance,
     reconstruction_cli_args,
     vector_figure_artifacts,
-    write_authoritative_figure_provenance,
 )
 from experiments.static import run_perturbed_sweeps as sweeps
 
@@ -276,60 +275,6 @@ def _write_manifest(path: Path, manifest: dict):
     path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
 
-def _representative_provenance_inputs(save_prefix: str) -> list[tuple[str, Path]]:
-    inputs = []
-    for exp_spec in APPENDIX_EXPERIMENTS:
-        representative = exp_spec["representative"]
-        for variant, _display in representative["methods"]:
-            save_name = _variant_save_name(
-                exp_spec["name"],
-                variant,
-                representative["resolution"],
-                representative["wiggle"],
-                representative["seed"],
-                prefix=save_prefix,
-            )
-            mesh_path = maintext_figs.PLOTS_ROOT / save_name / "vtk" / "mesh.vtk"
-            facet_path = (
-                maintext_figs.PLOTS_ROOT
-                / save_name
-                / "vtk"
-                / "reconstructed"
-                / "facets"
-                / f"{representative['case_index']}.vtp"
-            )
-            inputs.extend(
-                [
-                    ("guarded_c0_plot_artifact", mesh_path),
-                    ("guarded_c0_plot_artifact", facet_path),
-                ]
-            )
-            if exp_spec["name"] != "ellipses":
-                true_path = maintext_figs._true_vtp_path(
-                    exp_spec["name"], save_name, representative["case_index"]
-                )
-                if true_path.is_file():
-                    inputs.append(("guarded_c0_plot_artifact", true_path))
-            for suffix in (".facet_metadata.json", ".corner_tips.json"):
-                metadata_path = facet_path.with_suffix(suffix)
-                if metadata_path.is_file():
-                    inputs.append(("guarded_c0_plot_artifact", metadata_path))
-    return inputs
-
-
-def _candidate_output_paths(outputs: dict) -> dict[str, Path]:
-    candidates = {
-        f"{experiment}_appendix_c0_metrics": Path(artifacts["pdf"])
-        for experiment, artifacts in outputs["summary"].items()
-    }
-    for experiment, variants in outputs["representative"].items():
-        for variant, artifacts in variants.items():
-            candidates[f"{experiment}_appendix_c0_representative_{variant}"] = Path(
-                artifacts["pdf"]
-            )
-    return candidates
-
-
 def _run_subprocess(cmd, log_path):
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with open(log_path, "w") as log_file:
@@ -367,12 +312,6 @@ def main():
         default=maintext_figs.PLOTS_ROOT,
         help="root containing saved per-run plot artifacts",
     )
-    parser.add_argument(
-        "--release_root",
-        type=Path,
-        required=True,
-        help="completed audited final release anchoring figure provenance",
-    )
     parser.add_argument("--case_indices", type=str, default=None, help="comma-separated deterministic case indices to run")
     parser.add_argument("--dry_run", action="store_true", help="print commands without executing")
     args = parser.parse_args()
@@ -389,15 +328,14 @@ def main():
     ).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     reconstruction_profile = frozen_reconstruction_profile()
-    generation = generation_provenance(
-        profile=reconstruction_profile,
-        profile_application="explicitly_applied_to_dedicated_guarded_c0_runs",
-    )
     manifest_path = out_dir / "manifest.json"
     manifest = {
         "schema_version": 1,
         "status": "planned" if args.dry_run else "running",
-        "generation_provenance": generation,
+        "generation_provenance": generation_provenance(
+            profile=reconstruction_profile,
+            profile_application="explicitly_applied_to_dedicated_guarded_c0_runs",
+        ),
         "parameters": {
             "only": args.only,
             "algos": args.algos,
@@ -426,17 +364,6 @@ def main():
         manifest["inputs"]["aggregate_metrics"] = str(csv_path)
         manifest["outputs"] = outputs
         _write_manifest(manifest_path, manifest)
-        provenance_inputs = [("guarded_c0_metrics", csv_path)]
-        provenance_inputs.extend(_representative_provenance_inputs(args.save_prefix))
-        write_authoritative_figure_provenance(
-            out_dir / "figure_provenance.json",
-            generator="appendix_guarded_c0",
-            release_root=args.release_root,
-            generation=generation,
-            producer_manifest=manifest_path,
-            inputs=provenance_inputs,
-            outputs=_candidate_output_paths(outputs),
-        )
         print(f"Generated appendix C0 plots from {csv_path}")
         _print_outputs(outputs)
         print(f"Manifest: {manifest_path}")
@@ -598,18 +525,6 @@ def main():
     manifest["outputs"] = outputs
     manifest["outputs"]["aggregate_metrics"] = str(out_csv)
     _write_manifest(manifest_path, manifest)
-    if not args.dry_run and not missing_runs:
-        provenance_inputs = [("guarded_c0_metrics", out_csv)]
-        provenance_inputs.extend(_representative_provenance_inputs(args.save_prefix))
-        write_authoritative_figure_provenance(
-            out_dir / "figure_provenance.json",
-            generator="appendix_guarded_c0",
-            release_root=args.release_root,
-            generation=generation,
-            producer_manifest=manifest_path,
-            inputs=provenance_inputs,
-            outputs=_candidate_output_paths(outputs),
-        )
     print(f"Appendix C0 sweep CSV: {out_csv}")
     if not args.dry_run:
         _print_outputs(outputs)

@@ -39,7 +39,6 @@ from experiments.static.figure_generation_provenance import (
     generation_provenance,
     reconstruction_cli_args,
     vector_figure_artifacts,
-    write_authoritative_figure_provenance,
 )
 from experiments.static import run_perturbed_sweeps as sweeps
 
@@ -557,12 +556,6 @@ def main():
         default=PLOTS_ROOT,
         help="root containing saved per-run plot artifacts",
     )
-    parser.add_argument(
-        "--release_root",
-        type=Path,
-        required=True,
-        help="completed audited final release anchoring figure provenance",
-    )
     args = parser.parse_args()
 
     PLOTS_ROOT = args.plots_root.resolve()
@@ -584,14 +577,13 @@ def main():
     summary_dir.mkdir(parents=True, exist_ok=True)
 
     reconstruction_profile = frozen_reconstruction_profile()
-    generation = generation_provenance(
-        profile=reconstruction_profile,
-        profile_application="explicitly_applied_to_dedicated_resolution_runs",
-    )
     manifest = {
         "schema_version": 2,
         "status": "planned" if args.dry_run else "running",
-        "generation_provenance": generation,
+        "generation_provenance": generation_provenance(
+            profile=reconstruction_profile,
+            profile_application="explicitly_applied_to_dedicated_resolution_runs",
+        ),
         "endpoint_variants": args.endpoint_variants,
         "out_dir": str(out_dir),
         "summary_plots": {},
@@ -723,48 +715,6 @@ def main():
         json.dumps(manifest, indent=2) + "\n",
         encoding="utf-8",
     )
-    if not args.dry_run:
-        provenance_inputs = []
-        for run_record in manifest["runs"]:
-            mesh_path, facet_path = _required_paths(
-                run_record["save_name"], run_record["case_index"]
-            )
-            provenance_inputs.extend(
-                [
-                    ("dedicated_resolution_artifact", mesh_path),
-                    ("dedicated_resolution_artifact", facet_path),
-                ]
-            )
-            if run_record["experiment"] not in {"lines", "ellipses"}:
-                true_path = maintext_figs._true_vtp_path(
-                    run_record["experiment"],
-                    run_record["save_name"],
-                    run_record["case_index"],
-                )
-                if true_path.is_file():
-                    provenance_inputs.append(
-                        ("dedicated_resolution_artifact", true_path)
-                    )
-            for suffix in (".facet_metadata.json", ".corner_tips.json"):
-                metadata_path = facet_path.with_suffix(suffix)
-                if metadata_path.is_file():
-                    provenance_inputs.append(
-                        ("dedicated_resolution_artifact", metadata_path)
-                    )
-        candidate_outputs = {
-            f"{experiment}_resolution_{variant}": Path(artifacts["pdf"])
-            for experiment, variants in manifest["summary_plots"].items()
-            for variant, artifacts in variants.items()
-        }
-        write_authoritative_figure_provenance(
-            out_dir / "figure_provenance.json",
-            generator="appendix_resolution",
-            release_root=args.release_root,
-            generation=generation,
-            producer_manifest=manifest_path,
-            inputs=provenance_inputs,
-            outputs=candidate_outputs,
-        )
     print(f"Manifest: {manifest_path}")
 
 

@@ -30,7 +30,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from experiments.static.figure_generation_provenance import (
+from submission.final_figure_provenance import (
     file_sha256,
     release_figure_anchor,
 )
@@ -99,6 +99,9 @@ class ProvenanceEvidence:
     generator_source_commit: str
 
 
+ORCHESTRATION_MANIFEST_TYPE = "final_figure_orchestration"
+
+
 @dataclass(frozen=True)
 class AcceptedCandidate:
     order: int
@@ -121,96 +124,6 @@ class AcceptanceOutputs:
     source_map_json: Path
     source_map_csv: Path
     vector_qa_json: Path
-
-
-@dataclass(frozen=True)
-class ProvenanceManifestSpec:
-    root: str
-    path: str
-    generator: str
-    candidate_ids: Tuple[str, ...]
-    required_input_roles: Tuple[str, ...]
-
-
-_EXPERIMENTS = ("lines", "squares", "circles", "ellipses", "zalesak")
-PROVENANCE_MANIFEST_SPECS = (
-    ProvenanceManifestSpec(
-        root="figure_root",
-        path="section6/figure_provenance.json",
-        generator="section6_maintext",
-        candidate_ids=tuple(
-            [f"{experiment}_maintext_metrics" for experiment in _EXPERIMENTS]
-            + [
-                f"{experiment}_maintext_representative_{variant}"
-                for experiment in _EXPERIMENTS
-                for variant in ("with_endpoints", "clean")
-            ]
-        ),
-        required_input_roles=(
-            "producer_manifest",
-            "final_release_metrics",
-            "final_release_plot_artifact",
-        ),
-    ),
-    ProvenanceManifestSpec(
-        root="figure_root",
-        path="all_method_summary_plots/figure_provenance.json",
-        generator="all_method_summary_plots",
-        candidate_ids=tuple(f"{experiment}_all_methods" for experiment in _EXPERIMENTS),
-        required_input_roles=("producer_manifest", "final_release_metrics"),
-    ),
-    *tuple(
-        ProvenanceManifestSpec(
-            root="figure_root",
-            path=f"resolution/{experiment}/figure_provenance.json",
-            generator="appendix_resolution",
-            candidate_ids=tuple(
-                f"{experiment}_resolution_{variant}"
-                for variant in ("with_endpoints", "clean")
-            ),
-            required_input_roles=(
-                "producer_manifest",
-                "dedicated_resolution_artifact",
-            ),
-        )
-        for experiment in _EXPERIMENTS
-    ),
-    ProvenanceManifestSpec(
-        root="c0_root",
-        path="figure_provenance.json",
-        generator="appendix_guarded_c0",
-        candidate_ids=(
-            "ellipses_appendix_c0_metrics",
-            "ellipses_appendix_c0_representative_with_endpoints",
-            "ellipses_appendix_c0_representative_clean",
-            "zalesak_appendix_c0_metrics",
-            "zalesak_appendix_c0_representative_with_endpoints",
-            "zalesak_appendix_c0_representative_clean",
-        ),
-        required_input_roles=(
-            "producer_manifest",
-            "guarded_c0_metrics",
-            "guarded_c0_plot_artifact",
-        ),
-    ),
-    ProvenanceManifestSpec(
-        root="figure_root",
-        path=(
-            "deterministic/"
-            "perfect_reconstruction_plic_stencil_figure_provenance.json"
-        ),
-        generator="deterministic_plic_stencil",
-        candidate_ids=("perfect_reconstruction_plic_stencil",),
-        required_input_roles=("producer_manifest",),
-    ),
-    ProvenanceManifestSpec(
-        root="figure_root",
-        path="deterministic/staged_reconstruction_zalesak_figure_provenance.json",
-        generator="deterministic_staged_reconstruction",
-        candidate_ids=("staged_reconstruction_zalesak",),
-        required_input_roles=("producer_manifest",),
-    ),
-)
 
 
 def _safe_relative_path(raw: object, *, field: str) -> str:
@@ -414,89 +327,17 @@ def _load_json_object(path: Path) -> dict:
     return value
 
 
-def _release_checksum_entries(release_root: Path) -> dict[str, str]:
-    path = Path(release_root) / "SHA256SUMS"
-    entries = {}
-    for line_number, line in enumerate(
-        path.read_text(encoding="utf-8").splitlines(), start=1
-    ):
-        if not line:
-            continue
-        parts = line.split("  ", 1)
-        if len(parts) != 2 or len(parts[0]) != 64:
-            raise FigureAcceptanceError(f"Malformed SHA256SUMS line {line_number}")
-        digest, relative = parts
-        if relative in entries:
-            raise FigureAcceptanceError(f"Duplicate SHA256SUMS path: {relative}")
-        entries[relative] = digest
-    return entries
-
-
-def _producer_generation(payload: Mapping[str, object]) -> Optional[dict]:
-    direct = payload.get("generation_provenance")
-    if isinstance(direct, dict):
-        return direct
-    metadata = payload.get("metadata")
-    if isinstance(metadata, dict):
-        nested = metadata.get("generation_provenance")
-        if isinstance(nested, dict):
-            return nested
-    return None
-
-
-def _validate_generation_record(
-    generation: object,
-    *,
-    expected_source_commit: Optional[str],
-    profile: Mapping[str, str],
-    label: str,
-) -> str:
-    if not isinstance(generation, dict):
-        raise FigureAcceptanceError(f"{label} lacks generation_provenance")
-    source_commit = generation.get("source_commit")
-    if (
-        not isinstance(source_commit, str)
-        or not re.fullmatch(r"[0-9a-fA-F]{40}", source_commit)
-        or (
-            expected_source_commit is not None
-            and source_commit != expected_source_commit
-        )
-    ):
-        raise FigureAcceptanceError(f"{label} source commit is not authoritative")
-    if generation.get("source_dirty") is not False or generation.get("source_status"):
-        raise FigureAcceptanceError(f"{label} was generated from a dirty source tree")
-    if generation.get("reconstruction_profile") != dict(profile):
-        raise FigureAcceptanceError(
-            f"{label} reconstruction profile does not match release"
-        )
-    return source_commit
-
-
-def _validate_release_anchor(
-    recorded: object,
-    actual: Mapping[str, object],
-    *,
-    label: str,
-) -> None:
-    if not isinstance(recorded, dict):
-        raise FigureAcceptanceError(f"{label} lacks final-release provenance")
-    for key in ("root", "name", "source_commit", "reconstruction_profile"):
-        if recorded.get(key) != actual.get(key):
-            raise FigureAcceptanceError(f"{label} release {key} does not match")
-    recorded_artifacts = recorded.get("artifacts")
-    actual_artifacts = actual.get("artifacts")
-    if recorded_artifacts != actual_artifacts:
-        raise FigureAcceptanceError(f"{label} release artifact checksums do not match")
-
-
-def verify_authoritative_provenance(
+def verify_orchestration_provenance(
     specs: Sequence[CandidateSpec],
     roots: Mapping[str, Path],
     release_root: Path,
+    orchestration_manifest: Path,
     *,
     release_auditor: Callable[[Path], AuditReport] = audit_final_release,
     checksum_verifier: Callable[[Path], List[str]] = verify_sha256_manifest,
 ) -> tuple[dict, Dict[str, ProvenanceEvidence]]:
+    """Verify the sealed snapshot created by the orchestration wrapper."""
+
     release_root = Path(release_root).resolve()
     report = release_auditor(release_root)
     if not report.ok:
@@ -511,180 +352,136 @@ def verify_authoritative_provenance(
         anchor = release_figure_anchor(release_root)
     except ValueError as exc:
         raise FigureAcceptanceError(str(exc)) from exc
-    source_commit = anchor["source_commit"]
-    profile = anchor["reconstruction_profile"]
-    release_checksums = _release_checksum_entries(release_root)
-    candidate_paths = {
-        spec.candidate_id: (roots[spec.root] / spec.pdf).resolve() for spec in specs
-    }
 
-    expected_manifest_paths = {
-        (manifest_spec.root, manifest_spec.path)
-        for manifest_spec in PROVENANCE_MANIFEST_SPECS
-    }
-    actual_manifest_paths = {
-        (root_key, path.relative_to(root).as_posix())
-        for root_key, root in roots.items()
-        for path in root.rglob("*figure_provenance.json")
-        if path.is_file()
-    }
-    missing_manifests = sorted(expected_manifest_paths - actual_manifest_paths)
-    unexpected_manifests = sorted(actual_manifest_paths - expected_manifest_paths)
-    if missing_manifests or unexpected_manifests:
-        parts = []
-        if missing_manifests:
-            parts.append(f"missing provenance manifests: {missing_manifests}")
-        if unexpected_manifests:
-            parts.append(f"unexpected provenance manifests: {unexpected_manifests}")
-        raise FigureAcceptanceError("; ".join(parts))
+    manifest_path = Path(orchestration_manifest).resolve()
+    manifest = _load_json_object(manifest_path)
+    if manifest.get("schema_version") != 1:
+        raise FigureAcceptanceError("Orchestration manifest has an unsupported schema")
+    if manifest.get("manifest_type") != ORCHESTRATION_MANIFEST_TYPE:
+        raise FigureAcceptanceError("Orchestration manifest has the wrong type")
+    if manifest.get("status") != "completed":
+        raise FigureAcceptanceError("Orchestration manifest is not completed")
+    if manifest.get("scientific_release") != anchor:
+        raise FigureAcceptanceError("Orchestration release anchor does not match")
 
+    checkout = manifest.get("generator_checkout")
+    if not isinstance(checkout, dict):
+        raise FigureAcceptanceError("Orchestration manifest lacks checkout attestation")
+    approved_commit = checkout.get("approved_commit")
+    if (
+        not isinstance(approved_commit, str)
+        or not re.fullmatch(r"[0-9a-fA-F]{40}", approved_commit)
+        or checkout.get("scientific_release_commit") != anchor["source_commit"]
+        or not isinstance(checkout.get("checkout_manifest_sha256"), str)
+    ):
+        raise FigureAcceptanceError("Orchestration checkout attestation is incomplete")
+
+    contracts = manifest.get("scientific_contracts")
+    required_contracts = {
+        "final_release",
+        "maintext",
+        "all_methods",
+        "resolution",
+        "guarded_c0",
+        "deterministic_plic",
+        "deterministic_staged",
+    }
+    if not isinstance(contracts, dict) or set(contracts) != required_contracts:
+        raise FigureAcceptanceError(
+            "Orchestration scientific contract set is incomplete"
+        )
+    if any(
+        not isinstance(contract, dict) or contract.get("status") != "validated"
+        for contract in contracts.values()
+    ):
+        raise FigureAcceptanceError(
+            "An orchestration scientific contract is not validated"
+        )
+
+    snapshot_root = manifest_path.parent.parent
+    expected_roots = {
+        key: (snapshot_root / "candidates" / key).resolve() for key in ROOT_KEYS
+    }
+    if dict(roots) != expected_roots:
+        raise FigureAcceptanceError(
+            "Candidate roots are not the private orchestration snapshot roots"
+        )
+    artifact_records = manifest.get("snapshot_artifacts")
+    if not isinstance(artifact_records, list):
+        raise FigureAcceptanceError("Orchestration snapshot artifact list is missing")
+    seen_artifacts = set()
+    for record in artifact_records:
+        if not isinstance(record, dict):
+            raise FigureAcceptanceError("Malformed orchestration snapshot artifact")
+        relative = record.get("path")
+        digest = record.get("sha256")
+        if not isinstance(relative, str) or not isinstance(digest, str):
+            raise FigureAcceptanceError("Incomplete orchestration snapshot artifact")
+        artifact = (snapshot_root / relative).resolve()
+        if not _root_contains(snapshot_root, artifact) or not artifact.is_file():
+            raise FigureAcceptanceError(f"Snapshot artifact is missing: {relative}")
+        if relative in seen_artifacts:
+            raise FigureAcceptanceError(f"Duplicate snapshot artifact: {relative}")
+        seen_artifacts.add(relative)
+        if _sha256(artifact) != digest or artifact.stat().st_size != record.get(
+            "size_bytes"
+        ):
+            raise FigureAcceptanceError(
+                f"Snapshot artifact checksum failed: {relative}"
+            )
+    role_counts = {
+        role: sum(record.get("role") == role for record in artifact_records)
+        for role in (
+            "resolution_companion_run_manifest",
+            "guarded_c0_companion_run_manifest",
+        )
+    }
+    if role_counts != {
+        "resolution_companion_run_manifest": 30,
+        "guarded_c0_companion_run_manifest": 165,
+    }:
+        raise FigureAcceptanceError(
+            "Orchestration snapshot must contain all 30 resolution and 165 C0 run manifests"
+        )
+
+    expected = {spec.candidate_id: spec for spec in specs}
+    raw_candidates = manifest.get("candidates")
+    if not isinstance(raw_candidates, list) or len(raw_candidates) != len(expected):
+        raise FigureAcceptanceError("Orchestration candidate set is incomplete")
     evidence: Dict[str, ProvenanceEvidence] = {}
-    for manifest_spec in PROVENANCE_MANIFEST_SPECS:
-        manifest_path = (roots[manifest_spec.root] / manifest_spec.path).resolve()
-        manifest = _load_json_object(manifest_path)
-        label = str(manifest_path)
-        if manifest.get("schema_version") != 1:
-            raise FigureAcceptanceError(f"{label} has an unsupported schema")
-        if manifest.get("manifest_type") != "final_figure_generation":
-            raise FigureAcceptanceError(f"{label} has the wrong manifest type")
-        if manifest.get("status") != "completed":
-            raise FigureAcceptanceError(f"{label} is not completed")
-        if manifest.get("generator") != manifest_spec.generator:
-            raise FigureAcceptanceError(f"{label} has the wrong generator identity")
-        generator_source_commit = _validate_generation_record(
-            manifest.get("generation_provenance"),
-            expected_source_commit=None,
-            profile=profile,
-            label=label,
-        )
-        _validate_release_anchor(manifest.get("release"), anchor, label=label)
-
-        raw_inputs = manifest.get("inputs")
-        if not isinstance(raw_inputs, list):
-            raise FigureAcceptanceError(f"{label} inputs must be a list")
-        roles = []
-        producer_payload = None
-        for raw_input in raw_inputs:
-            if not isinstance(raw_input, dict):
-                raise FigureAcceptanceError(f"{label} has a malformed input record")
-            role = raw_input.get("role")
-            path_value = raw_input.get("path")
-            digest = raw_input.get("sha256")
-            if not isinstance(role, str) or not isinstance(path_value, str):
-                raise FigureAcceptanceError(f"{label} has an incomplete input record")
-            input_path = Path(path_value).resolve()
-            if not input_path.is_file() or digest != _sha256(input_path):
-                raise FigureAcceptanceError(
-                    f"{label} input checksum failed for {input_path}"
-                )
-            roles.append(role)
-            release_relative = raw_input.get("release_relative_path")
-            if release_relative is not None:
-                if not isinstance(release_relative, str):
-                    raise FigureAcceptanceError(f"{label} has an invalid release path")
-                expected_path = (release_root / release_relative).resolve()
-                if input_path != expected_path:
-                    raise FigureAcceptanceError(
-                        f"{label} release input path does not resolve inside final release"
-                    )
-                if release_checksums.get(release_relative) != digest:
-                    raise FigureAcceptanceError(
-                        f"{label} release checksum ledger does not prove {release_relative}"
-                    )
-            if role == "producer_manifest":
-                if producer_payload is not None:
-                    raise FigureAcceptanceError(
-                        f"{label} has multiple producer manifests"
-                    )
-                producer_payload = _load_json_object(input_path)
-
-        missing_roles = set(manifest_spec.required_input_roles) - set(roles)
-        if missing_roles:
+    for raw in raw_candidates:
+        if not isinstance(raw, dict):
+            raise FigureAcceptanceError("Malformed orchestration candidate record")
+        candidate_id = raw.get("candidate_id")
+        if candidate_id not in expected or candidate_id in evidence:
             raise FigureAcceptanceError(
-                f"{label} lacks required inputs: {', '.join(sorted(missing_roles))}"
+                "Orchestration has an unknown or duplicate candidate"
             )
-        unexpected_roles = set(roles) - set(manifest_spec.required_input_roles)
-        if unexpected_roles:
+        spec = expected[candidate_id]
+        if raw.get("root") != spec.root or raw.get("pdf") != spec.pdf:
             raise FigureAcceptanceError(
-                f"{label} has unexpected inputs: {', '.join(sorted(unexpected_roles))}"
+                f"Orchestration candidate path mismatch for {candidate_id}"
             )
-        if "final_release_metrics" in roles:
-            metrics_inputs = [
-                raw_input
-                for raw_input in raw_inputs
-                if raw_input.get("role") == "final_release_metrics"
-            ]
-            if (
-                len(metrics_inputs) != 1
-                or Path(metrics_inputs[0]["path"]).resolve()
-                != (release_root / "perturbed_sweep.csv").resolve()
-            ):
-                raise FigureAcceptanceError(
-                    f"{label} does not use the authoritative final release CSV"
-                )
-        if "final_release_plot_artifact" in roles:
-            plot_inputs = [
-                raw_input
-                for raw_input in raw_inputs
-                if raw_input.get("role") == "final_release_plot_artifact"
-            ]
-            if any(
-                raw_input.get("release_relative_path") is None
-                for raw_input in plot_inputs
-            ):
-                raise FigureAcceptanceError(
-                    f"{label} uses plot geometry outside the final release checksum ledger"
-                )
-        if producer_payload is None:
-            raise FigureAcceptanceError(f"{label} lacks a producer manifest")
-        producer_status = producer_payload.get("status")
-        if producer_status is not None and producer_status != "completed":
-            raise FigureAcceptanceError(f"{label} producer manifest is not completed")
-        _validate_generation_record(
-            _producer_generation(producer_payload),
-            expected_source_commit=generator_source_commit,
-            profile=profile,
-            label=f"{label} producer manifest",
+        candidate_path = (roots[spec.root] / spec.pdf).resolve()
+        if raw.get("sha256") != _sha256(candidate_path):
+            raise FigureAcceptanceError(
+                f"Orchestration candidate checksum mismatch for {candidate_id}"
+            )
+        generator = raw.get("generator")
+        if not isinstance(generator, str) or not generator:
+            raise FigureAcceptanceError(
+                f"Orchestration candidate lacks generator for {candidate_id}"
+            )
+        evidence[candidate_id] = ProvenanceEvidence(
+            manifest_path=manifest_path,
+            manifest_sha256=_sha256(manifest_path),
+            generator=generator,
+            generator_source_commit=approved_commit,
         )
-
-        raw_outputs = manifest.get("outputs")
-        if not isinstance(raw_outputs, list):
-            raise FigureAcceptanceError(f"{label} outputs must be a list")
-        output_ids = []
-        for raw_output in raw_outputs:
-            if not isinstance(raw_output, dict):
-                raise FigureAcceptanceError(f"{label} has a malformed output record")
-            candidate_id = raw_output.get("candidate_id")
-            path_value = raw_output.get("path")
-            digest = raw_output.get("sha256")
-            if candidate_id not in candidate_paths or not isinstance(path_value, str):
-                raise FigureAcceptanceError(f"{label} has an unknown candidate output")
-            output_path = Path(path_value).resolve()
-            if output_path != candidate_paths[candidate_id]:
-                raise FigureAcceptanceError(
-                    f"{label} candidate path mismatch for {candidate_id}"
-                )
-            if digest != _sha256(output_path):
-                raise FigureAcceptanceError(
-                    f"{label} candidate checksum mismatch for {candidate_id}"
-                )
-            if candidate_id in evidence:
-                raise FigureAcceptanceError(
-                    f"Candidate {candidate_id} appears in multiple provenance manifests"
-                )
-            output_ids.append(candidate_id)
-            evidence[candidate_id] = ProvenanceEvidence(
-                manifest_path=manifest_path,
-                manifest_sha256=_sha256(manifest_path),
-                generator=manifest_spec.generator,
-                generator_source_commit=generator_source_commit,
-            )
-        if set(output_ids) != set(manifest_spec.candidate_ids):
-            raise FigureAcceptanceError(f"{label} candidate output set is incomplete")
-
-    expected_ids = {spec.candidate_id for spec in specs}
-    if set(evidence) != expected_ids:
-        raise FigureAcceptanceError("Provenance does not cover exactly 38 candidates")
+    if set(evidence) != set(expected):
+        raise FigureAcceptanceError(
+            "Orchestration does not cover exactly 38 candidates"
+        )
     return anchor, evidence
 
 
@@ -993,7 +790,10 @@ def _validate_invocation(
 
 
 def _write_csv(
-    path: Path, records: Sequence[AcceptedCandidate], source_commit: str
+    path: Path,
+    records: Sequence[AcceptedCandidate],
+    source_commit: str,
+    snapshot_root: Path,
 ) -> None:
     fieldnames = (
         "order",
@@ -1051,7 +851,9 @@ def _write_csv(
                     "png_dpi_y": f"{record.preview.dpi_y:.3f}",
                     "pdf_image_objects": record.pdf_qa.image_objects,
                     "pdf_font_count": len(record.pdf_qa.fonts),
-                    "provenance_manifest": str(record.provenance.manifest_path),
+                    "provenance_manifest": record.provenance.manifest_path.relative_to(
+                        snapshot_root
+                    ).as_posix(),
                     "provenance_manifest_sha256": record.provenance.manifest_sha256,
                     "provenance_generator": record.provenance.generator,
                     "generator_source_commit": (
@@ -1068,6 +870,7 @@ def accept_figure_candidates(
     figure_root: Path,
     c0_root: Path,
     release_root: Path,
+    orchestration_manifest: Path,
     output_dir: Path,
     allowlist_path: Path = DEFAULT_ALLOWLIST,
     pdf_inspector: Callable[..., PdfQaReport] = inspect_pdf,
@@ -1087,14 +890,16 @@ def accept_figure_candidates(
     _validate_invocation(roots, release_root, output_dir)
     specs = load_candidate_allowlist(allowlist_path)
     verify_candidate_inventory(specs, roots)
-    anchor, provenance = verify_authoritative_provenance(
+    anchor, provenance = verify_orchestration_provenance(
         specs,
         roots,
         release_root,
+        orchestration_manifest,
         release_auditor=release_auditor,
         checksum_verifier=checksum_verifier,
     )
     source_commit = anchor["source_commit"]
+    snapshot_root = Path(orchestration_manifest).resolve().parent.parent
 
     candidate_audits = []
     errors: List[str] = []
@@ -1143,7 +948,7 @@ def accept_figure_candidates(
         for order, spec, pdf_path, digest, page_info, report in candidate_audits:
             staged_preview = preview_dir / f"{spec.candidate_id}.png"
             preview_renderer(pdf_path, staged_preview, dpi=300, page=1)
-            logical_preview = output_dir / "previews" / staged_preview.name
+            logical_preview = Path("review") / "previews" / staged_preview.name
             preview = inspect_generated_preview(
                 staged_preview,
                 page_info,
@@ -1197,7 +1002,7 @@ def accept_figure_candidates(
         )
 
         staged_qa = staging_dir / VECTOR_QA_JSON
-        logical_qa = output_dir / VECTOR_QA_JSON
+        logical_qa = Path("review") / VECTOR_QA_JSON
         qa_payload = {
             "schema_version": 2,
             "passed": True,
@@ -1224,9 +1029,12 @@ def accept_figure_candidates(
                 "sha256": _sha256(Path(allowlist_path).resolve()),
                 "expected_counts": EXPECTED_COUNTS,
             },
-            "roots": {key: str(path) for key, path in roots.items()},
+            "roots": {
+                key: path.relative_to(snapshot_root).as_posix()
+                for key, path in roots.items()
+            },
             "review": {
-                "path": str(output_dir / REVIEW_PDF),
+                "path": f"review/{REVIEW_PDF}",
                 "sha256": _sha256(staged_review_pdf),
                 "index_pages": index_pages,
                 "page_count": review_info.page_count,
@@ -1240,7 +1048,7 @@ def accept_figure_candidates(
                 {
                     "order": record.order,
                     **asdict(record.spec),
-                    "pdf_path": str(record.pdf_path),
+                    "pdf_path": record.pdf_path.relative_to(snapshot_root).as_posix(),
                     "pdf_sha256": record.pdf_sha256,
                     "pdf_page_count": record.pdf_page_count,
                     "pdf_width_points": record.pdf_width_points,
@@ -1251,7 +1059,9 @@ def accept_figure_candidates(
                     "png_height_px": record.preview.height_px,
                     "png_dpi_x": record.preview.dpi_x,
                     "png_dpi_y": record.preview.dpi_y,
-                    "provenance_manifest": str(record.provenance.manifest_path),
+                    "provenance_manifest": record.provenance.manifest_path.relative_to(
+                        snapshot_root
+                    ).as_posix(),
                     "provenance_manifest_sha256": (record.provenance.manifest_sha256),
                     "provenance_generator": record.provenance.generator,
                     "generator_source_commit": (
@@ -1266,7 +1076,12 @@ def accept_figure_candidates(
         staged_source_map_json.write_text(
             json.dumps(source_payload, indent=2) + "\n", encoding="utf-8"
         )
-        _write_csv(staged_source_map_csv, numbered_records, source_commit)
+        _write_csv(
+            staged_source_map_csv,
+            numbered_records,
+            source_commit,
+            snapshot_root,
+        )
 
         expected_files = {
             REVIEW_PDF,
@@ -1310,6 +1125,12 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--figure-root", type=Path, required=True)
     parser.add_argument("--c0-root", type=Path, required=True)
     parser.add_argument(
+        "--orchestration-manifest",
+        type=Path,
+        required=True,
+        help="sealed manifest written by final_figure_orchestrator.py",
+    )
+    parser.add_argument(
         "--release-root",
         type=Path,
         required=True,
@@ -1337,6 +1158,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             figure_root=args.figure_root,
             c0_root=args.c0_root,
             release_root=args.release_root,
+            orchestration_manifest=args.orchestration_manifest,
             output_dir=args.output_dir,
             allowlist_path=args.allowlist,
         )

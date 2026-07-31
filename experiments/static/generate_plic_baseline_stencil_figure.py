@@ -16,7 +16,6 @@ from matplotlib.patches import Polygon as MplPolygon
 from experiments.static.figure_generation_provenance import (
     frozen_reconstruction_profile,
     generation_provenance,
-    write_authoritative_figure_provenance,
 )
 from experiments.static.lines import RANDOM_SEED
 from main.geoms.linear_facet import getPolyLineIntersects
@@ -340,12 +339,6 @@ def parse_args():
     parser.add_argument("--resolution", type=float, default=0.32)
     parser.add_argument("--wiggle", type=float, default=0.3)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument(
-        "--release-root",
-        type=Path,
-        required=True,
-        help="completed audited final release anchoring figure provenance",
-    )
     return parser.parse_args()
 
 
@@ -359,16 +352,6 @@ def main():
         resolution=args.resolution,
         wiggle=args.wiggle,
         seed=args.seed,
-    )
-    data_path = args.out.with_name(f"{args.out.name}_data.json")
-    write_authoritative_figure_provenance(
-        args.out.with_name(f"{args.out.name}_figure_provenance.json"),
-        generator="deterministic_plic_stencil",
-        release_root=args.release_root,
-        generation=metadata["generation_provenance"],
-        producer_manifest=data_path,
-        inputs=[],
-        outputs={"perfect_reconstruction_plic_stencil": args.out.with_suffix(".pdf")},
     )
     print(json.dumps(metadata, indent=2))
     for suffix in (".svg", ".pdf", ".png"):

@@ -18,7 +18,6 @@ from matplotlib.patches import FancyArrowPatch, Patch, Polygon, Rectangle
 from experiments.static.figure_generation_provenance import (
     frozen_reconstruction_profile,
     generation_provenance,
-    write_authoritative_figure_provenance,
 )
 from experiments.static.zalesak import RANDOM_SEED, initialize_zalesak
 from main.structs.facets.circular_facet import ArcFacet
@@ -86,12 +85,6 @@ def parse_args() -> argparse.Namespace:
         default=Path("results/static/method_figures/staged_reconstruction_v1"),
     )
     parser.add_argument("--prefix", default="staged_reconstruction_zalesak")
-    parser.add_argument(
-        "--release-root",
-        type=Path,
-        required=True,
-        help="completed audited final release anchoring figure provenance",
-    )
     return parser.parse_args()
 
 
@@ -586,15 +579,6 @@ def main() -> None:
 
     output_base = args.output_dir / args.prefix
     build_figure(snapshots, bounds, output_base)
-    write_authoritative_figure_provenance(
-        args.output_dir / f"{args.prefix}_figure_provenance.json",
-        generator="deterministic_staged_reconstruction",
-        release_root=args.release_root,
-        generation=metadata["generation_provenance"],
-        producer_manifest=data_path,
-        inputs=[],
-        outputs={"staged_reconstruction_zalesak": output_base.with_suffix(".pdf")},
-    )
     print(json.dumps(metadata, indent=2))
     print(f"SVG: {output_base.with_suffix('.svg')}")
 

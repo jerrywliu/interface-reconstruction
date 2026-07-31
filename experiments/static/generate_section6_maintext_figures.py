@@ -43,11 +43,6 @@ if str(REPO_ROOT) not in sys.path:
 
 from experiments.static.circles import RANDOM_SEED as CIRCLE_RANDOM_SEED
 from experiments.static.ellipses import RANDOM_SEED as ELLIPSE_RANDOM_SEED
-from experiments.static.figure_generation_provenance import (
-    frozen_reconstruction_profile,
-    generation_provenance,
-    write_authoritative_figure_provenance,
-)
 from experiments.static.lines import RANDOM_SEED as LINE_RANDOM_SEED
 from experiments.static.squares import RANDOM_SEED as SQUARE_RANDOM_SEED
 from experiments.static.run_perturbed_sweeps import (
@@ -1665,67 +1660,6 @@ def _generate_resolution_strip(
     plt.close(fig)
 
 
-def _representative_provenance_inputs(
-    exp_name: str,
-    spec: dict,
-    *,
-    save_prefix: str | None,
-) -> list[Path]:
-    case_index = spec["case_index"]
-    resolution = spec["resolution"]
-    wiggle = spec["wiggle"]
-    seed = spec["seed"]
-    base_method = spec["methods"][0][0]
-    base_save_name = _prefixed_save_name(
-        exp_name,
-        base_method,
-        resolution,
-        wiggle,
-        seed,
-        save_prefix=save_prefix,
-    )
-    paths = [PLOTS_ROOT / base_save_name / "vtk" / "mesh.vtk"]
-    if exp_name not in {"lines", "ellipses"}:
-        paths.append(_true_vtp_path(exp_name, base_save_name, case_index))
-    for method, _title in spec["methods"]:
-        save_name = _prefixed_save_name(
-            exp_name,
-            method,
-            resolution,
-            wiggle,
-            seed,
-            save_prefix=save_prefix,
-        )
-        facet_path = (
-            PLOTS_ROOT
-            / save_name
-            / "vtk"
-            / "reconstructed"
-            / "facets"
-            / f"{case_index}.vtp"
-        )
-        paths.append(facet_path)
-        for suffix in (".facet_metadata.json", ".corner_tips.json"):
-            metadata_path = facet_path.with_suffix(suffix)
-            if metadata_path.is_file():
-                paths.append(metadata_path)
-    return paths
-
-
-def _candidate_output_paths(outputs: dict) -> dict[str, Path]:
-    candidates: dict[str, Path] = {}
-    for exp_name, png_path in outputs["quantitative"].items():
-        candidates[f"{exp_name}_maintext_metrics"] = Path(png_path).with_suffix(".pdf")
-    for exp_name, variants in outputs["representative"].items():
-        if not isinstance(variants, dict):
-            raise ValueError("Final representative exports must use paired variants")
-        for variant, png_path in variants.items():
-            candidates[f"{exp_name}_maintext_representative_{variant}"] = Path(
-                png_path
-            ).with_suffix(".pdf")
-    return candidates
-
-
 def main():
     global PLOTS_ROOT
 
@@ -1789,12 +1723,6 @@ def main():
             "Qualitative endpoint-marker exports: annotated, clean main panels, "
             "or paired (default: annotated). Spyglass endpoints are always retained."
         ),
-    )
-    parser.add_argument(
-        "--release_root",
-        type=Path,
-        required=True,
-        help="completed audited final release anchoring figure provenance",
     )
     args = parser.parse_args()
     PLOTS_ROOT = args.plots_root
@@ -1942,34 +1870,8 @@ def main():
         )
         outputs["specs"]["appendix_cartesian"][exp_name] = spec
 
-    profile = frozen_reconstruction_profile()
-    generation = generation_provenance(
-        profile=profile,
-        profile_application="final_release_metrics_and_representative_geometry",
-    )
-    outputs["status"] = "completed"
-    outputs["generation_provenance"] = generation
     manifest_path = args.out_dir / "maintext_manifest.json"
-    manifest_path.write_text(json.dumps(outputs, indent=2) + "\n", encoding="utf-8")
-    provenance_inputs = [("final_release_metrics", args.csv.resolve())]
-    for exp_name, spec in outputs["specs"]["representative"].items():
-        provenance_inputs.extend(
-            ("final_release_plot_artifact", path)
-            for path in _representative_provenance_inputs(
-                exp_name,
-                spec,
-                save_prefix=args.plot_save_prefix,
-            )
-        )
-    write_authoritative_figure_provenance(
-        args.out_dir / "figure_provenance.json",
-        generator="section6_maintext",
-        release_root=args.release_root,
-        generation=generation,
-        producer_manifest=manifest_path,
-        inputs=provenance_inputs,
-        outputs=_candidate_output_paths(outputs),
-    )
+    manifest_path.write_text(json.dumps(outputs, indent=2))
     print(json.dumps(outputs, indent=2))
 
 
