@@ -2465,6 +2465,47 @@ def test_coordinated_fallback_member_substitution_fails_saved_mesh_binding(tmp_p
     assert "is outside the saved mesh" in _messages(report)
 
 
+def test_fallback_member_touching_only_facet_endpoint_is_rejected(tmp_path):
+    root = _make_release(tmp_path / "release")
+    _add_provenance_rows(root)
+    for relative in (
+        "diagnostics/cell_metrics.csv",
+        f"raw_runs/{SAVE_NAME}/metrics/cell_metrics.csv",
+    ):
+        path = root / relative
+        fieldnames, rows = _read_csv(path)
+        rows[0]["merge_component_size"] = "2"
+        endpoint_only = dict(rows[0])
+        endpoint_only.update({"cell_id": "1,0", "cell_x": "1", "cell_y": "0"})
+        rows.insert(1, endpoint_only)
+        _write_csv(path, fieldnames, rows)
+    for relative in (
+        "diagnostics/merge_events.csv",
+        f"raw_runs/{SAVE_NAME}/metrics/merge_events.csv",
+    ):
+        path = root / relative
+        fieldnames, rows = _read_csv(path)
+        rows[0]["member_cells_json"] = "[[0,0],[1,0]]"
+        _write_csv(path, fieldnames, rows)
+    for relative in (
+        "diagnostics/case_metrics.csv",
+        f"raw_runs/{SAVE_NAME}/metrics/case_metrics.csv",
+    ):
+        path = root / relative
+        fieldnames, rows = _read_csv(path)
+        rows[0]["num_mixed_cells"] = "2"
+        _write_csv(path, fieldnames, rows)
+    inventory_path = root / "diagnostics" / "run_inventory.csv"
+    fieldnames, rows = _read_csv(inventory_path)
+    rows[0]["cell_metrics_rows"] = "3"
+    _write_csv(inventory_path, fieldnames, rows)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    assert not report.ok
+    assert "has no positive-length portion" in _messages(report)
+
+
 def test_two_same_case_fallback_components_bind_to_distinct_artifact_facets(tmp_path):
     root = _make_release(tmp_path / "release")
     _add_two_fallback_components(root)

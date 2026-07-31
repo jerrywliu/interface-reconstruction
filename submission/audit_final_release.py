@@ -3350,12 +3350,12 @@ def _check_fallback_facet_member_geometry(
     for parameter in parameters:
         if not unique_parameters or abs(parameter - unique_parameters[-1]) > 1.0e-10:
             unique_parameters.append(parameter)
-    test_parameters = list(unique_parameters)
-    test_parameters.extend(
+    interval_midpoints = [
         (first + second) / 2.0
         for first, second in zip(unique_parameters, unique_parameters[1:])
         if second - first > 1.0e-10
-    )
+    ]
+    test_parameters = [*unique_parameters, *interval_midpoints]
 
     def point_at(parameter: float) -> tuple[float, float]:
         return (
@@ -3373,10 +3373,12 @@ def _check_fallback_facet_member_geometry(
         )
     for cell, polygon in polygons:
         if not any(
-            _point_in_convex_cell(point, polygon, tolerance) for point in sampled_points
+            _point_in_convex_cell(point_at(parameter), polygon, tolerance)
+            for parameter in interval_midpoints
         ):
             report.add_error(
-                f"{label} saved LVIRA facet does not intersect claimed member cell {cell}"
+                f"{label} saved LVIRA facet has no positive-length portion in "
+                f"claimed member cell {cell}"
             )
 
 
