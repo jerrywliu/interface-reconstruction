@@ -142,6 +142,32 @@ For the final archive, retain these three distinct records:
 
 The submission audit should compare the three instead of trusting any one file.
 
+### Command provenance schema
+
+The current final release predates tokenized command capture and stores each
+controller and child invocation in a shell-style `command` string. The audit parses
+those strings with POSIX shell quoting and compares the executable as an exact,
+lexical repository-relative path under the historical `repository.root`; that root
+is provenance metadata and need not equal the verifier's current checkout path.
+
+Future manifests should add an `argv` JSON array whose elements are the exact
+argument tokens passed to the process, preferably with a repository-relative first
+token such as `experiments/static/lines.py`. `command` may remain as an optional
+display field. When both fields are present, the audit requires `argv` to equal the
+POSIX-tokenized `command` exactly, so the human-readable rendering cannot disagree
+with the machine-readable execution record.
+
+### Source snapshot trust
+
+The audit disables Git replacement objects for every Git operation and verifies the
+exact commit and blob object hashes itself. It enumerates the commit with
+`git ls-tree -rz` and reads each allowed regular-file blob with `git cat-file`, so
+archive attributes such as `export-ignore` cannot remove tracked source from the
+oracle. Before extracting any archived source payload, it checks the complete tar
+metadata pass against tree-derived bounds for file count, each file size, total
+uncompressed bytes, path, and executable mode. The archived bytes are then compared
+with the corresponding verified Git blobs.
+
 ## Result And Raw-Bundle Findings
 
 The release path is robust against accidental overwrite. Each completed run's exact

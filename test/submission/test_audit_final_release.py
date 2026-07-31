@@ -3,6 +3,7 @@ import hashlib
 import io
 import json
 import os
+import shlex
 import subprocess
 import tarfile
 from pathlib import Path
@@ -46,12 +47,19 @@ def _write_jsonl(path: Path, rows) -> None:
 
 
 def _snapshot(path: Path, files: dict[str, bytes]) -> None:
+    _snapshot_entries(
+        path,
+        [(relative, data, 0o644) for relative, data in sorted(files.items())],
+    )
+
+
+def _snapshot_entries(path: Path, entries: list[tuple[str, bytes, int]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with tarfile.open(path, "w:gz") as archive:
-        for relative, data in sorted(files.items()):
+        for relative, data, mode in entries:
             member = tarfile.TarInfo(relative)
             member.size = len(data)
-            member.mode = 0o644
+            member.mode = mode
             archive.addfile(member, io.BytesIO(data))
 
 
@@ -545,6 +553,59 @@ def _rewrite_snapshot(root: Path, files: dict[str, bytes]) -> None:
     _write_json(state_path, state)
 
 
+def _rewrite_snapshot_entries(
+    root: Path,
+    entries: list[tuple[str, bytes, int]],
+    *,
+    recorded_count=None,
+) -> None:
+    snapshot_path = root / "diagnostics" / "source_snapshot.tar.gz"
+    _snapshot_entries(snapshot_path, entries)
+    state_path = root / "diagnostics" / "source_state.json"
+    state = json.loads(state_path.read_text())
+    state["snapshot_sha256"] = hashlib.sha256(snapshot_path.read_bytes()).hexdigest()
+    state["snapshot_file_count"] = (
+        len(entries) if recorded_count is None else recorded_count
+    )
+    _write_json(state_path, state)
+
+
+def _replace_command_executable(command: str, executable: str) -> str:
+    tokens = shlex.split(command)
+    tokens[0] = executable
+    return shlex.join(tokens)
+
+
+def _rewrite_historical_command_root(root: Path, historical_root: str) -> None:
+    environment_path = root / "environment.json"
+    environment = json.loads(environment_path.read_text())
+    environment["repository"]["root"] = historical_root
+    _write_json(environment_path, environment)
+
+    controller_path = root / "sweep_manifest.json"
+    controller = json.loads(controller_path.read_text())
+    controller["command"] = _replace_command_executable(
+        controller["command"],
+        f"{historical_root}/experiments/static/run_perturbed_sweeps.py",
+    )
+    _write_json(controller_path, controller)
+
+    consolidated_path = root / "diagnostics" / "run_manifests.jsonl"
+    consolidated = json.loads(consolidated_path.read_text())
+    consolidated["manifest"]["command"] = _replace_command_executable(
+        consolidated["manifest"]["command"],
+        f"{historical_root}/experiments/static/lines.py",
+    )
+    _write_jsonl(consolidated_path, [consolidated])
+
+    raw_path = root / "raw_runs" / SAVE_NAME / "run_manifest.json"
+    raw = json.loads(raw_path.read_text())
+    raw["command"] = _replace_command_executable(
+        raw["command"], f"{historical_root}/experiments/static/lines.py"
+    )
+    _write_json(raw_path, raw)
+
+
 def _retarget_release(root: Path, target_commit: str) -> None:
     config_path = root / "submission_config.resolved.json"
     config = json.loads(config_path.read_text())
@@ -667,6 +728,86 @@ def test_command_defaults_remain_hard_gated_to_final_scope(tmp_path):
     assert not report.ok
     assert "exactly 970 required" in _messages(report)
     assert "exactly 24250 required" in _messages(report)
+
+
+def test_string_commands_survive_release_relocation_and_historical_spaces(tmp_path):
+    root = _make_release(tmp_path / "release")
+    _rewrite_historical_command_root(
+        root, "/archived experiment roots/Interface Reconstruction 2026"
+    )
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    assert report.ok, _messages(report)
+
+
+def test_symlink_alias_cannot_impersonate_reviewed_driver(tmp_path):
+    root = _make_release(tmp_path / "release")
+    alias = tmp_path / "lines-driver-alias.py"
+    alias.symlink_to(tmp_path / "experiments" / "static" / "lines.py")
+
+    consolidated_path = root / "diagnostics" / "run_manifests.jsonl"
+    consolidated = json.loads(consolidated_path.read_text())
+    consolidated["manifest"]["command"] = _replace_command_executable(
+        consolidated["manifest"]["command"], str(alias)
+    )
+    _write_jsonl(consolidated_path, [consolidated])
+
+    raw_path = root / "raw_runs" / SAVE_NAME / "run_manifest.json"
+    raw = json.loads(raw_path.read_text())
+    raw["command"] = _replace_command_executable(raw["command"], str(alias))
+    _write_json(raw_path, raw)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    messages = _messages(report)
+    assert not report.ok
+    assert "does not invoke reviewed driver" in messages
+
+
+def test_future_repository_relative_argv_schema_is_supported(tmp_path):
+    root = _make_release(tmp_path / "release")
+
+    controller_path = root / "sweep_manifest.json"
+    controller = json.loads(controller_path.read_text())
+    controller_tokens = shlex.split(controller.pop("command"))
+    controller_tokens[0] = "experiments/static/run_perturbed_sweeps.py"
+    controller["argv"] = controller_tokens
+    _write_json(controller_path, controller)
+
+    consolidated_path = root / "diagnostics" / "run_manifests.jsonl"
+    consolidated = json.loads(consolidated_path.read_text())
+    child = consolidated["manifest"]
+    child_tokens = shlex.split(child.pop("command"))
+    child_tokens[0] = "experiments/static/lines.py"
+    child["argv"] = child_tokens
+    _write_jsonl(consolidated_path, [consolidated])
+
+    raw_path = root / "raw_runs" / SAVE_NAME / "run_manifest.json"
+    raw = json.loads(raw_path.read_text())
+    raw_tokens = shlex.split(raw.pop("command"))
+    raw_tokens[0] = "experiments/static/lines.py"
+    raw["argv"] = raw_tokens
+    _write_json(raw_path, raw)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    assert report.ok, _messages(report)
+
+
+def test_conflicting_argv_and_command_are_rejected(tmp_path):
+    root = _make_release(tmp_path / "release")
+    raw_path = root / "raw_runs" / SAVE_NAME / "run_manifest.json"
+    raw = json.loads(raw_path.read_text())
+    raw["argv"] = shlex.split(raw["command"])
+    raw["argv"][0] = "experiments/static/circles.py"
+    _write_json(raw_path, raw)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    messages = _messages(report)
+    assert not report.ok
+    assert "argv does not exactly match the tokenized command string" in messages
 
 
 def test_controller_must_complete_every_run_without_failures(tmp_path):
@@ -864,7 +1005,162 @@ def test_self_reported_snapshot_hash_cannot_hide_git_byte_mismatch(tmp_path):
     messages = _messages(report)
     assert not report.ok
     assert (
-        "source snapshot bytes differ from target_commit for requirements.txt"
+        "source snapshot member size exceeds or differs from target_commit bound "
+        "for requirements.txt" in messages
+    )
+
+
+def test_every_audit_git_operation_disables_replace_objects(tmp_path, monkeypatch):
+    root = _make_release(tmp_path / "release")
+    real_run = subprocess.run
+    git_calls = []
+
+    def checked_run(command, *args, **kwargs):
+        if command and command[0] == "git":
+            git_calls.append((command, kwargs.get("env", {})))
+        return real_run(command, *args, **kwargs)
+
+    monkeypatch.setattr(audit_module.subprocess, "run", checked_run)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    assert report.ok, _messages(report)
+    assert git_calls
+    assert all(command[1] == "--no-replace-objects" for command, _ in git_calls)
+    assert all(
+        environment.get("GIT_NO_REPLACE_OBJECTS") == "1" for _, environment in git_calls
+    )
+
+
+def test_git_replace_ref_cannot_substitute_for_target_commit(tmp_path):
+    root = _make_release(tmp_path / "release")
+    target_commit = COMMIT
+    requirements_path = tmp_path / "requirements.txt"
+    requirements_path.write_text(
+        "numpy==1.23.4\nreplacement-only==1\n", encoding="utf-8"
+    )
+    _git(tmp_path, "add", "requirements.txt")
+    _git(tmp_path, "commit", "-q", "-m", "replacement tree")
+    replacement_commit = _git(tmp_path, "rev-parse", "HEAD").decode().strip()
+    _git(tmp_path, "replace", target_commit, replacement_commit)
+    assert b"replacement-only==1" in _git(
+        tmp_path, "show", f"{target_commit}:requirements.txt"
+    )
+
+    snapshot_files = {
+        relative.decode(): (tmp_path / relative.decode()).read_bytes()
+        for relative in _git(tmp_path, "ls-files", "-z").rstrip(b"\0").split(b"\0")
+        if relative
+    }
+    _rewrite_snapshot(root, snapshot_files)
+    environment_path = root / "environment.json"
+    environment = json.loads(environment_path.read_text())
+    for fingerprint in environment["input_fingerprints"]:
+        if fingerprint["path"] == "requirements.txt":
+            data = snapshot_files["requirements.txt"]
+            fingerprint["size_bytes"] = len(data)
+            fingerprint["sha256"] = hashlib.sha256(data).hexdigest()
+    _write_json(environment_path, environment)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    messages = _messages(report)
+    assert not report.ok
+    assert "target_commit bound for requirements.txt" in messages
+
+
+def test_git_info_export_ignore_cannot_hide_tracked_source_file(tmp_path):
+    root = _make_release(tmp_path / "release")
+    (tmp_path / ".git" / "info" / "attributes").write_text(
+        "requirements.txt export-ignore\n", encoding="utf-8"
+    )
+
+    archive_bytes = _git(tmp_path, "archive", COMMIT)
+    with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:") as archive:
+        assert "requirements.txt" not in archive.getnames()
+
+    files = _snapshot_files(root / "diagnostics" / "source_snapshot.tar.gz")
+    files.pop("requirements.txt")
+    _rewrite_snapshot(root, files)
+    environment_path = root / "environment.json"
+    environment = json.loads(environment_path.read_text())
+    environment["input_fingerprints"] = [
+        row
+        for row in environment["input_fingerprints"]
+        if row["path"] != "requirements.txt"
+    ]
+    _write_json(environment_path, environment)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    messages = _messages(report)
+    assert not report.ok
+    assert (
+        "source snapshot is missing tracked files from target_commit: "
+        "'requirements.txt'" in messages
+    )
+
+
+def test_source_snapshot_mode_must_match_git_tree(tmp_path):
+    root = _make_release(tmp_path / "release")
+    files = _snapshot_files(root / "diagnostics" / "source_snapshot.tar.gz")
+    entries = [
+        (relative, data, 0o755 if relative == "requirements.txt" else 0o644)
+        for relative, data in sorted(files.items())
+    ]
+    _rewrite_snapshot_entries(root, entries)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    messages = _messages(report)
+    assert not report.ok
+    assert (
+        "source snapshot mode differs from target_commit for requirements.txt"
+        in messages
+    )
+
+
+def test_source_snapshot_member_count_is_bounded_by_git_tree(tmp_path):
+    root = _make_release(tmp_path / "release")
+    files = _snapshot_files(root / "diagnostics" / "source_snapshot.tar.gz")
+    entries = [(relative, data, 0o644) for relative, data in sorted(files.items())]
+    entries.append(("untracked-extra.txt", b"x", 0o644))
+    _rewrite_snapshot_entries(root, entries)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    messages = _messages(report)
+    assert not report.ok
+    assert "source snapshot member count exceeds target_commit tree bound" in messages
+
+
+def test_source_snapshot_member_and_total_sizes_are_git_tree_bounded(
+    tmp_path, monkeypatch
+):
+    root = _make_release(tmp_path / "release")
+    files = _snapshot_files(root / "diagnostics" / "source_snapshot.tar.gz")
+    total_size = sum(len(data) for data in files.values())
+    entries = [
+        (
+            relative,
+            b"x" * (total_size + 1) if relative == "requirements.txt" else data,
+            0o644,
+        )
+        for relative, data in sorted(files.items())
+    ]
+    _rewrite_snapshot_entries(root, entries)
+
+    def fail_if_extracted(*_args, **_kwargs):
+        pytest.fail("snapshot payload was extracted before metadata bounds passed")
+
+    monkeypatch.setattr(tarfile.TarFile, "extractfile", fail_if_extracted)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    messages = _messages(report)
+    assert not report.ok
+    assert (
+        "source snapshot total uncompressed bytes exceed target_commit tree bound"
         in messages
     )
 
@@ -1337,8 +1633,11 @@ def _run_with_merge(m, merge_ids, algo_kwargs):
     messages = _messages(report)
     assert not report.ok
     assert "omission cannot be inherited" in messages
-    assert "source snapshot bytes differ from target_commit" in messages
-    assert "production source fingerprint mismatch" in messages
+    assert (
+        "source snapshot member size exceeds or differs from target_commit bound"
+        in messages
+    )
+    assert "source snapshot lacks production fingerprint file" in messages
 
 
 def test_sha256_manifest_is_sorted_complete_and_verifiable(tmp_path):

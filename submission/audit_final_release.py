@@ -7,7 +7,6 @@ import argparse
 import copy
 import csv
 import hashlib
-import io
 import json
 import math
 import os
@@ -198,12 +197,19 @@ class RunKey:
         )
 
 
+@dataclass(frozen=True)
+class GitBlob:
+    mode: str
+    object_id: str
+    data: bytes
+
+
 @dataclass
 class RescueProfileInheritance:
     value: str
     eligible_experiments: frozenset[str]
     driver_modules: dict[str, str] = field(default_factory=dict)
-    execution_root: Path | None = None
+    historical_root: PurePosixPath | None = None
     source_verified: bool = False
     evidence: tuple[str, ...] = ()
     proof_failures: tuple[str, ...] = ()
@@ -518,24 +524,73 @@ def _command_tokens(command: object) -> list[str]:
         raise ReleaseAuditInputError(f"command cannot be parsed: {exc}") from exc
 
 
+def _manifest_command_tokens(manifest: Mapping[str, object]) -> list[str]:
+    argv = manifest.get("argv")
+    if argv is None:
+        return _command_tokens(manifest.get("command"))
+    if (
+        not isinstance(argv, list)
+        or not argv
+        or any(not isinstance(token, str) or "\x00" in token for token in argv)
+    ):
+        raise ReleaseAuditInputError("argv is not a non-empty JSON string array")
+    command = manifest.get("command")
+    if command not in (None, ""):
+        command_tokens = _command_tokens(command)
+        if argv != command_tokens:
+            raise ReleaseAuditInputError(
+                "argv does not exactly match the tokenized command string"
+            )
+    return list(argv)
+
+
+def _historical_repository_root(raw_root: object) -> PurePosixPath:
+    if not isinstance(raw_root, str) or not raw_root:
+        raise ReleaseAuditInputError(
+            "environment repository.root is not an absolute path"
+        )
+    root = PurePosixPath(raw_root)
+    if (
+        not root.is_absolute()
+        or str(root) != raw_root
+        or "." in root.parts
+        or ".." in root.parts
+    ):
+        raise ReleaseAuditInputError(
+            "environment repository.root is not a canonical absolute POSIX path"
+        )
+    return root
+
+
 def _command_invokes_driver(
-    tokens: Sequence[str], driver_module: str, execution_root: Path | None
+    tokens: Sequence[str],
+    driver_module: str,
+    historical_root: PurePosixPath | None,
 ) -> bool:
     expected_path = driver_module.replace(".", "/") + ".py"
-    if not tokens or execution_root is None:
+    if not tokens or historical_root is None:
         return False
-    expected_executable = execution_root / expected_path
-    try:
-        executable = Path(tokens[0]).expanduser().resolve(strict=False)
-    except (OSError, RuntimeError, ValueError):
+    raw_executable = tokens[0]
+    executable = PurePosixPath(raw_executable)
+    if (
+        "\x00" in raw_executable
+        or str(executable) != raw_executable
+        or "." in executable.parts
+        or ".." in executable.parts
+    ):
         return False
-    return executable == expected_executable.resolve(strict=False)
+    if executable.is_absolute():
+        try:
+            executable = executable.relative_to(historical_root)
+        except ValueError:
+            return False
+    return executable.as_posix() == expected_path
 
 
 def _build_rescue_profile_inheritance(
     config: Mapping[str, object],
     global_profiles_verified: bool,
-    execution_root: Path | None,
+    historical_root: PurePosixPath | None,
 ) -> RescueProfileInheritance:
     production = config.get("production_method")
     expected = ""
@@ -583,7 +638,7 @@ def _build_rescue_profile_inheritance(
         value=expected,
         eligible_experiments=configured_inheritance_experiments,
         driver_modules=driver_modules,
-        execution_root=execution_root,
+        historical_root=historical_root,
         source_verified=global_profiles_verified,
         evidence=evidence,
         proof_failures=tuple(dict.fromkeys(failures)),
@@ -659,14 +714,14 @@ def _check_child_manifest_command(
         report.add_error(f"{label} parameters are unavailable for command binding")
         return
     try:
-        tokens = _command_tokens(manifest.get("command"))
+        tokens = _manifest_command_tokens(manifest)
     except ReleaseAuditInputError as exc:
         report.add_error(f"{label} command evidence is invalid: {exc}")
         return
 
     driver_module = inheritance.driver_modules.get(key.experiment)
     if not driver_module or not _command_invokes_driver(
-        tokens, driver_module, inheritance.execution_root
+        tokens, driver_module, inheritance.historical_root
     ):
         report.add_error(
             f"{label} does not invoke reviewed driver {driver_module!r} for "
@@ -837,17 +892,28 @@ def _sha256(path: Path) -> str:
 def _run_git(
     repository: Path,
     arguments: Sequence[str],
+    *,
+    input_data: bytes | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
+    environment = os.environ.copy()
+    environment["GIT_NO_REPLACE_OBJECTS"] = "1"
     try:
         return subprocess.run(
-            ["git", "-C", str(repository), *arguments],
+            ["git", "--no-replace-objects", "-C", str(repository), *arguments],
+            input=input_data,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             check=False,
             timeout=30,
+            env=environment,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise ReleaseAuditInputError(f"could not execute Git: {exc}") from exc
+
+
+def _git_sha1(object_type: str, data: bytes) -> str:
+    header = f"{object_type} {len(data)}\0".encode("ascii")
+    return hashlib.sha1(header + data).hexdigest()
 
 
 def _find_git_repository(root: Path, target_commit: str) -> Path:
@@ -871,45 +937,212 @@ def _find_git_repository(root: Path, target_commit: str) -> Path:
         if result.returncode == 0:
             resolved = result.stdout.decode("ascii", errors="strict").strip()
             if resolved == target_commit:
-                return repository
+                commit = _run_git(repository, ("cat-file", "commit", target_commit))
+                if (
+                    commit.returncode == 0
+                    and _git_sha1("commit", commit.stdout) == target_commit
+                ):
+                    return repository
     raise ReleaseAuditInputError(
         f"target_commit does not exist as an exact Git commit object: {target_commit!r}"
     )
 
 
-def _git_archive_members(repository: Path, target_commit: str) -> dict[str, bytes]:
-    result = _run_git(repository, ("archive", "--format=tar", target_commit))
+def _git_tree_blobs(repository: Path, target_commit: str) -> dict[str, GitBlob]:
+    result = _run_git(
+        repository,
+        ("ls-tree", "-r", "-z", "--full-tree", target_commit),
+    )
     if result.returncode != 0:
         detail = result.stderr.decode("utf-8", errors="replace").strip()
-        raise ReleaseAuditInputError(f"could not archive target_commit: {detail}")
-    members: dict[str, bytes] = {}
+        raise ReleaseAuditInputError(
+            f"could not enumerate target_commit tree: {detail}"
+        )
+
+    entries: list[tuple[str, str, str]] = []
+    paths: set[str] = set()
     try:
-        with tarfile.open(fileobj=io.BytesIO(result.stdout), mode="r:") as archive:
-            for member in archive.getmembers():
-                pure = PurePosixPath(member.name)
-                if pure.is_absolute() or ".." in pure.parts:
-                    raise ReleaseAuditInputError(
-                        f"unsafe path in Git archive: {member.name!r}"
+        records = result.stdout.split(b"\0")
+        if records[-1] != b"":
+            raise ReleaseAuditInputError("Git ls-tree output is not NUL terminated")
+        for record in records[:-1]:
+            metadata, raw_path = record.split(b"\t", 1)
+            mode, object_type, object_id = metadata.decode("ascii").split(" ")
+            path = raw_path.decode("utf-8")
+            pure = PurePosixPath(path)
+            if (
+                not path
+                or pure.is_absolute()
+                or ".." in pure.parts
+                or str(pure) != path
+            ):
+                raise ReleaseAuditInputError(
+                    f"unsafe path in target_commit tree: {path!r}"
+                )
+            if path in paths:
+                raise ReleaseAuditInputError(
+                    f"duplicate path in target_commit tree: {path!r}"
+                )
+            if object_type != "blob" or mode not in {"100644", "100755"}:
+                raise ReleaseAuditInputError(
+                    f"unsupported tracked source entry {path!r}: "
+                    f"mode={mode!r}, type={object_type!r}"
+                )
+            if not re.fullmatch(r"[0-9a-f]{40}", object_id):
+                raise ReleaseAuditInputError(
+                    f"invalid blob object ID for tracked source entry {path!r}"
+                )
+            paths.add(path)
+            entries.append((path, mode, object_id))
+    except (UnicodeError, ValueError) as exc:
+        raise ReleaseAuditInputError(
+            f"could not parse Git ls-tree output: {exc}"
+        ) from exc
+
+    request = b"".join(object_id.encode("ascii") + b"\n" for _, _, object_id in entries)
+    blobs = _run_git(repository, ("cat-file", "--batch"), input_data=request)
+    if blobs.returncode != 0:
+        detail = blobs.stderr.decode("utf-8", errors="replace").strip()
+        raise ReleaseAuditInputError(f"could not read target_commit blobs: {detail}")
+
+    members: dict[str, GitBlob] = {}
+    cursor = 0
+    try:
+        for path, mode, expected_object_id in entries:
+            line_end = blobs.stdout.index(b"\n", cursor)
+            header = blobs.stdout[cursor:line_end].decode("ascii")
+            object_id, object_type, raw_size = header.split(" ")
+            if object_id != expected_object_id or object_type != "blob":
+                raise ReleaseAuditInputError(
+                    f"Git cat-file returned the wrong object for {path!r}"
+                )
+            size = int(raw_size)
+            if size < 0:
+                raise ReleaseAuditInputError(
+                    f"Git cat-file returned a negative size for {path!r}"
+                )
+            data_start = line_end + 1
+            data_end = data_start + size
+            if data_end >= len(blobs.stdout) or blobs.stdout[data_end] != 0x0A:
+                raise ReleaseAuditInputError(
+                    f"Git cat-file returned a truncated blob for {path!r}"
+                )
+            data = blobs.stdout[data_start:data_end]
+            if _git_sha1("blob", data) != object_id:
+                raise ReleaseAuditInputError(
+                    f"Git blob hash verification failed for {path!r}"
+                )
+            members[path] = GitBlob(mode, object_id, data)
+            cursor = data_end + 1
+    except (UnicodeError, ValueError) as exc:
+        raise ReleaseAuditInputError(
+            f"could not parse Git cat-file output: {exc}"
+        ) from exc
+    if cursor != len(blobs.stdout):
+        raise ReleaseAuditInputError("Git cat-file returned unexpected trailing data")
+    return members
+
+
+def _read_bounded_source_snapshot(
+    snapshot_path: Path,
+    expected: Mapping[str, GitBlob],
+    report: AuditReport,
+) -> tuple[dict[str, bytes], dict[str, int]]:
+    members: dict[str, bytes] = {}
+    modes: dict[str, int] = {}
+    maximum_members = len(expected)
+    maximum_total_bytes = sum(len(blob.data) for blob in expected.values())
+    declared_total = 0
+    member_count = 0
+    metadata_errors = report.total_errors
+    try:
+        with tarfile.open(snapshot_path, "r:gz") as archive:
+            validated_members: list[tarfile.TarInfo] = []
+            seen_paths: set[str] = set()
+            for member in archive:
+                member_count += 1
+                declared_total += max(member.size, 0)
+                if member_count > maximum_members:
+                    report.add_error(
+                        "source snapshot member count exceeds target_commit tree bound: "
+                        f"{member_count} > {maximum_members}"
                     )
-                if member.isdir():
+                    break
+                if declared_total > maximum_total_bytes:
+                    report.add_error(
+                        "source snapshot total uncompressed bytes exceed target_commit "
+                        f"tree bound: {declared_total} > {maximum_total_bytes}"
+                    )
+                    break
+                pure = PurePosixPath(member.name)
+                if (
+                    not member.name
+                    or pure.is_absolute()
+                    or ".." in pure.parts
+                    or str(pure) != member.name
+                ):
+                    report.add_error(f"unsafe path in source snapshot: {member.name!r}")
                     continue
                 if not member.isfile():
-                    raise ReleaseAuditInputError(
-                        f"non-regular tracked source entry: {member.name!r}"
+                    report.add_error(
+                        f"non-regular entry in source snapshot: {member.name!r}"
                     )
-                if member.name in members:
-                    raise ReleaseAuditInputError(
-                        f"duplicate path in Git archive: {member.name!r}"
+                    continue
+                if member.name in seen_paths:
+                    report.add_error(
+                        f"duplicate file in source snapshot: {member.name}"
                     )
+                    continue
+                seen_paths.add(member.name)
+                expected_blob = expected.get(member.name)
+                if expected_blob is None:
+                    report.add_error(
+                        "source snapshot contains an unbudgeted path absent from "
+                        f"target_commit: {member.name!r}"
+                    )
+                    continue
+                expected_size = len(expected_blob.data)
+                if member.size != expected_size:
+                    report.add_error(
+                        f"source snapshot member size exceeds or differs from "
+                        f"target_commit bound for {member.name}: "
+                        f"{member.size} != {expected_size}"
+                    )
+                    continue
+                expected_mode = int(expected_blob.mode[-3:], 8)
+                actual_mode = member.mode & 0o777
+                if actual_mode != expected_mode:
+                    report.add_error(
+                        f"source snapshot mode differs from target_commit for "
+                        f"{member.name}: {actual_mode:o} != {expected_mode:o}"
+                    )
+                    continue
+                validated_members.append(member)
+
+            if report.total_errors != metadata_errors:
+                return {}, {}
+
+            for member in validated_members:
+                expected_blob = expected[member.name]
+                expected_size = len(expected_blob.data)
                 stream = archive.extractfile(member)
                 if stream is None:
-                    raise ReleaseAuditInputError(
-                        f"could not read Git archive member: {member.name!r}"
+                    report.add_error(
+                        f"could not read source snapshot member: {member.name}"
                     )
-                members[member.name] = stream.read()
+                    continue
+                data = stream.read(expected_size + 1)
+                if len(data) != expected_size:
+                    report.add_error(
+                        f"source snapshot member read length differs from declared "
+                        f"size for {member.name}"
+                    )
+                    continue
+                members[member.name] = data
+                modes[member.name] = member.mode & 0o777
     except (OSError, tarfile.TarError) as exc:
-        raise ReleaseAuditInputError(f"could not read Git archive: {exc}") from exc
-    return members
+        report.add_error(f"could not read source snapshot: {exc}")
+    return members, modes
 
 
 def _report_path_set_difference(
@@ -928,7 +1161,7 @@ def _check_source_provenance(
     root: Path,
     config: dict,
     report: AuditReport,
-) -> tuple[str, dict[str, bytes], bool, Path | None]:
+) -> tuple[str, dict[str, bytes], bool, PurePosixPath | None]:
     initial_errors = report.total_errors
     target_commit = str(config.get("source", {}).get("target_commit", ""))
     target_branch = str(config.get("source", {}).get("target_branch", ""))
@@ -950,7 +1183,7 @@ def _check_source_provenance(
     state = _load_json(state_path, report)
     snapshot_path = root / "diagnostics" / "source_snapshot.tar.gz"
     environment = _load_json(root / "environment.json", report)
-    execution_root: Path | None = None
+    historical_root: PurePosixPath | None = None
     if state:
         if state.get("source_commit") != target_commit:
             report.add_error("source_state commit does not match resolved config")
@@ -980,43 +1213,29 @@ def _check_source_provenance(
                 report.add_error("environment branch does not match resolved config")
             if repository.get("source_dirty") is not False:
                 report.add_error("environment records a dirty source tree")
-            raw_root = repository.get("root")
-            if not isinstance(raw_root, str) or not Path(raw_root).is_absolute():
-                report.add_error("environment repository.root is not an absolute path")
-            else:
-                execution_root = Path(raw_root).resolve(strict=False)
+            try:
+                historical_root = _historical_repository_root(repository.get("root"))
+            except ReleaseAuditInputError as exc:
+                report.add_error(str(exc))
+
+    git_members: dict[str, GitBlob] = {}
+    if re.fullmatch(r"[0-9a-f]{40}", target_commit):
+        try:
+            git_repository = _find_git_repository(root, target_commit)
+            git_members = _git_tree_blobs(git_repository, target_commit)
+        except (ReleaseAuditInputError, UnicodeError) as exc:
+            report.add_error(str(exc))
+    expected_snapshot = {
+        path: blob
+        for path, blob in git_members.items()
+        if PurePosixPath(path).parts[0] not in SNAPSHOT_EXCLUDED_ROOTS
+    }
 
     snapshot_members: dict[str, bytes] = {}
-    if snapshot_path.is_file():
-        try:
-            with tarfile.open(snapshot_path, "r:gz") as archive:
-                for member in archive.getmembers():
-                    pure = PurePosixPath(member.name)
-                    if pure.is_absolute() or ".." in pure.parts:
-                        report.add_error(
-                            f"unsafe path in source snapshot: {member.name!r}"
-                        )
-                        continue
-                    if not member.isfile():
-                        if not member.isdir():
-                            report.add_error(
-                                f"non-regular entry in source snapshot: {member.name!r}"
-                            )
-                        continue
-                    if member.name in snapshot_members:
-                        report.add_error(
-                            f"duplicate file in source snapshot: {member.name}"
-                        )
-                        continue
-                    stream = archive.extractfile(member)
-                    if stream is None:
-                        report.add_error(
-                            f"could not read source snapshot member: {member.name}"
-                        )
-                        continue
-                    snapshot_members[member.name] = stream.read()
-        except (OSError, tarfile.TarError) as exc:
-            report.add_error(f"could not read source snapshot: {exc}")
+    if snapshot_path.is_file() and expected_snapshot:
+        snapshot_members, _ = _read_bounded_source_snapshot(
+            snapshot_path, expected_snapshot, report
+        )
 
     if state:
         excluded_roots = state.get("excluded_roots")
@@ -1114,24 +1333,6 @@ def _check_source_provenance(
                     "environment lacks a fingerprint for submission/submission_config.json"
                 )
 
-    git_members: dict[str, bytes] = {}
-    git_repository: Path | None = None
-    if re.fullmatch(r"[0-9a-f]{40}", target_commit):
-        try:
-            git_repository = _find_git_repository(root, target_commit)
-            git_members = _git_archive_members(git_repository, target_commit)
-        except (ReleaseAuditInputError, UnicodeError) as exc:
-            report.add_error(str(exc))
-    if git_repository is not None and execution_root != git_repository:
-        report.add_error(
-            f"environment repository.root does not identify the verified Git "
-            f"repository: {execution_root!s} != {git_repository!s}"
-        )
-    expected_snapshot = {
-        path: data
-        for path, data in git_members.items()
-        if PurePosixPath(path).parts[0] not in SNAPSHOT_EXCLUDED_ROOTS
-    }
     _report_path_set_difference(
         report,
         "source snapshot is missing tracked files from target_commit",
@@ -1143,7 +1344,7 @@ def _check_source_provenance(
         set(snapshot_members) - set(expected_snapshot),
     )
     for path in sorted(set(expected_snapshot) & set(snapshot_members)):
-        if snapshot_members[path] != expected_snapshot[path]:
+        if snapshot_members[path] != expected_snapshot[path].data:
             report.add_error(
                 f"source snapshot bytes differ from target_commit for {path}"
             )
@@ -1166,7 +1367,7 @@ def _check_source_provenance(
         target_commit,
         snapshot_members,
         report.total_errors == initial_errors,
-        execution_root,
+        historical_root,
     )
 
 
@@ -1175,7 +1376,7 @@ def _check_controller(
     required_runs: int,
     required_cases: int,
     production_context: Mapping[str, str],
-    execution_root: Path | None,
+    historical_root: PurePosixPath | None,
     report: AuditReport,
 ) -> tuple[dict | None, bool]:
     manifest = _load_json(root / "sweep_manifest.json", report)
@@ -1209,13 +1410,13 @@ def _check_controller(
             report.add_error("controller manifest parameters are unavailable")
             profiles_verified = False
         try:
-            tokens = _command_tokens(manifest.get("command"))
+            tokens = _manifest_command_tokens(manifest)
         except ReleaseAuditInputError as exc:
             report.add_error(f"controller command evidence is invalid: {exc}")
             tokens = []
             profiles_verified = False
         if tokens and not _command_invokes_driver(
-            tokens, PRODUCTION_CONTROLLER_MODULE, execution_root
+            tokens, PRODUCTION_CONTROLLER_MODULE, historical_root
         ):
             report.add_error(
                 "controller command does not invoke the reviewed sweep controller"
@@ -2722,7 +2923,7 @@ def audit_final_release(
         required_cases,
         report,
     )
-    target_commit, _, source_verified, execution_root = _check_source_provenance(
+    target_commit, _, source_verified, historical_root = _check_source_provenance(
         root, config, report
     )
     target_branch = str(config.get("source", {}).get("target_branch", ""))
@@ -2737,13 +2938,13 @@ def audit_final_release(
         required_runs,
         required_cases,
         production_context,
-        execution_root,
+        historical_root,
         report,
     )
     inheritance = _build_rescue_profile_inheritance(
         config,
         source_verified and controller_profiles_verified,
-        execution_root,
+        historical_root,
     )
     inventory = _check_inventory(
         root,
