@@ -1,11 +1,16 @@
 import json
 import math
 
+import pytest
+
 from experiments.submission.topology_consistency_diagnostics import (
     FULL_METHODS,
     FULL_RESOLUTIONS,
     StructuredMesh,
     _aggregate_case_rows_by,
+    _ensure_output_outside_input_release,
+    _full_readme,
+    _resolve_run_bundle,
     build_full_selectors,
     classify_vertex,
     evaluate_case,
@@ -181,7 +186,11 @@ def test_vertices_on_facet_are_flagged_and_excluded():
         "excluded": 1,
         "conflicts": 0,
     }
-    excluded = [row for row in details if row["scope"] == "resolved" and row["on_facet_excluded"]]
+    excluded = [
+        row
+        for row in details
+        if row["scope"] == "resolved" and row["on_facet_excluded"]
+    ]
     assert len(excluded) == 1
     assert excluded[0]["vertex_y"] == 0.0
 
@@ -263,3 +272,84 @@ def test_aggregate_uses_mixed_cell_and_vertex_weighting():
     assert aggregate["resolved_evaluated_shared_vertices"] == 10
     assert aggregate["resolved_on_facet_excluded_vertices"] == 3
     assert aggregate["resolved_conflict_rate"] == 0.2
+
+
+def test_final_release_relative_run_bundle_resolves_from_inventory(tmp_path):
+    inventory = tmp_path / "release" / "diagnostics" / "run_inventory.csv"
+    inventory.parent.mkdir(parents=True)
+    inventory.write_text("unused\n")
+
+    assert (
+        _resolve_run_bundle(inventory, "raw_runs/example")
+        == (tmp_path / "release/raw_runs/example").resolve()
+    )
+
+
+def test_validation_output_cannot_be_inside_input_release(tmp_path):
+    diagnostics = tmp_path / "release" / "diagnostics"
+    diagnostics.mkdir(parents=True)
+    metrics = diagnostics / "cell_metrics.csv"
+    metrics.write_text("unused\n")
+
+    with pytest.raises(ValueError, match="outside immutable release"):
+        _ensure_output_outside_input_release(
+            tmp_path / "release/validation/topology", metrics
+        )
+    _ensure_output_outside_input_release(tmp_path / "validation/topology", metrics)
+
+
+def test_full_readme_uses_data_derived_case_and_fallback_counts():
+    def aggregate(experiment, conflicts):
+        return {
+            "experiment": experiment,
+            "algo": "circular",
+            "case_count": 7,
+            "mixed_cells": 20,
+            "oriented_cell_fraction": 0.9,
+            "plic_fallback_cell_fraction": 0.1,
+            "resolved_evaluated_shared_vertices": 11,
+            "resolved_on_facet_excluded_vertices": 1,
+            "resolved_invalid_excluded_vertices": 0,
+            "resolved_conflict_vertices": conflicts,
+            "resolved_conflict_rate": conflicts / 11,
+            "complete_evaluated_shared_vertices": 12,
+            "complete_on_facet_excluded_vertices": 1,
+            "complete_invalid_excluded_vertices": 0,
+            "complete_conflict_vertices": conflicts,
+            "complete_conflict_rate": conflicts / 12,
+        }
+
+    readme = _full_readme(
+        [aggregate("ellipses", 2), aggregate("circles", 0)],
+        [
+            {
+                **aggregate("all", 2),
+                "relative_tolerance": 1.0e-10,
+            }
+        ],
+        {
+            "conflict_vertices": 2,
+            "case_count": 2,
+            "audited_case_count": 7,
+            "fallback_involved_vertices": 1,
+            "by_experiment": {
+                "ellipses": {
+                    "conflict_vertices": 2,
+                    "case_count": 2,
+                    "resolutions": [50.0],
+                }
+            },
+        },
+        {
+            "input_validation": {
+                "selector_count": 7,
+                "setting_count": 1,
+                "source_commits": ["a" * 40],
+            }
+        },
+    )
+
+    assert "`2/7` cases" in readme
+    assert "`1` conflicting vertices contain a PLIC fallback" in readme
+    assert "Zero conflicts at the paper tolerance: `circles`" in readme
+    assert "July" not in readme

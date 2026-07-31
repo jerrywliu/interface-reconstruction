@@ -16,7 +16,7 @@ companion-run and endpoint-variant requirements against the active manuscript.
 | --- | --- | --- |
 | Historical paper assets | March/May 2026 camera-ready bundles | Layout comparison only. Do not use as final numerical provenance. |
 | July baseline | `results/static/static_paper_simplified_default_20260717_212413/` | Comparison/recovery only: 300 affected-method runs, 7,500 cases. Its source snapshot is reproducible but dirty, and its historical square/Zalesak `area_error` columns are not submission-equivalent. |
-| Final release | `results/static/submission_static_<UTC>_<12-char-commit>/` | Canonical after completion and audit: 970 all-method runs, 24,250 cases, clean source commit, read-only raw bundles, and consolidated diagnostics. |
+| Final release | `results/static/submission_static_20260731_012430_505aefa45432/` | Canonical completed result set: 970 all-method runs, 24,250 cases, clean source commit, read-only raw bundles, and consolidated diagnostics. Seal and verify its release-wide `SHA256SUMS` before any downstream validation. |
 
 The machine-readable specification is `submission/submission_config.json`.
 Figure promotion status and the paper filename contract are in
@@ -25,7 +25,7 @@ Figure promotion status and the paper filename contract are in
 Set these shell variables when a final release exists:
 
 ```bash
-export FINAL_ROOT="$PWD/results/static/submission_static_<UTC>_<12-char-commit>"
+export FINAL_ROOT="$PWD/results/static/submission_static_20260731_012430_505aefa45432"
 export SOURCE_COMMIT="$(python -c 'import json,os; print(json.load(open(os.environ["FINAL_ROOT"] + "/submission_config.resolved.json"))["source"]["target_commit"])')"
 export FIGURE_ROOT="$PWD/results/submission/final_figures_${SOURCE_COMMIT:0:12}"
 export PLOTS_VIEW="$FIGURE_ROOT/final_plots_view"
@@ -58,6 +58,7 @@ Each final release has this contract:
 
 ```text
 $FINAL_ROOT/
+  SHA256SUMS
   submission_config.resolved.json
   sweep_manifest.json
   failures.csv
@@ -164,17 +165,17 @@ squares 24, circles 12, ellipses 12, and Zalesak 12.
 ```bash
 python -m experiments.static.run_perturbed_sweeps \
   --plot_from_csv "$FINAL_ROOT/perturbed_sweep.csv" \
-  --summary_dir "$FIGURE_ROOT/all_methods" \
+  --summary_dir "$FIGURE_ROOT/all_method_summary_plots" \
   --no-notify
 ```
 
 | Generated vector PDF | Paper asset |
 | --- | --- |
-| `all_methods/lines_all_methods_2x2.pdf` | `line_reconstruction_perturbed_all_methods_2x2.pdf` |
-| `all_methods/squares_all_methods_2x2.pdf` | `square_reconstruction_perturbed_all_methods_2x2.pdf` |
-| `all_methods/circles_all_methods_5x2_axes.pdf` | `circle_reconstruction_perturbed_all_methods_5x2_axes.pdf` |
-| `all_methods/ellipses_all_methods_5x2_axes.pdf` | `ellipse_reconstruction_perturbed_all_methods_5x2_axes.pdf` |
-| `all_methods/zalesak_all_methods_2x2.pdf` | `zalesak_reconstruction_perturbed_all_methods_2x2.pdf` |
+| `all_method_summary_plots/lines_all_methods_2x2.pdf` | `line_reconstruction_perturbed_all_methods_2x2.pdf` |
+| `all_method_summary_plots/squares_all_methods_2x2.pdf` | `square_reconstruction_perturbed_all_methods_2x2.pdf` |
+| `all_method_summary_plots/circles_all_methods_5x2_axes.pdf` | `circle_reconstruction_perturbed_all_methods_5x2_axes.pdf` |
+| `all_method_summary_plots/ellipses_all_methods_5x2_axes.pdf` | `ellipse_reconstruction_perturbed_all_methods_5x2_axes.pdf` |
+| `all_method_summary_plots/zalesak_all_methods_2x2.pdf` | `zalesak_reconstruction_perturbed_all_methods_2x2.pdf` |
 
 ### Resolution studies
 
@@ -273,15 +274,125 @@ Record the choice in the figure approval CSV and `submission/figure_provenance.c
 
 ## Supporting Validation Map
 
+Supporting analyses never write beneath `FINAL_ROOT`. First verify the sealed
+release ledger and create one digest-named validation namespace with an explicit
+binding to both the numerical release and the analysis code:
+
+```bash
+test -f "$FINAL_ROOT/SHA256SUMS"
+python submission/audit_final_release.py "$FINAL_ROOT" --verify-sha256-manifest
+export RELEASE_MANIFEST_SHA256="$(python -c 'import hashlib,os; print(hashlib.sha256(open(os.environ["FINAL_ROOT"] + "/SHA256SUMS", "rb").read()).hexdigest())')"
+export ANALYSIS_COMMIT="$(git rev-parse HEAD)"
+export VALIDATION_ROOT="$PWD/results/submission/final_validation_${SOURCE_COMMIT:0:12}_${RELEASE_MANIFEST_SHA256:0:12}"
+
+python - "$FINAL_ROOT" "$VALIDATION_ROOT" "$SOURCE_COMMIT" \
+  "$RELEASE_MANIFEST_SHA256" "$ANALYSIS_COMMIT" <<'PY'
+import json
+import shutil
+import sys
+from pathlib import Path
+
+release = Path(sys.argv[1]).resolve()
+output = Path(sys.argv[2]).resolve()
+payload = {
+    "schema_version": 1,
+    "release_name": release.name,
+    "release_root": str(release),
+    "source_commit": sys.argv[3],
+    "sha256_manifest": "release_SHA256SUMS",
+    "sha256_manifest_digest": sys.argv[4],
+    "analysis_commit": sys.argv[5],
+}
+output.mkdir(parents=True, exist_ok=True)
+binding = output / "release_binding.json"
+encoded = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+if binding.exists() and binding.read_text() != encoded:
+    raise SystemExit(f"existing validation binding disagrees: {binding}")
+binding.write_text(encoded)
+ledger = output / "release_SHA256SUMS"
+source_ledger = release / "SHA256SUMS"
+if ledger.exists() and ledger.read_bytes() != source_ledger.read_bytes():
+    raise SystemExit(f"existing validation ledger disagrees: {ledger}")
+shutil.copyfile(source_ledger, ledger)
+PY
+```
+
+If `SHA256SUMS` is absent, stop and complete the one-time final-release sealing
+step before declaring `FINAL_ROOT` immutable. Every command below writes under
+`VALIDATION_ROOT`; the binding file and copied ledger travel with the outputs.
+
 | Claim / experiment | Entry point and command | Data and provenance |
 | --- | --- | --- |
-| Ellipse empirical orders | `python -m experiments.submission.analyze_ellipse_convergence --case-metrics "$FINAL_ROOT/diagnostics/case_metrics.csv" --output-dir "$FINAL_ROOT/validation/convergence"` | `ellipse_convergence_{points,fits}.csv`, report JSON, vector PDF |
-| Shared-vertex incidence | `python -m experiments.submission.topology_consistency_diagnostics --full --cell-metrics "$FINAL_ROOT/diagnostics/cell_metrics.csv" --run-inventory "$FINAL_ROOT/diagnostics/run_inventory.csv" --output-dir "$FINAL_ROOT/validation/topology"` | paper table, tolerance table, case/conflict CSVs, compressed vertex rows, manifest |
-| Exact conflict diagnosis | `python -m experiments.submission.diagnose_topology_conflicts --source-dir "$FINAL_ROOT/validation/topology" --output-dir "$FINAL_ROOT/validation/topology_diagnosis"` | taxonomy, incident facets, case counts, manifest, vector examples |
-| Independent cells vs topology+merging | `python -m experiments.submission.run_topology_merging_ablation --output-dir "$FINAL_ROOT/validation/topology_merging"` | 10 jobs / 250 Zalesak cases; case/summary CSVs, manifest, vector PDF |
-| Guarded optional `C0` | `python -m experiments.submission.c0_conservation_validation --num-cases 25 --output "$FINAL_ROOT/validation/c0_conservation"` | matched 100-case off/on data, eligible joins, regressions, report, manifest |
-| Five-benchmark conservation smoke | `python -m experiments.submission.conservation_analyzer --selection <final-selection.json> --output "$FINAL_ROOT/validation/conservation"` | per-case global, merged-zone, and constituent-cell residuals. The checked-in selection JSON points to July and must be rewritten to final raw bundles. |
-| Zalesak remote-corner tail | `python -m experiments.submission.zalesak_failure.diagnose_zalesak_failure --run-root <release-or-July-root> --artifact-root "$FINAL_ROOT/validation/zalesak_failure"` | archive-only case-23 diagnostic PDF/SVG, entities/comparison CSVs, provenance JSON, README |
+| Ellipse empirical orders | `python -m experiments.submission.analyze_ellipse_convergence --case-metrics "$FINAL_ROOT/diagnostics/case_metrics.csv" --output-dir "$VALIDATION_ROOT/ellipse_convergence"` | `ellipse_convergence_{points,fits}.csv`, report JSON, vector PDF. This is the evidence bundle for the third-order author gate below. |
+| Shared-vertex incidence | `python -m experiments.submission.topology_consistency_diagnostics --full --cell-metrics "$FINAL_ROOT/diagnostics/cell_metrics.csv" --run-inventory "$FINAL_ROOT/diagnostics/run_inventory.csv" --output-dir "$VALIDATION_ROOT/topology"` | Paper table, tolerance table, case/conflict CSVs, compressed vertex rows, and manifest. Relative raw-bundle paths resolve against the release root. |
+| Exact conflict diagnosis | `python -m experiments.submission.diagnose_topology_conflicts --source-dir "$VALIDATION_ROOT/topology" --output-dir "$VALIDATION_ROOT/topology_diagnosis"` | Taxonomy, incident facets, data-derived incidence/counts, manifest, and vector examples. |
+| Independent cells vs topology+merging | `python -m experiments.submission.run_topology_merging_ablation --output-dir "$VALIDATION_ROOT/topology_merging"` | 10 jobs / 250 Zalesak cases; case/summary CSVs, manifest, vector PDF. Record its exact run commit in the emitted manifest. |
+| Guarded optional `C0` | `python -m experiments.submission.c0_conservation_validation --num-cases 25 --output "$VALIDATION_ROOT/c0_conservation"` | Matched 100-case off/on data, eligible joins, regressions, report, and manifest. This is a separate author/provenance gate, not evidence from the pre-`C0` release rows. |
+| Five-benchmark conservation smoke | First materialize the exact selection, then run the analyzer using the commands below. | The selection verifies every consumed run input against `FINAL_ROOT/SHA256SUMS`; outputs report global, merged-zone, and constituent-cell residuals. |
+| Zalesak remote-corner tail | Resolve the exact final run from the inventory, then invoke `diagnose_zalesak_failure` using the commands below. | Case-23 diagnostic PDF/SVG, entities/comparison CSVs, provenance JSON, and README; July is not an eligible input. |
+
+Materialize and run the final-release conservation selection:
+
+```bash
+python -m experiments.submission.materialize_final_conservation_selection \
+  --release-root "$FINAL_ROOT" \
+  --output "$VALIDATION_ROOT/conservation/selection.json"
+python -m experiments.submission.conservation_analyzer \
+  --selection "$VALIDATION_ROOT/conservation/selection.json" \
+  --output "$VALIDATION_ROOT/conservation/results"
+```
+
+Resolve the final Zalesak tail bundle without a handwritten path:
+
+```bash
+export ZALESAK_TAIL_RUN="$(python - "$FINAL_ROOT" <<'PY'
+import csv
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).resolve()
+with (root / "diagnostics/run_inventory.csv").open(newline="") as stream:
+    matches = [row for row in csv.DictReader(stream)
+               if row["experiment"] == "zalesak"
+               and row["algo"] == "circular+corner"
+               and float(row["resolution"]) == 1.5
+               and float(row["wiggle"]) == 0.2
+               and int(row["seed"]) == 0]
+assert len(matches) == 1, len(matches)
+print(root / matches[0]["run_bundle"])
+PY
+)"
+python -m experiments.submission.zalesak_failure.diagnose_zalesak_failure \
+  --run-root "$ZALESAK_TAIL_RUN" \
+  --artifact-root "$VALIDATION_ROOT/zalesak_failure"
+```
+
+## Manuscript Table Map
+
+| Active table | Manuscript source | Code/data provenance | Approval gate |
+| --- | --- | --- | --- |
+| Methods comparison (`tab:methods_compare`) | `new_sections/problem_setup.tex` | Literature-supported classification checked against the frozen method/fallback contract in `submission/submission_config.json` and the reconstruction implementation. It is author-curated, not generated from sweep metrics. | Recheck citations and ensure checkmarks remain conditional on the identifiable oriented path. |
+| Numerical parameters (`tab:reconstruction_parameters`) | `new_sections/appendix/algorithms.tex` | `config/static/base.yaml`, `main/structs/polys/base_polygon.py`, `main/structs/polys/neighbored_polygon.py`, `main/geoms/circular_facet.py`, and the exact source snapshot named by the final release. | Compare every displayed threshold against the pinned source commit before submission. |
+| Benchmark geometry and sampling (`tab:static_benchmark_definitions`) | `new_sections/appendix/static_benchmarks/overview.tex` | `experiments/static/{lines,squares,circles,ellipses,zalesak}.py`, `config/static/*.yaml`, and `submission/submission_config.json`; the final run manifests record the realized parameters. | Cross-check all geometry ranges, seed, and 25-case sampling against the sealed release. |
+
+## Author And Provenance Gates
+
+- **Broad third-order wording is unresolved.** The current mapped evidence is the
+  ellipse convergence analysis. It supports robust third-order behavior for
+  facet-gap error, while prior final-data analysis found lower empirical orders
+  for Hausdorff and tangent errors. Before submission, the authors must either
+  narrow the abstract/introduction/method-overview wording to the demonstrated
+  metric and benchmark or add separately mapped evidence for a broader claim.
+  Any manuscript change remains blue until approved.
+- **Guarded-`C0` numerical prose is unresolved.** The currently installed
+  appendix values and captions predate the final guarded study. Regenerate all
+  165 guarded settings, run the conservation validation above, and reconcile
+  every reported median and continuity/conservation statement before promotion.
+  Any manuscript change remains blue until approved.
+- Record the exact paper commit audited for figures, tables, and prose in the
+  review packet or approval ledger at review time using
+  `git -C <paper-worktree> rev-parse HEAD`. Durable documentation must not pin a
+  paper commit that becomes stale on the next writing edit.
 
 The four guarded-`C0` assets listed above are active. They must be regenerated
 from the guarded implementation at `SOURCE_COMMIT`; historical versions are

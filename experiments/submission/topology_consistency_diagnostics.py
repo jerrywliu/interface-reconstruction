@@ -148,12 +148,16 @@ def _point_arc_distance(point: Sequence[float], geometry: Mapping) -> float:
     radius = abs(float(geometry["radius"]))
     radial_distance = _distance(point, center)
     if radial_distance == 0.0 or radius == 0.0:
-        return min(_distance(point, geometry["p_left"]), _distance(point, geometry["p_right"]))
+        return min(
+            _distance(point, geometry["p_left"]), _distance(point, geometry["p_right"])
+        )
     angle = math.atan2(point[1] - center[1], point[0] - center[0])
     travel, total = _arc_travel(geometry, angle)
     if travel <= total + 1.0e-14:
         return abs(radial_distance - radius)
-    return min(_distance(point, geometry["p_left"]), _distance(point, geometry["p_right"]))
+    return min(
+        _distance(point, geometry["p_left"]), _distance(point, geometry["p_right"])
+    )
 
 
 def _primitive_distance(point: Sequence[float], geometry: Mapping) -> float:
@@ -176,7 +180,9 @@ def _primitive_side(geometry: Mapping, point: Sequence[float]) -> bool:
     raise ValueError(f"Unsupported primitive geometry class: {geometry_class!r}")
 
 
-def _primitive_tangent(geometry: Mapping, at_right_endpoint: bool) -> tuple[float, float]:
+def _primitive_tangent(
+    geometry: Mapping, at_right_endpoint: bool
+) -> tuple[float, float]:
     geometry_class = str(geometry.get("class", "")).lower()
     if geometry_class == "linear":
         p_left = geometry["p_left"]
@@ -210,9 +216,7 @@ def _corner_branches(geometry: Mapping) -> tuple[Mapping, Mapping]:
     return left_branch, right_branch
 
 
-def classify_vertex(
-    geometry: Mapping, point: Sequence[float], tolerance: float
-) -> str:
+def classify_vertex(geometry: Mapping, point: Sequence[float], tolerance: float) -> str:
     """Return ``full``, ``empty``, or ``on_facet`` for one saved facet.
 
     Lines use the geometric left half-plane. Positive-radius arcs use the disk
@@ -231,10 +235,13 @@ def classify_vertex(
         raise ValueError(f"Unsupported facet geometry class: {geometry_class!r}")
 
     left_branch, right_branch = _corner_branches(geometry)
-    if min(
-        _primitive_distance(point, left_branch),
-        _primitive_distance(point, right_branch),
-    ) <= tolerance:
+    if (
+        min(
+            _primitive_distance(point, left_branch),
+            _primitive_distance(point, right_branch),
+        )
+        <= tolerance
+    ):
         return "on_facet"
 
     left_full = _primitive_side(left_branch, point)
@@ -294,7 +301,10 @@ def read_structured_mesh(path: Path) -> StructuredMesh:
 
 
 def _is_fallback(record: Mapping[str, str]) -> bool:
-    return bool(record.get("fallback_policy")) or record.get("construction_path") == "plic_fallback"
+    return (
+        bool(record.get("fallback_policy"))
+        or record.get("construction_path") == "plic_fallback"
+    )
 
 
 def _is_resolved(record: Mapping[str, str]) -> bool:
@@ -302,7 +312,10 @@ def _is_resolved(record: Mapping[str, str]) -> bool:
 
 
 def _parse_cell_id(record: Mapping[str, str]) -> tuple[int, int]:
-    if record.get("cell_x") not in {None, ""} and record.get("cell_y") not in {None, ""}:
+    if record.get("cell_x") not in {None, ""} and record.get("cell_y") not in {
+        None,
+        "",
+    }:
         return int(record["cell_x"]), int(record["cell_y"])
     cell_x, cell_y = record["cell_id"].split(",")
     return int(cell_x), int(cell_y)
@@ -357,10 +370,16 @@ def _evaluate_scope(
                 "vertex_x": point[0],
                 "vertex_y": point[1],
                 "incident_cell_count": len(vertex_records),
-                "incident_cells": ";".join(record["cell_id"] for record in vertex_records),
-                "incident_merge_ids": ";".join(record.get("merge_id", "") for record in vertex_records),
+                "incident_cells": ";".join(
+                    record["cell_id"] for record in vertex_records
+                ),
+                "incident_merge_ids": ";".join(
+                    record.get("merge_id", "") for record in vertex_records
+                ),
                 "labels": ";".join(labels),
-                "contains_fallback": int(any(_is_fallback(record) for record in vertex_records)),
+                "contains_fallback": int(
+                    any(_is_fallback(record) for record in vertex_records)
+                ),
                 "on_facet_excluded": int(on_facet),
                 "invalid_excluded": int(invalid),
                 "evaluated": int(evaluated),
@@ -374,8 +393,12 @@ def _evaluate_scope(
     summary = {
         "candidate_shared_vertices": len(detail_rows),
         "evaluated_shared_vertices": evaluated_count,
-        "on_facet_excluded_vertices": sum(row["on_facet_excluded"] for row in detail_rows),
-        "invalid_excluded_vertices": sum(row["invalid_excluded"] for row in detail_rows),
+        "on_facet_excluded_vertices": sum(
+            row["on_facet_excluded"] for row in detail_rows
+        ),
+        "invalid_excluded_vertices": sum(
+            row["invalid_excluded"] for row in detail_rows
+        ),
         "invalid_incident_labels": invalid_label_count,
         "conflict_vertices": conflict_count,
         "conflict_rate": conflict_count / evaluated_count if evaluated_count else 0.0,
@@ -391,7 +414,9 @@ def evaluate_case(
 ):
     tolerance = max(absolute_tolerance, relative_tolerance * mesh.domain_diagonal)
     total_cells = len(records)
-    oriented_cells = sum(record.get("orientation_status") == "oriented" for record in records)
+    oriented_cells = sum(
+        record.get("orientation_status") == "oriented" for record in records
+    )
     resolved_cells = sum(_is_resolved(record) for record in records)
     fallback_cells = sum(_is_fallback(record) for record in records)
     case_summary = {
@@ -401,26 +426,38 @@ def evaluate_case(
         "num_resolved_cells": resolved_cells,
         "fraction_resolved_cells": resolved_cells / total_cells if total_cells else 0.0,
         "num_plic_fallback_cells": fallback_cells,
-        "fraction_plic_fallback_cells": fallback_cells / total_cells if total_cells else 0.0,
+        "fraction_plic_fallback_cells": (
+            fallback_cells / total_cells if total_cells else 0.0
+        ),
         "geometric_tolerance": tolerance,
     }
     all_details = []
     for scope in ("resolved", "complete"):
         scope_summary, details = _evaluate_scope(records, mesh, tolerance, scope)
-        case_summary.update({f"{scope}_{key}": value for key, value in scope_summary.items()})
+        case_summary.update(
+            {f"{scope}_{key}": value for key, value in scope_summary.items()}
+        )
         all_details.extend(details)
     return case_summary, all_details
 
 
-def _selector_matches(row: Mapping[str, str], selector: CaseSelector, include_case=True) -> bool:
+def _selector_matches(
+    row: Mapping[str, str], selector: CaseSelector, include_case=True
+) -> bool:
     matches = (
         row.get("experiment") == selector.experiment
         and row.get("algo") == selector.algo
         and int(row.get("seed", -1)) == selector.seed
-        and math.isclose(float(row.get("resolution", "nan")), selector.resolution, abs_tol=1.0e-12)
-        and math.isclose(float(row.get("wiggle", "nan")), selector.wiggle, abs_tol=1.0e-12)
+        and math.isclose(
+            float(row.get("resolution", "nan")), selector.resolution, abs_tol=1.0e-12
+        )
+        and math.isclose(
+            float(row.get("wiggle", "nan")), selector.wiggle, abs_tol=1.0e-12
+        )
     )
-    return matches and (not include_case or int(row.get("case_index", -1)) == selector.case_index)
+    return matches and (
+        not include_case or int(row.get("case_index", -1)) == selector.case_index
+    )
 
 
 def _float_key(value) -> float:
@@ -451,7 +488,9 @@ def _row_key(row: Mapping[str, str], include_case: bool) -> tuple:
 
 def _load_selected_records(cell_metrics_path: Path, selectors: Sequence[CaseSelector]):
     selected = {selector: [] for selector in selectors}
-    selector_by_key = {_selector_key(selector, include_case=True): selector for selector in selectors}
+    selector_by_key = {
+        _selector_key(selector, include_case=True): selector for selector in selectors
+    }
     if len(selector_by_key) != len(selectors):
         raise ValueError("Case selectors must be unique")
     with cell_metrics_path.open(newline="") as handle:
@@ -465,7 +504,9 @@ def _load_selected_records(cell_metrics_path: Path, selectors: Sequence[CaseSele
     return selected
 
 
-def _load_run_inventory_rows(run_inventory_path: Path, selectors: Sequence[CaseSelector]):
+def _load_run_inventory_rows(
+    run_inventory_path: Path, selectors: Sequence[CaseSelector]
+):
     selected_rows = {}
     with run_inventory_path.open(newline="") as handle:
         rows = list(csv.DictReader(handle))
@@ -482,9 +523,38 @@ def _load_run_inventory_rows(run_inventory_path: Path, selectors: Sequence[CaseS
     return selected_rows
 
 
+def _resolve_run_bundle(run_inventory_path: Path, value: str) -> Path:
+    path = Path(value)
+    if path.is_absolute():
+        return path
+    inventory_path = run_inventory_path.resolve()
+    if inventory_path.parent.name == "diagnostics":
+        return (inventory_path.parent.parent / path).resolve()
+    return (Path.cwd() / path).resolve()
+
+
+def _ensure_output_outside_input_release(output_dir: Path, *input_paths: Path) -> None:
+    output = output_dir.resolve()
+    for input_path in input_paths:
+        path = input_path.resolve()
+        if path.parent.name != "diagnostics":
+            continue
+        release_root = path.parent.parent
+        try:
+            output.relative_to(release_root)
+        except ValueError:
+            continue
+        raise ValueError(
+            f"Validation output must be outside immutable release {release_root}: {output}"
+        )
+
+
 def _load_run_bundles(run_inventory_path: Path, selectors: Sequence[CaseSelector]):
     rows = _load_run_inventory_rows(run_inventory_path, selectors)
-    return {selector: Path(row["run_bundle"]) for selector, row in rows.items()}
+    return {
+        selector: _resolve_run_bundle(run_inventory_path, row["run_bundle"])
+        for selector, row in rows.items()
+    }
 
 
 def _write_csv(path: Path, rows: Sequence[Mapping]):
@@ -520,8 +590,12 @@ def _aggregate_case_rows_by(case_rows: Sequence[Mapping], key_fields: Sequence[s
         aggregate = dict(zip(key_fields, key))
         aggregate["case_count"] = len(rows)
         aggregate["mixed_cells"] = sum(int(row["num_mixed_cells"]) for row in rows)
-        aggregate["oriented_cells"] = sum(int(row["num_oriented_cells"]) for row in rows)
-        aggregate["resolved_cells"] = sum(int(row["num_resolved_cells"]) for row in rows)
+        aggregate["oriented_cells"] = sum(
+            int(row["num_oriented_cells"]) for row in rows
+        )
+        aggregate["resolved_cells"] = sum(
+            int(row["num_resolved_cells"]) for row in rows
+        )
         aggregate["plic_fallback_cells"] = sum(
             int(row["num_plic_fallback_cells"]) for row in rows
         )
@@ -535,7 +609,9 @@ def _aggregate_case_rows_by(case_rows: Sequence[Mapping], key_fields: Sequence[s
             "plic_fallback_cells"
         ] / max(1, aggregate["mixed_cells"])
         for scope in ("resolved", "complete"):
-            evaluated = sum(int(row[f"{scope}_evaluated_shared_vertices"]) for row in rows)
+            evaluated = sum(
+                int(row[f"{scope}_evaluated_shared_vertices"]) for row in rows
+            )
             conflicts = sum(int(row[f"{scope}_conflict_vertices"]) for row in rows)
             aggregate[f"{scope}_candidate_shared_vertices"] = sum(
                 int(row[f"{scope}_candidate_shared_vertices"]) for row in rows
@@ -551,7 +627,9 @@ def _aggregate_case_rows_by(case_rows: Sequence[Mapping], key_fields: Sequence[s
                 int(row[f"{scope}_invalid_incident_labels"]) for row in rows
             )
             aggregate[f"{scope}_conflict_vertices"] = conflicts
-            aggregate[f"{scope}_conflict_rate"] = conflicts / evaluated if evaluated else 0.0
+            aggregate[f"{scope}_conflict_rate"] = (
+                conflicts / evaluated if evaluated else 0.0
+            )
         aggregate_rows.append(aggregate)
     return aggregate_rows
 
@@ -567,7 +645,9 @@ def _format_rate(value) -> str:
     return f"{100.0 * float(value):.5g}%"
 
 
-def _build_readme(case_rows: Sequence[Mapping], aggregate_rows: Sequence[Mapping], manifest: Mapping):
+def _build_readme(
+    case_rows: Sequence[Mapping], aggregate_rows: Sequence[Mapping], manifest: Mapping
+):
     lines = [
         "# Topological-consistency smoke diagnostic",
         "",
@@ -635,6 +715,9 @@ def run_diagnostics(
     relative_tolerance: float = DEFAULT_RELATIVE_TOLERANCE,
     absolute_tolerance: float = DEFAULT_ABSOLUTE_TOLERANCE,
 ):
+    _ensure_output_outside_input_release(
+        output_dir, cell_metrics_path, run_inventory_path
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
     selected_records = _load_selected_records(cell_metrics_path, selectors)
     run_bundles = _load_run_bundles(run_inventory_path, selectors)
@@ -697,7 +780,9 @@ def run_diagnostics(
     (output_dir / "topology_consistency_manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n"
     )
-    (output_dir / "README.md").write_text(_build_readme(case_rows, aggregate_rows, manifest))
+    (output_dir / "README.md").write_text(
+        _build_readme(case_rows, aggregate_rows, manifest)
+    )
     return case_rows, aggregate_rows, vertex_rows
 
 
@@ -705,33 +790,36 @@ def _validate_full_inputs(
     selectors: Sequence[CaseSelector],
     selected_records: Mapping[CaseSelector, Sequence[Mapping[str, str]]],
     inventory_rows: Mapping[CaseSelector, Mapping[str, str]],
+    run_inventory_path: Path,
 ) -> dict:
-    expected_cases = set(range(25))
     settings: dict[tuple, Mapping[str, str]] = {}
+    expected_cases = defaultdict(set)
     selected_cases = defaultdict(set)
     errors = []
 
     for selector in selectors:
         setting_key = _selector_key(selector, include_case=False)
         settings[setting_key] = inventory_rows[selector]
+        expected_cases[setting_key].add(selector.case_index)
         selected_cases[setting_key].add(selector.case_index)
         if not selected_records[selector]:
             errors.append(f"No mixed-cell rows for {selector}")
 
     for setting_key, row in sorted(settings.items()):
-        if selected_cases[setting_key] != expected_cases:
+        if selected_cases[setting_key] != expected_cases[setting_key]:
             errors.append(
                 f"Setting {setting_key} has case indices {sorted(selected_cases[setting_key])}"
             )
-        if int(row.get("case_metrics_rows", -1)) != len(expected_cases):
+        expected_count = len(expected_cases[setting_key])
+        if int(row.get("case_metrics_rows", -1)) < expected_count:
             errors.append(
                 f"Setting {setting_key} has case_metrics_rows={row.get('case_metrics_rows')}"
             )
-        if int(row.get("case_geometry_rows", -1)) != len(expected_cases):
+        if int(row.get("case_geometry_rows", -1)) < expected_count:
             errors.append(
                 f"Setting {setting_key} has case_geometry_rows={row.get('case_geometry_rows')}"
             )
-        bundle = Path(row["run_bundle"])
+        bundle = _resolve_run_bundle(run_inventory_path, row["run_bundle"])
         for required_path in (
             bundle,
             bundle / "vtk" / "mesh.vtk",
@@ -739,16 +827,22 @@ def _validate_full_inputs(
             bundle / "metrics" / "case_metrics.csv",
         ):
             if not required_path.exists():
-                errors.append(f"Missing saved July artifact: {required_path}")
+                errors.append(f"Missing saved release artifact: {required_path}")
 
     if errors:
-        raise RuntimeError("Full topology input validation failed:\n- " + "\n- ".join(errors))
+        raise RuntimeError(
+            "Full topology input validation failed:\n- " + "\n- ".join(errors)
+        )
 
     return {
         "selector_count": len(selectors),
         "setting_count": len(settings),
-        "cases_per_setting": len(expected_cases),
-        "source_commits": sorted({row.get("source_commit", "") for row in settings.values()}),
+        "case_counts_per_setting": sorted(
+            {len(case_indices) for case_indices in expected_cases.values()}
+        ),
+        "source_commits": sorted(
+            {row.get("source_commit", "") for row in settings.values()}
+        ),
         "run_bundles": sorted({row["run_bundle"] for row in settings.values()}),
         "validated_no_missing_run_bundles_or_cases": True,
     }
@@ -763,7 +857,7 @@ def _full_readme(
     lines = [
         "# Full shared-vertex topology-consistency diagnostic",
         "",
-        "This table analyzes saved July 17 production reconstructions only; no reconstruction was launched.",
+        "This table analyzes the saved reconstruction release identified in the manifest; no reconstruction was launched.",
         "The default paper tolerance is relative `1e-10`, with absolute floor `1e-12`.",
         "Oriented and fallback percentages are weighted by mixed-cell count.",
         "",
@@ -831,7 +925,8 @@ def _full_readme(
             "## Nonzero findings",
             "",
             f"At the paper tolerance, `{conflict_findings['conflict_vertices']}` conflicting vertices occur in "
-            f"`{conflict_findings['case_count']}/500` cases. None contains a PLIC fallback cell.",
+            f"`{conflict_findings['case_count']}/{conflict_findings['audited_case_count']}` cases. "
+            f"`{conflict_findings['fallback_involved_vertices']}` conflicting vertices contain a PLIC fallback cell.",
         ]
     )
     for experiment, finding in conflict_findings["by_experiment"].items():
@@ -840,9 +935,19 @@ def _full_readme(
             f"- `{experiment}`: `{finding['conflict_vertices']}` vertices in "
             f"`{finding['case_count']}` cases ({resolution_text})."
         )
-    lines.append(
-        "- `circles` and `squares`: zero conflicts. Counts are unchanged at all three tolerances."
+    zero_conflict_experiments = sorted(
+        {
+            str(row["experiment"])
+            for row in paper_rows
+            if int(row["complete_conflict_vertices"]) == 0
+        }
     )
+    if zero_conflict_experiments:
+        lines.append(
+            "- Zero conflicts at the paper tolerance: "
+            + ", ".join(f"`{name}`" for name in zero_conflict_experiments)
+            + "."
+        )
 
     validation = manifest["input_validation"]
     lines.extend(
@@ -854,7 +959,7 @@ def _full_readme(
             "- `complete`: every saved final facet, including LVIRA fallback cells.",
             "- Vertices touched by any incident facet, plus vertices with invalid geometry labels, are excluded and reported.",
             f"- Validated `{validation['selector_count']}` cases in `{validation['setting_count']}` saved run bundles, with no missing bundle or case.",
-            f"- Source commit recorded by the July inventory: `{', '.join(validation['source_commits'])}`.",
+            f"- Source commit recorded by the input inventory: `{', '.join(validation['source_commits'])}`.",
             "",
             "## Artifacts",
             "",
@@ -880,12 +985,20 @@ def run_full_diagnostics(
     absolute_tolerance: float = DEFAULT_ABSOLUTE_TOLERANCE,
 ):
     selectors = tuple(selectors or build_full_selectors())
+    _ensure_output_outside_input_release(
+        output_dir, cell_metrics_path, run_inventory_path
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
     selected_records = _load_selected_records(cell_metrics_path, selectors)
     inventory_rows = _load_run_inventory_rows(run_inventory_path, selectors)
-    validation = _validate_full_inputs(selectors, selected_records, inventory_rows)
+    validation = _validate_full_inputs(
+        selectors, selected_records, inventory_rows, run_inventory_path
+    )
     run_bundles = {
-        selector: Path(inventory_rows[selector]["run_bundle"]) for selector in selectors
+        selector: _resolve_run_bundle(
+            run_inventory_path, inventory_rows[selector]["run_bundle"]
+        )
+        for selector in selectors
     }
 
     mesh_cache = {}
@@ -973,12 +1086,12 @@ def run_full_diagnostics(
     ]
     by_experiment = {}
     for experiment in sorted({row["experiment"] for row in default_complete_conflicts}):
-        rows = [row for row in default_complete_conflicts if row["experiment"] == experiment]
+        rows = [
+            row for row in default_complete_conflicts if row["experiment"] == experiment
+        ]
         by_experiment[experiment] = {
             "conflict_vertices": len(rows),
-            "case_count": len(
-                {(row["resolution"], row["case_index"]) for row in rows}
-            ),
+            "case_count": len({(row["resolution"], row["case_index"]) for row in rows}),
             "resolutions": sorted({100.0 * float(row["resolution"]) for row in rows}),
         }
     conflict_findings = {
@@ -992,6 +1105,7 @@ def run_full_diagnostics(
         "fallback_involved_vertices": sum(
             int(row["contains_fallback"]) for row in default_complete_conflicts
         ),
+        "audited_case_count": len(selectors),
         "by_experiment": by_experiment,
     }
 
@@ -1009,7 +1123,7 @@ def run_full_diagnostics(
             "resolutions": list(FULL_RESOLUTIONS),
             "wiggle": 0.1,
             "seed": 0,
-            "case_indices": [0, 24],
+            "case_indices": sorted({selector.case_index for selector in selectors}),
         },
         "input_validation": validation,
         "default_tolerance_conflicts": conflict_findings,
@@ -1057,16 +1171,14 @@ def _read_selectors(path: Path | None) -> tuple[CaseSelector, ...]:
 
 
 def _parse_args():
-    default_diagnostics = Path(
-        "results/static/static_paper_simplified_default_20260717_212413/diagnostics"
-    )
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--cell-metrics", type=Path, default=default_diagnostics / "cell_metrics.csv")
-    parser.add_argument("--run-inventory", type=Path, default=default_diagnostics / "run_inventory.csv")
+    parser.add_argument("--cell-metrics", type=Path, required=True)
+    parser.add_argument("--run-inventory", type=Path, required=True)
     parser.add_argument(
         "--output-dir",
         type=Path,
-        help="Defaults to the dated smoke or full submission directory.",
+        required=True,
+        help="Validation directory outside the immutable release root.",
     )
     parser.add_argument(
         "--full",
@@ -1074,24 +1186,25 @@ def _parse_args():
         help="Analyze the 500-case paper aggregate at all three tolerance levels.",
     )
     parser.add_argument("--selectors-json", type=Path)
-    parser.add_argument("--relative-tolerance", type=float, default=DEFAULT_RELATIVE_TOLERANCE)
-    parser.add_argument("--absolute-tolerance", type=float, default=DEFAULT_ABSOLUTE_TOLERANCE)
+    parser.add_argument(
+        "--relative-tolerance", type=float, default=DEFAULT_RELATIVE_TOLERANCE
+    )
+    parser.add_argument(
+        "--absolute-tolerance", type=float, default=DEFAULT_ABSOLUTE_TOLERANCE
+    )
     return parser.parse_args()
 
 
 def main():
     args = _parse_args()
     if args.full:
-        output_dir = args.output_dir or Path(
-            "results/submission/topology_consistency_full_20260730"
-        )
         case_rows, _, sensitivity_rows, _ = run_full_diagnostics(
             cell_metrics_path=args.cell_metrics,
             run_inventory_path=args.run_inventory,
-            output_dir=output_dir,
+            output_dir=args.output_dir,
             absolute_tolerance=args.absolute_tolerance,
         )
-        print(f"Wrote {len(case_rows)} case-tolerance rows to {output_dir}")
+        print(f"Wrote {len(case_rows)} case-tolerance rows to {args.output_dir}")
         for row in sensitivity_rows:
             print(
                 f"Tolerance {float(row['relative_tolerance']):.0e}: "
@@ -1100,21 +1213,20 @@ def main():
             )
         return
 
-    output_dir = args.output_dir or Path(
-        "results/submission/topology_consistency_smoke_20260730"
-    )
     case_rows, _, _ = run_diagnostics(
         cell_metrics_path=args.cell_metrics,
         run_inventory_path=args.run_inventory,
-        output_dir=output_dir,
+        output_dir=args.output_dir,
         selectors=_read_selectors(args.selectors_json),
         relative_tolerance=args.relative_tolerance,
         absolute_tolerance=args.absolute_tolerance,
     )
     resolved_conflicts = sum(row["resolved_conflict_vertices"] for row in case_rows)
     complete_conflicts = sum(row["complete_conflict_vertices"] for row in case_rows)
-    print(f"Wrote {len(case_rows)} cases to {output_dir}")
-    print(f"Resolved conflicts: {resolved_conflicts}; complete conflicts: {complete_conflicts}")
+    print(f"Wrote {len(case_rows)} cases to {args.output_dir}")
+    print(
+        f"Resolved conflicts: {resolved_conflicts}; complete conflicts: {complete_conflicts}"
+    )
 
 
 if __name__ == "__main__":

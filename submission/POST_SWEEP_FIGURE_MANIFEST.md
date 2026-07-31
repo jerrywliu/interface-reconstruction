@@ -2,13 +2,14 @@
 
 Updated: 2026-07-31
 
-This checklist audits the active Overleaf figure paths and labels at verified
-audit commit `921ec9d`
-against `docs/PAPER_EXPERIMENT_MAP.md` and
+This checklist audits the active Overleaf figure paths and labels against
+`docs/PAPER_EXPERIMENT_MAP.md` and
 `submission/FINAL_FIGURE_REGENERATION.md`. It covers all 26 live
-`\includegraphics` PDF assets. The seven native TikZ schematics are listed
-separately because they are source-native vector figures and do not depend on
-the sweep.
+`\includegraphics` PDF assets, all seven native TikZ schematics, and all three
+active manuscript tables. At each review, record the then-current paper commit
+in the generated review/approval ledger with
+`git -C <paper-worktree> rev-parse HEAD`; do not pin a paper commit in this
+durable checklist.
 
 Do not install any candidate in the manuscript until the final release, the
 candidate figure packet, and the selected endpoint variants have been approved.
@@ -70,7 +71,7 @@ candidate figure packet, and the selected endpoint variants have been approved.
 Run from the repository root after the final sweep has completed:
 
 ```bash
-export FINAL_ROOT="$PWD/results/static/submission_static_<timestamp>_<commit>"
+export FINAL_ROOT="$PWD/results/static/submission_static_20260731_012430_505aefa45432"
 export SOURCE_COMMIT="$(python -c 'import json,os; print(json.load(open(os.environ["FINAL_ROOT"] + "/submission_config.resolved.json"))["source"]["target_commit"])')"
 export FIGURE_ROOT="$PWD/results/submission/final_figures_${SOURCE_COMMIT:0:12}"
 export PLOTS_VIEW="$FIGURE_ROOT/final_plots_view"
@@ -79,7 +80,8 @@ export C0_ROOT="$PWD/results/static/final_guarded_c0_${SOURCE_COMMIT:0:12}"
 
 Before any figure command:
 
-- run `python submission/audit_final_release.py "$FINAL_ROOT"`;
+- require `FINAL_ROOT/SHA256SUMS` and run
+  `python submission/audit_final_release.py "$FINAL_ROOT" --verify-sha256-manifest`;
 - require `completed`, `970/970` runs, `24,250/24,250` cases, zero failures,
   a clean captured source, and all 970 replayable raw bundles;
 - build the final-only canonical symlink view using the snippet in
@@ -263,6 +265,29 @@ from sweep data:
 
 Their gate is a clean manuscript compile and visual inspection at 800% zoom.
 
+## Active Manuscript Tables
+
+| Table label | Manuscript source | Reproducibility source | Gate |
+| --- | --- | --- | --- |
+| `tab:methods_compare` | `new_sections/problem_setup.tex` | Literature classification plus the frozen method/fallback contract in `submission/submission_config.json` | Author checks citations and conditional checkmarks; no sweep-generated values |
+| `tab:reconstruction_parameters` | `new_sections/appendix/algorithms.tex` | `config/static/base.yaml`, `main/structs/polys/{base_polygon,neighbored_polygon}.py`, and `main/geoms/circular_facet.py` at the final source commit | Every displayed threshold matches the pinned source snapshot |
+| `tab:static_benchmark_definitions` | `new_sections/appendix/static_benchmarks/overview.tex` | `experiments/static/{lines,squares,circles,ellipses,zalesak}.py`, `config/static/*.yaml`, final run manifests, and `submission/submission_config.json` | Geometry ranges, seed, and 25-case sampling match the sealed release |
+
+## Author And Provenance Gates
+
+- **Broad third-order claim:** unresolved. The mapped ellipse convergence
+  evidence supports third-order facet-gap behavior, not a blanket third-order
+  statement for Hausdorff and tangent error. The authors must narrow the broad
+  abstract/introduction/method-overview wording or approve additional mapped
+  evidence. All resulting paper changes stay blue until approved.
+- **Guarded-`C0` prose:** unresolved. The active appendix numerical values and
+  captions must be reconciled against the regenerated 165-setting guarded study
+  and its conservation audit. All resulting paper changes stay blue until
+  approved.
+- The exact paper commit reviewed for the 26 PDFs, seven TikZ figures, three
+  tables, and these two prose gates belongs in the review packet or approval
+  ledger, not in this file.
+
 ## Final QA And Installation Checklist
 
 - [ ] Final release audit passes before plotting.
@@ -270,33 +295,18 @@ Their gate is a clean manuscript compile and visual inspection at 800% zoom.
 - [x] Dedicated companion commands write a manifest or data JSON identifying
       source commit, case, resolution, perturbation, seed, method, fallback, and
       profile.
-- [ ] All 38 review candidates exist before QA: 5 main metrics, 10 paired main
-      representatives, 5 all-method panels, 10 paired resolution panels, 2
-      guarded-`C0` metrics, 4 paired guarded-`C0` representatives, and 2
-      deterministic figures.
-- [ ] All 38 review candidates pass:
-
-  ```bash
-  python submission/pdf_vector_qa.py \
-    "$FIGURE_ROOT/section6/summary_plots" \
-    "$FIGURE_ROOT/section6/representative_cases" \
-    "$FIGURE_ROOT/all_method_summary_plots" \
-    "$FIGURE_ROOT/resolution" \
-    "$FIGURE_ROOT/deterministic" \
-    "$C0_ROOT/summary_plots" \
-    "$C0_ROOT/representative_cases" \
-    --json "$FIGURE_ROOT/pdf_vector_qa.json"
-  ```
-
-- [ ] Every candidate has zero image XObjects, at least one font resource, and
-      all reported fonts embedded.
-- [ ] Rasterize review copies at 300 DPI and inspect every page for clipping,
-      tiny text, inconsistent colors, legend/axis mismatch, overlapping
-      spyglasses, missing corners, and endpoint-marker policy.
+- [ ] Run the authoritative allowlist, provenance, vector-PDF, 300-DPI preview,
+      and indexed-review-packet workflow in
+      `submission/FINAL_FIGURE_REGENERATION.md`. Its dedicated orchestrator owns
+      the exact 38-candidate contract. Do not substitute recursive directory
+      discovery or duplicate that acceptance logic here.
+- [ ] Inspect every orchestrator-produced preview for clipping, unreadable text,
+      inconsistent colors, legend/axis mismatch, overlapping spyglasses,
+      missing corners, and endpoint-marker policy.
 - [ ] Inspect authoritative PDFs at 800% zoom for path and text sharpness.
-- [ ] Build an indexed review PDF with adjacent `with_endpoints` and `clean`
-      candidates; the review packet itself may be rasterized but is never
-      installed in the manuscript.
+- [ ] Review the orchestrator-produced indexed packet with adjacent
+      `with_endpoints` and `clean` candidates; it is never installed in the
+      manuscript.
 - [ ] Record author selections and exact source paths in
       `submission/figure_provenance.csv`.
 - [ ] Select one PDF for each of the 12 paired qualitative slots, then copy the
@@ -305,10 +315,14 @@ Their gate is a clean manuscript compile and visual inspection at 800% zoom.
       endpoints are visible; make every substantive manuscript diff blue.
 - [ ] Reconcile all reported medians, convergence language, corner-tail
       language, and guarded-`C0` claims against final data in blue.
+- [ ] Audit all three active tables against the sources listed above.
+- [ ] Resolve the broad third-order and guarded-`C0` author gates above; retain
+      blue diffs until approval.
 - [ ] Compile the manuscript and appendix, inspect every figure page, then run
       `pdf_vector_qa.py` on the installed camera-ready PDF directory.
-- [ ] Generate and verify the final release checksum manifest only after the
-      approved figure set is installed.
+- [ ] Verify the sealed numerical release checksum manifest before figure
+      generation. Figure acceptance and manuscript installation retain their
+      separate provenance/checksum ledgers.
 
 ## Current Installed-Asset Baseline
 

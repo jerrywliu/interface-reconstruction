@@ -1,4 +1,4 @@
-"""Diagnose shared-vertex conflicts from the July submission audit.
+"""Diagnose shared-vertex conflicts from a saved full topology audit.
 
 The full topology audit originally evaluated saved facet metadata at vertices
 read from ``mesh.vtk``. This follow-up compares those rounded coordinates with
@@ -34,12 +34,6 @@ from util.metrics.area_metrics import facet_area_in_polygon
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_SOURCE = (
-    REPO_ROOT / "results/submission/topology_consistency_full_20260730"
-)
-DEFAULT_OUTPUT = (
-    REPO_ROOT / "results/submission/topology_conflict_diagnosis_20260730"
-)
 TAXONOMY = {
     "a": "a_real_reconstructed_phase_label_inconsistency",
     "b": "b_diagnostic_classification_bug",
@@ -138,7 +132,10 @@ def direct_phase_test(
     if geometry_class not in {"linear_corner", "curved_corner", "corner"}:
         raise ValueError(f"Unsupported facet geometry class: {geometry_class!r}")
     left, right = _corner_branches(geometry)
-    if min(_primitive_distance(point, left), _primitive_distance(point, right)) <= tolerance:
+    if (
+        min(_primitive_distance(point, left), _primitive_distance(point, right))
+        <= tolerance
+    ):
         return "on_facet", 0.0
 
     left_margin = _primitive_margin(left, point)
@@ -211,7 +208,9 @@ def _read_case_records(run_bundle: Path, case_index: int) -> dict[str, dict[str,
         }
 
 
-def _read_case_events(run_bundle: Path, case_index: int) -> dict[str, list[dict[str, str]]]:
+def _read_case_events(
+    run_bundle: Path, case_index: int
+) -> dict[str, list[dict[str, str]]]:
     path = run_bundle / "metrics/merge_events.csv"
     events: dict[str, list[dict[str, str]]] = defaultdict(list)
     with path.open(newline="") as handle:
@@ -233,7 +232,9 @@ def _load_consolidated_records(
     return selected
 
 
-def _metadata_matches(local: Mapping[str, str], consolidated: Mapping[str, str] | None) -> bool:
+def _metadata_matches(
+    local: Mapping[str, str], consolidated: Mapping[str, str] | None
+) -> bool:
     if consolidated is None:
         return False
     for field in METADATA_FIELDS:
@@ -279,7 +280,10 @@ def _facet_points(geometry: Mapping[str, Any], count: int = 120):
             travel = (start - end) % (2.0 * math.pi)
             angles = [start - travel * index / (count - 1) for index in range(count)]
         return [
-            [center[0] + abs(radius) * math.cos(angle), center[1] + abs(radius) * math.sin(angle)]
+            [
+                center[0] + abs(radius) * math.cos(angle),
+                center[1] + abs(radius) * math.sin(angle),
+            ]
             for angle in angles
         ]
     points = []
@@ -299,7 +303,9 @@ def _plot_examples(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    matplotlib.rcParams.update({"font.family": "serif", "pdf.fonttype": 42, "ps.fonttype": 42})
+    matplotlib.rcParams.update(
+        {"font.family": "serif", "pdf.fonttype": 42, "ps.fonttype": 42}
+    )
     figure, axes = plt.subplots(len(examples), 2, figsize=(8.2, 6.4), squeeze=False)
     phase_colors = {"full": "#167D73", "empty": "#C44E52", "on_facet": "#777777"}
     for row_index, example in enumerate(examples):
@@ -343,7 +349,9 @@ def _plot_examples(
                     ha="center",
                     va="center",
                 )
-            axis.scatter([point[0]], [point[1]], marker="x", color="black", s=42, zorder=4)
+            axis.scatter(
+                [point[0]], [point[1]], marker="x", color="black", s=42, zorder=4
+            )
             axis.set_aspect("equal", adjustable="box")
             axis.margins(0.08)
             axis.set_title(
@@ -353,23 +361,163 @@ def _plot_examples(
                 fontsize=9,
             )
             axis.tick_params(labelsize=7)
-    figure.suptitle("Shared-vertex conflicts persist on exact seeded meshes", fontsize=11)
+    figure.suptitle(
+        "Shared-vertex conflicts persist on exact seeded meshes", fontsize=11
+    )
     figure.tight_layout()
     figure.savefig(output_dir / "topology_conflict_examples.pdf", bbox_inches="tight")
-    figure.savefig(output_dir / "topology_conflict_examples.png", dpi=220, bbox_inches="tight")
+    figure.savefig(
+        output_dir / "topology_conflict_examples.png", dpi=220, bbox_inches="tight"
+    )
     plt.close(figure)
 
 
-def diagnose(source_dir: Path, output_dir: Path) -> tuple[list[dict], list[dict], list[dict]]:
-    output_dir.mkdir(parents=True, exist_ok=True)
+def _read_source_audit_totals(
+    source_dir: Path, source_manifest: Mapping[str, Any]
+) -> dict[str, int]:
+    tolerance = float(source_manifest["paper_relative_tolerance"])
+    path = source_dir / "topology_consistency_tolerance_sensitivity.csv"
+    with path.open(newline="", encoding="utf-8") as stream:
+        matches = [
+            row
+            for row in csv.DictReader(stream)
+            if math.isclose(
+                float(row["relative_tolerance"]),
+                tolerance,
+                rel_tol=0.0,
+                abs_tol=1.0e-20,
+            )
+        ]
+    if len(matches) != 1:
+        raise ValueError(
+            f"Expected one topology sensitivity row at tolerance {tolerance}, "
+            f"found {len(matches)}"
+        )
+    row = matches[0]
+    return {
+        "audited_case_count": int(row["case_count"]),
+        "complete_evaluated_shared_vertices": int(
+            row["complete_evaluated_shared_vertices"]
+        ),
+    }
+
+
+def _build_readme(
+    taxonomy_rows: Sequence[Mapping[str, Any]],
+    case_rows: Sequence[Mapping[str, Any]],
+    source_totals: Mapping[str, int],
+) -> str:
+    total_conflicts = len(taxonomy_rows)
+    exact_conflicts = sum(int(row["exact_conflict"]) for row in taxonomy_rows)
+    exact_vtk_matches = sum(
+        row["vtk_labels"] == row["exact_labels"] for row in taxonomy_rows
+    )
+    metadata_matches = sum(not int(row["metadata_mismatch"]) for row in taxonomy_rows)
+    classification_matches = sum(
+        not int(row["classification_mismatch"]) for row in taxonomy_rows
+    )
+    fallback_vertices = sum(int(row["contains_fallback"]) for row in taxonomy_rows)
+    taxonomy_counts = Counter(row["taxonomy"] for row in taxonomy_rows)
+    experiment_counts = Counter(row["experiment"] for row in taxonomy_rows)
+
+    readme = [
+        "# Exact-mesh topology conflict diagnosis",
+        "",
+        f"All {total_conflicts} conflicts from the source full audit were replayed on exact seeded meshes,",
+        "checked against the per-run and consolidated facet metadata, and independently",
+        "evaluated using oriented line/circle phase-side tests.",
+        "",
+        "## Result",
+        "",
+        f"- Exact replay preserves `{exact_conflicts}/{total_conflicts}` conflicts.",
+        f"- Exact and VTK phase labels agree for `{exact_vtk_matches}/{total_conflicts}` vertices.",
+        f"- Per-run and consolidated facet metadata agree for `{metadata_matches}/{total_conflicts}` vertices.",
+        f"- Independent phase-side labels agree with the diagnostic for `{classification_matches}/{total_conflicts}` vertices.",
+    ]
+    if taxonomy_rows:
+        minimum_margin = min(
+            float(row["min_abs_exact_phase_margin"]) for row in taxonomy_rows
+        )
+        maximum_ambiguity = max(
+            float(row["ambiguity_tolerance"]) for row in taxonomy_rows
+        )
+        readme.append(
+            f"- The smallest exact signed phase margin is `{minimum_margin:.6g}`; "
+            f"the largest ambiguity threshold is `{maximum_ambiguity:.6g}`."
+        )
+    readme.extend(
+        [
+            "",
+            "| Taxonomy | Vertices |",
+            "| --- | ---: |",
+        ]
+    )
+    for name in TAXONOMY.values():
+        readme.append(f"| `{name}` | {taxonomy_counts.get(name, 0)} |")
+
+    incidence = total_conflicts / max(
+        1, int(source_totals["complete_evaluated_shared_vertices"])
+    )
+    affected_cases = len(case_rows)
+    audited_cases = int(source_totals["audited_case_count"])
+    experiment_text = (
+        ", ".join(
+            f"`{experiment}` ({count})"
+            for experiment, count in sorted(experiment_counts.items())
+        )
+        or "none"
+    )
+    readme.extend(
+        [
+            "",
+            "## Interpretation",
+            "",
+            "The conflicts are genuine saved-reconstruction phase-label disagreements when exact replay, metadata, and independent phase-side checks agree; any exceptions are enumerated in the taxonomy table rather than assumed away.",
+            "",
+            f"The measured incidence is `{total_conflicts}/{source_totals['complete_evaluated_shared_vertices']}` evaluated vertices (`{100.0 * incidence:.6g}%`) in `{affected_cases}/{audited_cases}` audited cases. "
+            f"`{fallback_vertices}` flagged vertices use a PLIC fallback. Conflict counts by benchmark are {experiment_text}.",
+            "",
+            "The paper should therefore qualify any exact topological-consistency statement. A narrowly scoped algorithmic repair should be attempted only if exact consistency is essential to the claim; otherwise report the measured incidence and retain this as a limitation.",
+            "",
+            "## Files",
+            "",
+            "- `topology_conflict_taxonomy.csv`: one classified row per flagged vertex.",
+            f"- `topology_conflict_case_counts.csv`: exact counts for all {affected_cases} affected cases.",
+            "- `topology_conflict_incident_facets.csv`: facet metadata, phase margins, area checks, and merge-event provenance.",
+            "- `topology_conflict_examples.pdf`: vector comparison for representative conflicts when available.",
+            "- `topology_conflict_examples.png`: review rendering of the same comparison when available.",
+            "",
+        ]
+    )
+    return "\n".join(readme)
+
+
+def diagnose(
+    source_dir: Path, output_dir: Path
+) -> tuple[list[dict], list[dict], list[dict]]:
     conflicts = _read_default_conflicts(source_dir)
     source_manifest = json.loads(
         (source_dir / "topology_consistency_manifest.json").read_text(encoding="utf-8")
     )
+    cell_metrics_path = Path(source_manifest["cell_metrics"]).resolve()
+    if cell_metrics_path.parent.name == "diagnostics":
+        release_root = cell_metrics_path.parent.parent
+        try:
+            output_dir.resolve().relative_to(release_root)
+        except ValueError:
+            pass
+        else:
+            raise ValueError(
+                f"Validation output must be outside immutable release {release_root}: "
+                f"{output_dir.resolve()}"
+            )
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     case_cache: dict[tuple[Path, int], dict[str, dict[str, str]]] = {}
     event_cache: dict[tuple[Path, int], dict[str, list[dict[str, str]]]] = {}
-    mesh_cache: dict[Path, tuple[StructuredMesh, StructuredMesh, Mapping[str, Any]]] = {}
+    mesh_cache: dict[Path, tuple[StructuredMesh, StructuredMesh, Mapping[str, Any]]] = (
+        {}
+    )
     target_keys = {
         _record_key(conflict, cell_id)
         for conflict in conflicts
@@ -472,11 +620,13 @@ def diagnose(source_dir: Path, output_dir: Path) -> tuple[list[dict], list[dict]
                 "exact_label": exact_label,
                 "direct_phase_label": direct_label,
                 "exact_signed_phase_margin": exact_margin,
-                "exact_distance_to_finite_facet": _primitive_distance(exact_point, geometry)
-                if geometry["class"] in {"linear", "circular"}
-                else min(
-                    _primitive_distance(exact_point, branch)
-                    for branch in _corner_branches(geometry)
+                "exact_distance_to_finite_facet": (
+                    _primitive_distance(exact_point, geometry)
+                    if geometry["class"] in {"linear", "circular"}
+                    else min(
+                        _primitive_distance(exact_point, branch)
+                        for branch in _corner_branches(geometry)
+                    )
                 ),
                 "cell_fraction": record["cell_fraction"],
                 "direct_reconstructed_fraction": reconstructed_fraction,
@@ -484,11 +634,15 @@ def diagnose(source_dir: Path, output_dir: Path) -> tuple[list[dict], list[dict]
                 - float(record["cell_fraction"]),
                 "metadata_matches_consolidated": int(metadata_match),
                 "merge_event_count": len(merge_events),
-                "merge_event_provenance_json": json.dumps(event_summary, separators=(",", ":")),
+                "merge_event_provenance_json": json.dumps(
+                    event_summary, separators=(",", ":")
+                ),
                 "facet_geometry_json": record["facet_geometry_json"],
                 "geometry": geometry,
             }
-            incident_rows.append({key: value for key, value in incident.items() if key != "geometry"})
+            incident_rows.append(
+                {key: value for key, value in incident.items() if key != "geometry"}
+            )
             details.append(incident)
 
         vtk_conflict = "on_facet" not in vtk_labels and len(set(vtk_labels)) > 1
@@ -516,7 +670,9 @@ def diagnose(source_dir: Path, output_dir: Path) -> tuple[list[dict], list[dict]
             "incident_cells": conflict["incident_cells"],
             "incident_merge_ids": conflict["incident_merge_ids"],
             "facet_classes": ";".join(detail["facet_class"] for detail in details),
-            "construction_paths": ";".join(detail["construction_path"] for detail in details),
+            "construction_paths": ";".join(
+                detail["construction_path"] for detail in details
+            ),
             "contains_fallback": conflict["contains_fallback"],
             "vtk_labels": ";".join(vtk_labels),
             "exact_labels": ";".join(exact_labels),
@@ -542,10 +698,9 @@ def diagnose(source_dir: Path, output_dir: Path) -> tuple[list[dict], list[dict]
             conflict["vertex_j"],
         )
         detail_lookup[lookup_key] = details
-        if (
-            (conflict["experiment"] == "ellipses" and int(conflict["case_index"]) == 20)
-            or (conflict["experiment"] == "zalesak" and int(conflict["case_index"]) == 5)
-        ) and not any(item["experiment"] == conflict["experiment"] for item in visual_examples):
+        if len(visual_examples) < 2 and not any(
+            item["experiment"] == conflict["experiment"] for item in visual_examples
+        ):
             visual_examples.append(
                 {
                     "lookup_key": lookup_key,
@@ -589,56 +744,24 @@ def diagnose(source_dir: Path, output_dir: Path) -> tuple[list[dict], list[dict]
     _write_csv(output_dir / "topology_conflict_taxonomy.csv", taxonomy_rows)
     _write_csv(output_dir / "topology_conflict_case_counts.csv", case_rows)
     _write_csv(output_dir / "topology_conflict_incident_facets.csv", incident_rows)
-    _plot_examples(output_dir, visual_examples, detail_lookup)
+    if visual_examples:
+        _plot_examples(output_dir, visual_examples, detail_lookup)
 
     taxonomy_counts = Counter(row["taxonomy"] for row in taxonomy_rows)
-    minimum_margin = min(float(row["min_abs_exact_phase_margin"]) for row in taxonomy_rows)
-    readme = [
-        "# Exact-mesh topology conflict diagnosis",
-        "",
-        "All 22 conflicts from the July full audit were replayed on exact seeded meshes,",
-        "checked against the per-run and consolidated facet metadata, and independently",
-        "evaluated using oriented line/circle phase-side tests.",
-        "",
-        "## Result",
-        "",
-        f"- Exact replay preserves `{sum(row['exact_conflict'] for row in taxonomy_rows)}/22` conflicts.",
-        f"- Exact and VTK phase labels agree for `{sum(row['vtk_labels'] == row['exact_labels'] for row in taxonomy_rows)}/22` vertices.",
-        f"- Per-run and consolidated facet metadata agree for `{sum(not row['metadata_mismatch'] for row in taxonomy_rows)}/22` vertices.",
-        f"- Independent phase-side labels agree with the diagnostic for `{sum(not row['classification_mismatch'] for row in taxonomy_rows)}/22` vertices.",
-        f"- The smallest exact signed phase margin is `{minimum_margin:.6g}`, well above the largest ambiguity threshold.",
-        "",
-        "| Taxonomy | Vertices |",
-        "| --- | ---: |",
-    ]
-    for name in TAXONOMY.values():
-        readme.append(f"| `{name}` | {taxonomy_counts.get(name, 0)} |")
-    readme.extend(
-        [
-            "",
-            "## Interpretation",
-            "",
-            "The conflicts are genuine saved-reconstruction phase-label disagreements, not mesh rounding, stale metadata, signed-arc classification, or near-interface ambiguity. They occur in independently fitted neighboring line/circle facets and at boundaries between merged and independently fitted regions; no flagged vertex uses a PLIC fallback.",
-            "",
-            "The paper should therefore qualify any exact topological-consistency statement. A narrowly scoped algorithmic repair should be attempted only if exact consistency is essential to the claim; otherwise report the measured incidence and retain this as a limitation. The observed incidence is 22 vertices in 18 of 500 audited cases, concentrated in coarse perturbed Zalesak cases plus five ellipse vertices.",
-            "",
-            "## Files",
-            "",
-            "- `topology_conflict_taxonomy.csv`: one classified row per flagged vertex.",
-            "- `topology_conflict_case_counts.csv`: exact counts for all 18 affected cases.",
-            "- `topology_conflict_incident_facets.csv`: facet metadata, phase margins, area checks, and merge-event provenance.",
-            "- `topology_conflict_examples.pdf`: vector comparison for representative ellipse and Zalesak conflicts.",
-            "- `topology_conflict_examples.png`: review rendering of the same comparison.",
-            "",
-        ]
+    source_totals = _read_source_audit_totals(source_dir, source_manifest)
+    (output_dir / "README.md").write_text(
+        _build_readme(taxonomy_rows, case_rows, source_totals), encoding="utf-8"
     )
-    (output_dir / "README.md").write_text("\n".join(readme), encoding="utf-8")
     manifest = {
         "source_diagnostic": str(source_dir.resolve()),
         "source_manifest": source_manifest,
         "taxonomy_counts": dict(taxonomy_counts),
         "conflict_count": len(taxonomy_rows),
         "affected_case_count": len(case_rows),
+        "audited_case_count": source_totals["audited_case_count"],
+        "audited_complete_evaluated_shared_vertices": source_totals[
+            "complete_evaluated_shared_vertices"
+        ],
         "recommendation": "qualify_manuscript_claim; no diagnostic correction; consider a narrow algorithm fix only if exact consistency is required",
         "outputs": [
             "README.md",
@@ -657,8 +780,8 @@ def diagnose(source_dir: Path, output_dir: Path) -> tuple[list[dict], list[dict]
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source-dir", type=Path, default=DEFAULT_SOURCE)
-    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument("--source-dir", type=Path, required=True)
+    parser.add_argument("--output-dir", type=Path, required=True)
     return parser.parse_args(argv)
 
 
