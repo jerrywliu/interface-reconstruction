@@ -238,6 +238,24 @@ class ExecutionConfigAuthority:
 
 
 @dataclass(frozen=True)
+class PrivateGeneratorGitView:
+    git_dir: Path
+    work_tree: Path
+    index_file: Path
+    approved_commit: str
+    approved_tree: str
+    object_format: str
+    alternate_objects: Path
+    alternate_objects_device: int
+    alternate_objects_inode: int
+    git_dir_device: int
+    git_dir_inode: int
+    work_tree_device: int
+    work_tree_inode: int
+    metadata_sha256: str
+
+
+@dataclass(frozen=True)
 class ReleaseAuditPin:
     root: Path
     device: int
@@ -1421,28 +1439,399 @@ def _verify_execution_config(authority: ExecutionConfigAuthority) -> None:
     )
 
 
-def _generator_environment(
+def _run_git_command(
+    command: Sequence[str],
+    *,
+    cwd: Path,
+    environment: Mapping[str, str],
+    check: bool = True,
+    text: bool = True,
+) -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(
+            ["git", "--no-pager", *command],
+            cwd=cwd,
+            env=dict(environment),
+            check=check,
+            capture_output=True,
+            text=text,
+        )
+    except FileNotFoundError as exc:
+        raise FinalFigureOrchestrationError("git is unavailable") from exc
+    except subprocess.CalledProcessError as exc:
+        stderr = exc.stderr.decode() if isinstance(exc.stderr, bytes) else exc.stderr
+        stdout = exc.stdout.decode() if isinstance(exc.stdout, bytes) else exc.stdout
+        detail = (stderr or stdout or "git command failed").strip()
+        raise FinalFigureOrchestrationError(detail) from exc
+
+
+def _private_git_metadata_sha256(git_dir: Path) -> str:
+    git_dir = Path(git_dir).resolve()
+    _require(git_dir.is_dir(), f"Private Git directory is missing: {git_dir}")
+    digest = hashlib.sha256()
+    paths = [git_dir, *git_dir.rglob("*")]
+    for path in sorted(
+        paths, key=lambda candidate: candidate.relative_to(git_dir).as_posix()
+    ):
+        relative = path.relative_to(git_dir).as_posix() or "."
+        info = path.lstat()
+        _require(
+            info.st_uid == os.getuid(),
+            f"Private Git metadata has the wrong owner: {relative}",
+        )
+        if stat.S_ISDIR(info.st_mode):
+            _require(
+                stat.S_IMODE(info.st_mode) == 0o500,
+                f"Private Git directory mode changed: {relative}",
+            )
+            digest.update(f"D\0{relative}\0{stat.S_IMODE(info.st_mode):04o}\n".encode())
+        else:
+            _require(
+                stat.S_ISREG(info.st_mode),
+                f"Private Git metadata contains a non-regular entry: {relative}",
+            )
+            _require(
+                stat.S_IMODE(info.st_mode) == 0o400,
+                f"Private Git file mode changed: {relative}",
+            )
+            data = stable_file_bytes(path)
+            digest.update(
+                (
+                    f"F\0{relative}\0{stat.S_IMODE(info.st_mode):04o}\0"
+                    f"{len(data)}\0{hashlib.sha256(data).hexdigest()}\n"
+                ).encode()
+            )
+    return digest.hexdigest()
+
+
+def _private_git_environment(
+    view: PrivateGeneratorGitView,
+    base: Optional[Mapping[str, str]] = None,
+) -> dict[str, str]:
+    env = {} if base is None else dict(base)
+    for key in tuple(env):
+        if key.startswith("GIT_"):
+            env.pop(key)
+    env.update(sanitized_git_environment(env))
+    env.update(
+        {
+            "GIT_DIR": str(view.git_dir),
+            "GIT_WORK_TREE": str(view.work_tree),
+            "GIT_INDEX_FILE": str(view.index_file),
+            "GIT_NO_REPLACE_OBJECTS": "1",
+            "GIT_OPTIONAL_LOCKS": "0",
+        }
+    )
+    return env
+
+
+def _run_private_git(
+    view: PrivateGeneratorGitView,
+    *command: str,
+    check: bool = True,
+    text: bool = True,
+) -> subprocess.CompletedProcess:
+    return _run_git_command(
+        command,
+        cwd=view.work_tree,
+        environment=_private_git_environment(view),
+        check=check,
+        text=text,
+    )
+
+
+def _git_object_oid(data: bytes, object_type: str, object_format: str) -> str:
+    try:
+        digest = hashlib.new(object_format)
+    except ValueError as exc:
+        raise FinalFigureOrchestrationError(
+            f"Unsupported Git object format: {object_format}"
+        ) from exc
+    digest.update(f"{object_type} {len(data)}\0".encode("ascii"))
+    digest.update(data)
+    return digest.hexdigest()
+
+
+def _tree_index_records(data: bytes, *, index: bool) -> list[tuple[str, str, str]]:
+    records = []
+    for raw in data.split(b"\0"):
+        if not raw:
+            continue
+        metadata, path_bytes = raw.split(b"\t", 1)
+        fields = metadata.decode("ascii").split(" ")
+        if index:
+            _require(len(fields) == 3, "Private Git index record is malformed")
+            mode, oid, stage_number = fields
+            _require(stage_number == "0", "Private Git index has an unresolved stage")
+        else:
+            _require(len(fields) == 3, "Private Git tree record is malformed")
+            mode, object_type, oid = fields
+            _require(
+                object_type == "blob",
+                "Private Git tree contains a non-blob tracked object",
+            )
+        records.append((mode, oid, path_bytes.decode("utf-8", errors="strict")))
+    return records
+
+
+def _verify_private_generator_git_view(view: PrivateGeneratorGitView) -> None:
+    _require(not view.git_dir.is_symlink(), "Private Git directory became a symlink")
+    git_info = view.git_dir.lstat()
+    _require(
+        stat.S_ISDIR(git_info.st_mode)
+        and (git_info.st_dev, git_info.st_ino)
+        == (view.git_dir_device, view.git_dir_inode),
+        "Private Git directory identity changed",
+    )
+    _require(not view.work_tree.is_symlink(), "Immutable source became a symlink")
+    source_info = view.work_tree.lstat()
+    _require(
+        stat.S_ISDIR(source_info.st_mode)
+        and (source_info.st_dev, source_info.st_ino)
+        == (view.work_tree_device, view.work_tree_inode),
+        "Immutable source root identity changed",
+    )
+    _require(
+        not view.alternate_objects.is_symlink(),
+        "Approved Git object directory became a symlink",
+    )
+    object_info = view.alternate_objects.lstat()
+    _require(
+        stat.S_ISDIR(object_info.st_mode)
+        and (object_info.st_dev, object_info.st_ino)
+        == (view.alternate_objects_device, view.alternate_objects_inode),
+        "Approved Git object directory identity changed",
+    )
+    _require(
+        _private_git_metadata_sha256(view.git_dir) == view.metadata_sha256,
+        "Private Git metadata changed",
+    )
+
+    absolute_git_dir = _run_private_git(
+        view, "rev-parse", "--absolute-git-dir"
+    ).stdout.strip()
+    top_level = _run_private_git(view, "rev-parse", "--show-toplevel").stdout.strip()
+    commit = _run_private_git(view, "rev-parse", "HEAD").stdout.strip().lower()
+    tree = _run_private_git(view, "rev-parse", "HEAD^{tree}").stdout.strip().lower()
+    object_format = _run_private_git(
+        view, "rev-parse", "--show-object-format"
+    ).stdout.strip()
+    _require(
+        Path(absolute_git_dir).resolve() == view.git_dir,
+        "Child Git directory differs from the private authority",
+    )
+    _require(
+        Path(top_level).resolve() == view.work_tree,
+        "Child Git work tree differs from the immutable source",
+    )
+    _require(commit == view.approved_commit, "Private Git HEAD differs from approval")
+    _require(tree == view.approved_tree, "Private Git tree differs from approval")
+    _require(
+        object_format == view.object_format,
+        "Private Git object format differs from the approved repository",
+    )
+
+    symbolic = _run_private_git(view, "symbolic-ref", "-q", "HEAD", check=False)
+    _require(
+        symbolic.returncode == 1 and not symbolic.stdout,
+        "Private Git HEAD is not detached",
+    )
+    commit_data = _run_private_git(
+        view, "cat-file", "commit", "HEAD", text=False
+    ).stdout
+    tree_data = _run_private_git(
+        view, "cat-file", "tree", view.approved_tree, text=False
+    ).stdout
+    _require(
+        _git_object_oid(commit_data, "commit", view.object_format)
+        == view.approved_commit,
+        "Private Git commit object failed hash verification",
+    )
+    _require(
+        _git_object_oid(tree_data, "tree", view.object_format) == view.approved_tree,
+        "Private Git tree object failed hash verification",
+    )
+
+    tree_records = _tree_index_records(
+        _run_private_git(
+            view, "ls-tree", "-rz", "--full-tree", "HEAD", text=False
+        ).stdout,
+        index=False,
+    )
+    index_records = _tree_index_records(
+        _run_private_git(view, "ls-files", "--stage", "-z", text=False).stdout,
+        index=True,
+    )
+    _require(index_records == tree_records, "Private Git index differs from approval")
+    status = _run_private_git(
+        view,
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+        text=False,
+    )
+    _require(not status.stdout, "Immutable source reports Git status changes")
+    for command in (
+        ("diff", "--quiet", "HEAD", "--"),
+        ("diff", "--cached", "--quiet", "HEAD", "--"),
+    ):
+        result = _run_private_git(view, *command, check=False)
+        _require(
+            result.returncode == 0, "Immutable source differs from private Git HEAD"
+        )
+    _require(
+        _private_git_metadata_sha256(view.git_dir) == view.metadata_sha256,
+        "Private Git metadata changed during verification",
+    )
+
+
+def _create_private_generator_git_view(
     repository: Path,
     immutable_source: Path,
+    approved_generator_commit: str,
+    approved_generator_tree: str,
+    destination: Path,
+) -> PrivateGeneratorGitView:
+    repository = Path(repository).resolve()
+    immutable_source = Path(immutable_source).resolve()
+    supplied_destination = Path(destination).expanduser().absolute()
+    _require(
+        not os.path.lexists(supplied_destination),
+        f"Private Git destination already exists: {supplied_destination}",
+    )
+    _require(
+        immutable_source.is_dir() and not immutable_source.is_symlink(),
+        "Immutable generator source is missing or is a symlink",
+    )
+    _require(
+        re.fullmatch(r"[0-9a-f]{40}", approved_generator_commit or "") is not None,
+        "Approved generator commit must be full lowercase 40-hex",
+    )
+    _require(
+        re.fullmatch(r"[0-9a-f]{40}", approved_generator_tree or "") is not None,
+        "Approved generator tree must be full lowercase 40-hex",
+    )
+    base_environment = sanitized_git_environment()
+    object_format = _run_git_command(
+        ("rev-parse", "--show-object-format"),
+        cwd=repository,
+        environment=base_environment,
+    ).stdout.strip()
+    object_path = _run_git_command(
+        ("rev-parse", "--path-format=absolute", "--git-path", "objects"),
+        cwd=repository,
+        environment=base_environment,
+    ).stdout.strip()
+    alternate_objects = Path(object_path).expanduser().absolute()
+    _require(
+        not alternate_objects.is_symlink(),
+        "Approved Git object directory must not be a symlink",
+    )
+    alternate_objects = alternate_objects.resolve()
+    object_info = alternate_objects.lstat()
+    _require(
+        stat.S_ISDIR(object_info.st_mode),
+        "Approved Git object directory is not a directory",
+    )
+    _require(
+        "\n" not in str(alternate_objects) and "\r" not in str(alternate_objects),
+        "Approved Git object directory path contains a newline",
+    )
+
+    destination_parent = supplied_destination.parent.resolve()
+    _require(destination_parent.is_dir(), "Private Git parent directory is missing")
+    git_dir = destination_parent / supplied_destination.name
+    try:
+        _run_git_command(
+            ("init", "-q", "--bare", f"--object-format={object_format}", str(git_dir)),
+            cwd=destination_parent,
+            environment=base_environment,
+        )
+        alternates = git_dir / "objects" / "info" / "alternates"
+        alternates.write_text(f"{alternate_objects}\n", encoding="utf-8")
+        provisional = PrivateGeneratorGitView(
+            git_dir=git_dir,
+            work_tree=immutable_source,
+            index_file=git_dir / "index",
+            approved_commit=approved_generator_commit,
+            approved_tree=approved_generator_tree,
+            object_format=object_format,
+            alternate_objects=alternate_objects,
+            alternate_objects_device=object_info.st_dev,
+            alternate_objects_inode=object_info.st_ino,
+            git_dir_device=0,
+            git_dir_inode=0,
+            work_tree_device=0,
+            work_tree_inode=0,
+            metadata_sha256="",
+        )
+        setup_environment = _private_git_environment(provisional)
+        _run_git_command(
+            ("update-ref", "--no-deref", "HEAD", approved_generator_commit),
+            cwd=immutable_source,
+            environment=setup_environment,
+        )
+        _run_git_command(
+            ("read-tree", approved_generator_commit),
+            cwd=immutable_source,
+            environment=setup_environment,
+        )
+        for path in git_dir.rglob("*"):
+            _require(
+                not path.is_symlink(),
+                f"Private Git initialization created a symlink: {path}",
+            )
+            _require(
+                path.is_file() or path.is_dir(),
+                f"Private Git initialization created a special entry: {path}",
+            )
+            if path.is_file():
+                path.chmod(0o400)
+        for directory in sorted(
+            (path for path in git_dir.rglob("*") if path.is_dir()),
+            key=lambda path: len(path.parts),
+            reverse=True,
+        ):
+            directory.chmod(0o500)
+        git_dir.chmod(0o500)
+        git_info = git_dir.lstat()
+        source_info = immutable_source.lstat()
+        view = PrivateGeneratorGitView(
+            **{
+                **provisional.__dict__,
+                "git_dir_device": git_info.st_dev,
+                "git_dir_inode": git_info.st_ino,
+                "work_tree_device": source_info.st_dev,
+                "work_tree_inode": source_info.st_ino,
+                "metadata_sha256": _private_git_metadata_sha256(git_dir),
+            }
+        )
+        _verify_private_generator_git_view(view)
+        return view
+    except Exception:
+        if git_dir.exists():
+            _remove_tree(git_dir)
+        raise
+
+
+def _generator_environment(
+    immutable_source: Path,
     runtime: TrustedFigureRuntime,
+    git_view: PrivateGeneratorGitView,
 ) -> dict[str, str]:
+    immutable_source = Path(immutable_source).resolve()
+    _require(
+        immutable_source == git_view.work_tree,
+        "Generator environment source differs from private Git work tree",
+    )
+    _verify_private_generator_git_view(git_view)
     env = dict(runtime.environment)
-    env.update(sanitized_git_environment(env))
-    env["PYTHONPATH"] = str(Path(immutable_source).resolve())
+    env = _private_git_environment(git_view, env)
+    env["PYTHONPATH"] = str(immutable_source)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env["PYTHONNOUSERSITE"] = "1"
     env["SLACK_NOTIFY"] = "0"
-    git_dir = subprocess.run(
-        ["git", "--no-pager", "rev-parse", "--absolute-git-dir"],
-        cwd=repository,
-        env=sanitized_git_environment(),
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-    env["GIT_DIR"] = git_dir
-    env["GIT_WORK_TREE"] = str(Path(immutable_source).resolve())
-    env["GIT_NO_REPLACE_OBJECTS"] = "1"
     return env
 
 

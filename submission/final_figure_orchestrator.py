@@ -137,6 +137,7 @@ from submission.final_figure_orchestration import (
     _copy,
     _copy_manifest,
     _copy_publication_tree,
+    _create_private_generator_git_view,
     _generator_environment,
     _numbers,
     _published_tree_records,
@@ -150,6 +151,7 @@ from submission.final_figure_orchestration import (
     _stage_candidate,
     _verify_execution_config,
     _verify_frozen_publication_tree,
+    _verify_private_generator_git_view,
     _verify_tree_records,
     _write_command_record,
     representative_geometry_input_paths,
@@ -869,6 +871,13 @@ def orchestrate_final_figures(
             immutable_source / "config", execution / "config_authority.json"
         )
         _verify_execution_config(config_authority)
+        git_view = _create_private_generator_git_view(
+            repository,
+            immutable_source,
+            approved_generator_commit,
+            attestation.commit_tree,
+            execution / "approved_source.git",
+        )
 
         def run_approved_command(
             command: Sequence[str],
@@ -880,9 +889,11 @@ def orchestrate_final_figures(
                 repository, approved_generator_commit, immutable_source, attestation
             )
             _verify_execution_config(config_authority)
+            _verify_private_generator_git_view(git_view)
             try:
                 run_command(command, cwd, command_environment, log_path)
             finally:
+                _verify_private_generator_git_view(git_view)
                 _verify_execution_config(config_authority)
                 verify_materialized_source(
                     repository, approved_generator_commit, immutable_source, attestation
@@ -937,7 +948,7 @@ def orchestrate_final_figures(
             orchestrator_schema_version=ORCHESTRATION_SCHEMA_VERSION,
         )
         runtime = prepare_trusted_figure_runtime(execution / "trusted_runtime")
-        env = _generator_environment(repository, immutable_source, runtime)
+        env = _generator_environment(immutable_source, runtime, git_view)
         env.update(
             {
                 "INTERFACE_CONFIG_ROOT": str(config_authority.config_root),

@@ -69,8 +69,10 @@ The wrapper performs, in order:
    private read-only tree, and run the scientific audit plus checksum verification
    only on that immutable tree;
 3. exact commit, index, tracked-byte, and external-approval attestation;
-4. read-only source materialization from approved Git blobs, per-read sealed
-   config verification, and repeated source/config re-attestation;
+4. read-only source materialization from approved Git blobs, a private sealed
+   detached Git view whose `HEAD` and index are fixed to the approved commit,
+   per-read sealed config verification, and repeated source/config/Git-view
+   re-attestation;
 5. one private read-only allowlist copy and compact release-input view derived
    only from the audited complete snapshot;
 6. main-text and all-method generation from that snapshot;
@@ -125,3 +127,9 @@ python -m experiments.static.run_perturbed_sweeps \
 
 Those outputs are not submission candidates unless regenerated and accepted
 inside the final wrapper.
+
+Child provenance commands never read the live checkout's `HEAD`, refs, or
+index. They use the private detached Git view over the immutable source, so
+`source_commit` remains the approved commit even if a live branch advances
+during a long run. `source_branch` is therefore intentionally empty, while
+status and diff provenance remain available and must report a clean source.

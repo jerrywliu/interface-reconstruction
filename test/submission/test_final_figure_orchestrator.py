@@ -6,6 +6,7 @@ import csv
 import subprocess
 import sys
 import stat
+import time
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -28,6 +29,7 @@ from submission.final_figure_orchestration import (
     RESOLUTION_WIGGLES,
     FinalFigureOrchestrationError,
     _capture_release_audit_pin,
+    _create_private_generator_git_view,
     _generator_environment,
     _numbers,
     _rehash_before_publish,
@@ -36,6 +38,7 @@ from submission.final_figure_orchestration import (
     _snapshot_complete_release,
     _seal_execution_config,
     _verify_frozen_publication_tree,
+    _verify_private_generator_git_view,
     _write_command_record,
     resolution_input_paths,
     stage_all_method_candidates,
@@ -195,7 +198,14 @@ def test_materialized_source_excludes_ignored_pyc_and_survives_live_edit(tmp_pat
     (pycache / "generator.cpython-39.pyc").write_bytes(b"malicious ignored bytecode")
     attestation = verify_generator_checkout(repo, approved, release)
     source = tmp_path / "materialized"
-    materialize_approved_source(repo, approved, source, attestation)
+    attestation = materialize_approved_source(repo, approved, source, attestation)
+    git_view = _create_private_generator_git_view(
+        repo,
+        source,
+        approved,
+        attestation.commit_tree,
+        tmp_path / "approved-source.git",
+    )
     try:
         assert not (source / "__pycache__").exists()
         tracked.write_text("concurrent = 'live edit'\n", encoding="utf-8")
@@ -203,12 +213,152 @@ def test_materialized_source_excludes_ignored_pyc_and_survives_live_edit(tmp_pat
             encoding="utf-8"
         ) == "approved = True\n"
         runtime = prepare_trusted_figure_runtime(tmp_path / "trusted-runtime")
-        env = _generator_environment(repo, source, runtime)
+        env = _generator_environment(source, runtime, git_view)
         assert env["PYTHONPATH"] == str(source.resolve())
         assert env["PYTHONDONTWRITEBYTECODE"] == "1"
         assert env["GIT_NO_REPLACE_OBJECTS"] == "1"
+        assert env["GIT_DIR"] == str(git_view.git_dir)
+        assert env["GIT_INDEX_FILE"] == str(git_view.index_file)
         assert env["HOME"].startswith(str(tmp_path / "trusted-runtime"))
     finally:
+        _remove_tree(git_view.git_dir)
+        _remove_tree(source)
+
+
+def test_private_git_view_pins_all_run_manifests_while_live_branch_advances(
+    tmp_path,
+):
+    repo, tracked, _historical, release, approved = _git_repo(tmp_path)
+    attestation = verify_generator_checkout(repo, approved, release)
+    source = tmp_path / "materialized"
+    attestation = materialize_approved_source(repo, approved, source, attestation)
+    git_view = _create_private_generator_git_view(
+        repo,
+        source,
+        approved,
+        attestation.commit_tree,
+        tmp_path / "approved-source.git",
+    )
+    runtime = prepare_trusted_figure_runtime(tmp_path / "trusted-runtime")
+    env = _generator_environment(source, runtime, git_view)
+    output = tmp_path / "run-manifests"
+    output.mkdir()
+    ready = tmp_path / "child-ready"
+    proceed = tmp_path / "child-proceed"
+    script = r"""
+import json
+import pathlib
+import subprocess
+import sys
+import time
+
+output, ready, proceed = map(pathlib.Path, sys.argv[1:])
+for index in range(3):
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    status = subprocess.run(
+        ["git", "status", "--short"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+    diff = subprocess.run(["git", "diff", "--quiet", "HEAD", "--"])
+    payload = {
+        "run_index": index,
+        "source_commit": commit,
+        "source_branch": subprocess.run(
+            ["git", "branch", "--show-current"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip(),
+        "source_dirty": bool(status) or diff.returncode != 0,
+        "source_status": status,
+    }
+    (output / f"run_{index}.json").write_text(
+        json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    if index == 0:
+        ready.write_text("ready\n", encoding="utf-8")
+        deadline = time.monotonic() + 20
+        while not proceed.exists():
+            if time.monotonic() >= deadline:
+                raise TimeoutError("parent did not advance the live branch")
+            time.sleep(0.01)
+"""
+    child = subprocess.Popen(
+        [sys.executable, "-c", script, str(output), str(ready), str(proceed)],
+        cwd=source,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        deadline = time.monotonic() + 20
+        while not ready.exists():
+            if child.poll() is not None:
+                stdout, stderr = child.communicate()
+                pytest.fail(f"child exited before branch advance: {stdout}\n{stderr}")
+            if time.monotonic() >= deadline:
+                child.terminate()
+                pytest.fail("child did not reach the branch-advance barrier")
+            time.sleep(0.01)
+
+        tracked.write_text("advanced = True\n", encoding="utf-8")
+        _git(repo, "commit", "-am", "advance live branch")
+        advanced = _git(repo, "rev-parse", "HEAD")
+        assert advanced != approved
+        proceed.write_text("continue\n", encoding="utf-8")
+        stdout, stderr = child.communicate(timeout=30)
+        assert child.returncode == 0, f"{stdout}\n{stderr}"
+
+        manifests = [
+            json.loads(path.read_text(encoding="utf-8"))
+            for path in sorted(output.glob("run_*.json"))
+        ]
+        assert len(manifests) == 3
+        assert {row["source_commit"] for row in manifests} == {approved}
+        assert {row["source_branch"] for row in manifests} == {""}
+        assert all(row["source_dirty"] is False for row in manifests)
+        assert all(row["source_status"] == [] for row in manifests)
+        _verify_private_generator_git_view(git_view)
+        verify_materialized_source(repo, approved, source, attestation)
+    finally:
+        if child.poll() is None:
+            child.terminate()
+            child.wait(timeout=10)
+        _remove_tree(git_view.git_dir)
+        _remove_tree(source)
+
+
+def test_private_git_view_fails_closed_after_metadata_drift(tmp_path):
+    repo, _tracked, _historical, release, approved = _git_repo(tmp_path)
+    attestation = verify_generator_checkout(repo, approved, release)
+    source = tmp_path / "materialized"
+    attestation = materialize_approved_source(repo, approved, source, attestation)
+    git_view = _create_private_generator_git_view(
+        repo,
+        source,
+        approved,
+        attestation.commit_tree,
+        tmp_path / "approved-source.git",
+    )
+    try:
+        git_view.git_dir.chmod(0o700)
+        head = git_view.git_dir / "HEAD"
+        head.chmod(0o600)
+        head.write_text(f"{release}\n", encoding="ascii")
+        head.chmod(0o400)
+        git_view.git_dir.chmod(0o500)
+        with pytest.raises(FinalFigureOrchestrationError, match="metadata changed"):
+            _verify_private_generator_git_view(git_view)
+    finally:
+        _remove_tree(git_view.git_dir)
         _remove_tree(source)
 
 
@@ -526,7 +676,7 @@ def test_generator_environment_ignores_hostile_matplotlib_and_home_config(
     repo, _tracked, _historical, release, approved = _git_repo(tmp_path)
     attestation = verify_generator_checkout(repo, approved, release)
     source = tmp_path / "materialized"
-    materialize_approved_source(repo, approved, source, attestation)
+    attestation = materialize_approved_source(repo, approved, source, attestation)
     attacker = tmp_path / "attacker-home"
     attacker_mpl = attacker / ".config" / "matplotlib"
     attacker_mpl.mkdir(parents=True)
@@ -540,7 +690,14 @@ def test_generator_environment_ignores_hostile_matplotlib_and_home_config(
     monkeypatch.setenv("TEXINPUTS", str(attacker))
 
     runtime = prepare_trusted_figure_runtime(tmp_path / "trusted-runtime")
-    env = _generator_environment(repo, source, runtime)
+    git_view = _create_private_generator_git_view(
+        repo,
+        source,
+        approved,
+        attestation.commit_tree,
+        tmp_path / "approved-source.git",
+    )
+    env = _generator_environment(source, runtime, git_view)
     output = tmp_path / "facecolor.png"
     script = (
         "import matplotlib, matplotlib.pyplot as plt; "
@@ -556,6 +713,7 @@ def test_generator_environment_ignores_hostile_matplotlib_and_home_config(
     assert env["MPLBACKEND"] == "Agg"
     assert env["LC_ALL"] == "C" and env["TZ"] == "UTC"
     assert env["PYTHONHASHSEED"] == "0"
+    _remove_tree(git_view.git_dir)
     _remove_tree(source)
 
 
