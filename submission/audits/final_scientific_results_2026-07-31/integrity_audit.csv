@@ -1,0 +1,14 @@
+check,status,count,details
+release_completion,pass,2,both manifests completed with zero failures
+baseline_run_keys_subset_of_candidate,pass,300,baseline_only=0; candidate_only=670
+baseline_case_keys_subset_of_candidate,pass,7500,baseline_only=0; candidate_only=16750
+exact_case_grids,pass,300,all matched runs contain the same 25 case indices
+matched_run_profiles,pass,300,"PLIC, rescue, and corner-profile fields agree exactly"
+metric_missingness,pass,27750,zero availability mismatches across six metric columns
+aggregate_keys,pass,4440,baseline_only=0; candidate_only=9960
+aggregate_medians_recomputed,pass,4710,stored medians equal medians recomputed from case rows
+source_snapshot_checksums,pass,2,baseline=4975ad99db05ac6d606de4f6f17f74242df78b993d4070a0e51c7ce0a5c1e7fd; candidate=39f01404d1277ce74a273aa876858128ac3ccfa0931d183ffdf94270c655aadf
+baseline_case_key_sha256,pass,7500,1499f901d48eb729974821b3fa0c5f2fc2525cee445e2affc00f9e4785b29ae6
+candidate_matched_case_key_sha256,pass,7500,1499f901d48eb729974821b3fa0c5f2fc2525cee445e2affc00f9e4785b29ae6
+baseline_aggregate_key_sha256,pass,4440,783c41ba4137a8ac734aa54619567e8e98f654100d989c66ba2e22db2fb26dc0
+candidate_matched_aggregate_key_sha256,pass,4440,783c41ba4137a8ac734aa54619567e8e98f654100d989c66ba2e22db2fb26dc0
