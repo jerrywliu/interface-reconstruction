@@ -42,6 +42,15 @@ TAR_RECORD_SIZE = 10_240
 MAX_TAR_METADATA_BYTES_PER_MEMBER = 4_096
 MAX_TAR_GLOBAL_METADATA_BYTES = 65_536
 GZIP_VALIDATION_CHUNK_SIZE = 65_536
+TAR_EXTENSION_TYPES = frozenset(
+    {
+        tarfile.GNUTYPE_LONGNAME,
+        tarfile.GNUTYPE_LONGLINK,
+        tarfile.XHDTYPE,
+        tarfile.XGLTYPE,
+        tarfile.SOLARIS_XHDTYPE,
+    }
+)
 
 SNAPSHOT_EXCLUDED_ROOTS = frozenset(
     {".git", "logs", "output", "plots", "results", "tmp"}
@@ -1213,6 +1222,107 @@ def _canonical_tar_end(data_end: int) -> int:
     return ((minimum_end + TAR_RECORD_SIZE - 1) // TAR_RECORD_SIZE) * TAR_RECORD_SIZE
 
 
+def _read_exact_tar_bytes(
+    stream: _DecompressedByteBudgetStream,
+    offset: int,
+    size: int,
+    description: str,
+) -> bytes:
+    stream.seek(offset)
+    data = stream.read(size)
+    if len(data) != size:
+        raise SourceSnapshotFormatError(
+            f"source tar is truncated while reading {description} at offset {offset}"
+        )
+    return data
+
+
+def _validate_zero_tar_padding(
+    stream: _DecompressedByteBudgetStream,
+    offset: int,
+    size: int,
+    description: str,
+) -> None:
+    if size == 0:
+        return
+    padding = _read_exact_tar_bytes(stream, offset, size, description)
+    for relative_offset, value in enumerate(padding):
+        if value:
+            raise SourceSnapshotFormatError(
+                f"source tar contains nonzero {description} byte at offset "
+                f"{offset + relative_offset}"
+            )
+
+
+def _validate_tar_member_padding(
+    stream: _DecompressedByteBudgetStream,
+    members: Sequence[tarfile.TarInfo],
+    encoding: str,
+    errors: str,
+) -> int:
+    cursor = 0
+    for member in members:
+        member_header_offset = member.offset_data - TAR_BLOCK_SIZE
+        if member_header_offset < cursor:
+            raise SourceSnapshotFormatError(
+                f"source tar member layout overlaps before {member.name!r}"
+            )
+
+        while cursor < member_header_offset:
+            header = _read_exact_tar_bytes(
+                stream,
+                cursor,
+                TAR_BLOCK_SIZE,
+                f"extension header before {member.name!r}",
+            )
+            try:
+                extension = tarfile.TarInfo.frombuf(header, encoding, errors)
+            except tarfile.HeaderError as exc:
+                raise SourceSnapshotFormatError(
+                    f"invalid source tar extension header at offset {cursor}: {exc}"
+                ) from exc
+            if extension.type not in TAR_EXTENSION_TYPES:
+                raise SourceSnapshotFormatError(
+                    "source tar contains an unexpected physical record before "
+                    f"{member.name!r} at offset {cursor}"
+                )
+            if extension.size < 0:
+                raise SourceSnapshotFormatError(
+                    f"source tar extension has a negative size at offset {cursor}"
+                )
+            extension_data_offset = cursor + TAR_BLOCK_SIZE
+            extension_padded_end = extension_data_offset + _tar_padded_size(
+                extension.size
+            )
+            if extension_padded_end > member_header_offset:
+                raise SourceSnapshotFormatError(
+                    "source tar extension overlaps the following member header "
+                    f"before {member.name!r}"
+                )
+            _validate_zero_tar_padding(
+                stream,
+                extension_data_offset + extension.size,
+                extension_padded_end - extension_data_offset - extension.size,
+                "extension-member padding",
+            )
+            cursor = extension_padded_end
+
+        if cursor != member_header_offset:
+            raise SourceSnapshotFormatError(
+                f"source tar member header is misaligned for {member.name!r}"
+            )
+
+        member_padded_end = member.offset_data + _tar_padded_size(member.size)
+        _validate_zero_tar_padding(
+            stream,
+            member.offset_data + member.size,
+            member_padded_end - member.offset_data - member.size,
+            f"padding after member {member.name!r}",
+        )
+        cursor = member_padded_end
+    return cursor
+
+
 def _drain_and_validate_tar_termination(
     stream: _DecompressedByteBudgetStream,
     data_end: int,
@@ -1343,9 +1453,11 @@ def _read_bounded_source_snapshot(
                             "source tar contains no validated tracked-file members"
                         )
 
-                    data_end = max(
-                        member.offset_data + _tar_padded_size(member.size)
-                        for member in validated_members
+                    data_end = _validate_tar_member_padding(
+                        bounded_stream,
+                        validated_members,
+                        archive.encoding,
+                        archive.errors,
                     )
 
                     for member in validated_members:

@@ -101,6 +101,33 @@ def _snapshot_budget(files: dict[str, bytes]) -> int:
     return audit_module._source_tar_decompressed_budget(expected)
 
 
+def _in_memory_tar(files: dict[str, bytes], archive_format: int) -> bytes:
+    output = io.BytesIO()
+    with tarfile.open(fileobj=output, mode="w", format=archive_format) as archive:
+        for relative, data in files.items():
+            member = tarfile.TarInfo(relative)
+            member.size = len(data)
+            member.mode = 0o644
+            archive.addfile(member, io.BytesIO(data))
+    return output.getvalue()
+
+
+def _audit_snapshot_bytes(
+    tmp_path: Path,
+    files: dict[str, bytes],
+    raw_archive: bytes,
+) -> audit_module.AuditReport:
+    snapshot_path = tmp_path / "source_snapshot.tar.gz"
+    snapshot_path.write_bytes(gzip.compress(raw_archive))
+    expected = {
+        relative: audit_module.GitBlob("100644", "0" * 40, data)
+        for relative, data in files.items()
+    }
+    report = audit_module.AuditReport(tmp_path)
+    audit_module._read_bounded_source_snapshot(snapshot_path, expected, report)
+    return report
+
+
 def _run_context() -> dict[str, object]:
     return {
         "experiment": "lines",
@@ -1349,6 +1376,58 @@ def test_nonzero_decompressed_data_after_tar_terminator_is_rejected(tmp_path):
     messages = _messages(report)
     assert not report.ok
     assert "nonzero trailing decompressed data" in messages
+
+
+def test_nonzero_padding_hidden_between_two_files_is_rejected(tmp_path):
+    files = {"first.txt": b"a", "second.txt": b"second"}
+    raw_archive = bytearray(_in_memory_tar(files, tarfile.PAX_FORMAT))
+    with tarfile.open(fileobj=io.BytesIO(raw_archive), mode="r:") as archive:
+        first, second = archive.getmembers()
+    padding_offset = first.offset_data + first.size
+    assert padding_offset < second.offset
+    raw_archive[padding_offset] = 0x7F
+
+    with tarfile.open(fileobj=io.BytesIO(raw_archive), mode="r:") as archive:
+        extracted = {
+            member.name: archive.extractfile(member).read()
+            for member in archive.getmembers()
+        }
+    assert extracted == files
+
+    report = _audit_snapshot_bytes(tmp_path, files, bytes(raw_archive))
+
+    assert not report.ok
+    assert "nonzero padding after member 'first.txt' byte" in _messages(report)
+
+
+@pytest.mark.parametrize(
+    ("archive_format", "extension_type"),
+    [
+        (tarfile.PAX_FORMAT, tarfile.XHDTYPE),
+        (tarfile.GNU_FORMAT, tarfile.GNUTYPE_LONGNAME),
+    ],
+)
+def test_nonzero_pax_and_gnu_extension_padding_is_rejected(
+    tmp_path,
+    archive_format,
+    extension_type,
+):
+    long_name = f"source/{'nested-name-' * 12}.txt"
+    files = {long_name: b"first", "second.txt": b"second"}
+    raw_archive = bytearray(_in_memory_tar(files, archive_format))
+    extension = tarfile.TarInfo.frombuf(
+        raw_archive[: tarfile.BLOCKSIZE], "utf-8", "surrogateescape"
+    )
+    assert extension.type == extension_type
+    padding_offset = tarfile.BLOCKSIZE + extension.size
+    padding_size = (-extension.size) % tarfile.BLOCKSIZE
+    assert padding_size > 0
+    raw_archive[padding_offset] = 0x7F
+
+    report = _audit_snapshot_bytes(tmp_path, files, bytes(raw_archive))
+
+    assert not report.ok
+    assert "nonzero extension-member padding byte" in _messages(report)
 
 
 def test_source_snapshot_member_count_is_bounded_by_git_tree(tmp_path):

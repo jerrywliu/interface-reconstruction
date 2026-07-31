@@ -173,9 +173,11 @@ trailer validation and rejects concatenated members or compressed trailing data.
 Before extracting any archived source payload, the audit also checks the complete
 tar metadata pass against tree-derived bounds for file count, each file size, total
 uncompressed bytes, path, and the complete executable mode; set-id and sticky bits
-are rejected. Finally, it drains gzip through EOF and requires exactly two zero end
-blocks plus zero padding to the next tar record boundary after the final member.
-The archived bytes are then compared with the corresponding verified Git blobs.
+are rejected. Every regular-file body and supported PAX/GNU extension body must
+also have zero padding through its next 512-byte boundary. Finally, the audit
+drains gzip through EOF and requires exactly two zero end blocks plus zero padding
+to the next tar record boundary after the final member. The archived bytes are
+then compared with the corresponding verified Git blobs.
 
 ## Result And Raw-Bundle Findings
 
