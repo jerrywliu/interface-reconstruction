@@ -1,0 +1,353 @@
+{
+  "schema_version": 1,
+  "expected_counts": {
+    "candidate_pdfs": 38,
+    "unpaired_candidates": 14,
+    "paired_slots": 12,
+    "paired_candidates": 24
+  },
+  "candidates": [
+    {
+      "candidate_id": "perfect_reconstruction_plic_stencil",
+      "slot_id": "perfect_reconstruction_plic_stencil",
+      "section": "Main text",
+      "title": "PLIC stencil comparison",
+      "variant": "unpaired",
+      "root": "figure_root",
+      "pdf": "deterministic/perfect_reconstruction_plic_stencil.pdf"
+    },
+    {
+      "candidate_id": "staged_reconstruction_zalesak",
+      "slot_id": "staged_reconstruction_zalesak",
+      "section": "Main text",
+      "title": "Staged Zalesak reconstruction",
+      "variant": "unpaired",
+      "root": "figure_root",
+      "pdf": "deterministic/staged_reconstruction_zalesak.pdf"
+    },
+    {
+      "candidate_id": "lines_maintext_metrics",
+      "slot_id": "lines_maintext_metrics",
+      "section": "Main text",
+      "title": "Lines: quantitative comparison",
+      "variant": "unpaired",
+      "root": "figure_root",
+      "pdf": "section6/summary_plots/lines_maintext_metrics.pdf"
+    },
+    {
+      "candidate_id": "lines_maintext_representative_with_endpoints",
+      "slot_id": "lines_maintext_representative",
+      "section": "Main text",
+      "title": "Lines: representative reconstruction",
+      "variant": "with_endpoints",
+      "root": "figure_root",
+      "pdf": "section6/representative_cases/lines_maintext_representative_with_endpoints.pdf"
+    },
+    {
+      "candidate_id": "lines_maintext_representative_clean",
+      "slot_id": "lines_maintext_representative",
+      "section": "Main text",
+      "title": "Lines: representative reconstruction",
+      "variant": "clean",
+      "root": "figure_root",
+      "pdf": "section6/representative_cases/lines_maintext_representative_clean.pdf"
+    },
+    {
+      "candidate_id": "squares_maintext_metrics",
+      "slot_id": "squares_maintext_metrics",
+      "section": "Main text",
+      "title": "Squares: quantitative comparison",
+      "variant": "unpaired",
+      "root": "figure_root",
+      "pdf": "section6/summary_plots/squares_maintext_metrics.pdf"
+    },
+    {
+      "candidate_id": "squares_maintext_representative_with_endpoints",
+      "slot_id": "squares_maintext_representative",
+      "section": "Main text",
+      "title": "Squares: representative reconstruction",
+      "variant": "with_endpoints",
+      "root": "figure_root",
+      "pdf": "section6/representative_cases/squares_maintext_representative_with_endpoints.pdf"
+    },
+    {
+      "candidate_id": "squares_maintext_representative_clean",
+      "slot_id": "squares_maintext_representative",
+      "section": "Main text",
+      "title": "Squares: representative reconstruction",
+      "variant": "clean",
+      "root": "figure_root",
+      "pdf": "section6/representative_cases/squares_maintext_representative_clean.pdf"
+    },
+    {
+      "candidate_id": "circles_maintext_metrics",
+      "slot_id": "circles_maintext_metrics",
+      "section": "Main text",
+      "title": "Circles: quantitative comparison",
+      "variant": "unpaired",
+      "root": "figure_root",
+      "pdf": "section6/summary_plots/circles_maintext_metrics.pdf"
+    },
+    {
+      "candidate_id": "circles_maintext_representative_with_endpoints",
+      "slot_id": "circles_maintext_representative",
+      "section": "Main text",
+      "title": "Circles: representative reconstruction",
+      "variant": "with_endpoints",
+      "root": "figure_root",
+      "pdf": "section6/representative_cases/circles_maintext_representative_with_endpoints.pdf"
+    },
+    {
+      "candidate_id": "circles_maintext_representative_clean",
+      "slot_id": "circles_maintext_representative",
+      "section": "Main text",
+      "title": "Circles: representative reconstruction",
+      "variant": "clean",
+      "root": "figure_root",
+      "pdf": "section6/representative_cases/circles_maintext_representative_clean.pdf"
+    },
+    {
+      "candidate_id": "ellipses_maintext_metrics",
+      "slot_id": "ellipses_maintext_metrics",
+      "section": "Main text",
+      "title": "Ellipses: quantitative comparison",
+      "variant": "unpaired",
+      "root": "figure_root",
+      "pdf": "section6/summary_plots/ellipses_maintext_metrics.pdf"
+    },
+    {
+      "candidate_id": "ellipses_maintext_representative_with_endpoints",
+      "slot_id": "ellipses_maintext_representative",
+      "section": "Main text",
+      "title": "Ellipses: representative reconstruction",
+      "variant": "with_endpoints",
+      "root": "figure_root",
+      "pdf": "section6/representative_cases/ellipses_maintext_representative_with_endpoints.pdf"
+    },
+    {
+      "candidate_id": "ellipses_maintext_representative_clean",
+      "slot_id": "ellipses_maintext_representative",
+      "section": "Main text",
+      "title": "Ellipses: representative reconstruction",
+      "variant": "clean",
+      "root": "figure_root",
+      "pdf": "section6/representative_cases/ellipses_maintext_representative_clean.pdf"
+    },
+    {
+      "candidate_id": "zalesak_maintext_metrics",
+      "slot_id": "zalesak_maintext_metrics",
+      "section": "Main text",
+      "title": "Zalesak: quantitative comparison",
+      "variant": "unpaired",
+      "root": "figure_root",
+      "pdf": "section6/summary_plots/zalesak_maintext_metrics.pdf"
+    },
+    {
+      "candidate_id": "zalesak_maintext_representative_with_endpoints",
+      "slot_id": "zalesak_maintext_representative",
+      "section": "Main text",
+      "title": "Zalesak: representative reconstruction",
+      "variant": "with_endpoints",
+      "root": "figure_root",
+      "pdf": "section6/representative_cases/zalesak_maintext_representative_with_endpoints.pdf"
+    },
+    {
+      "candidate_id": "zalesak_maintext_representative_clean",
+      "slot_id": "zalesak_maintext_representative",
+      "section": "Main text",
+      "title": "Zalesak: representative reconstruction",
+      "variant": "clean",
+      "root": "figure_root",
+      "pdf": "section6/representative_cases/zalesak_maintext_representative_clean.pdf"
+    },
+    {
+      "candidate_id": "lines_all_methods",
+      "slot_id": "lines_all_methods",
+      "section": "Appendix",
+      "title": "Lines: all-method summary",
+      "variant": "unpaired",
+      "root": "figure_root",
+      "pdf": "all_method_summary_plots/lines_all_methods_2x2.pdf"
+    },
+    {
+      "candidate_id": "squares_all_methods",
+      "slot_id": "squares_all_methods",
+      "section": "Appendix",
+      "title": "Squares: all-method summary",
+      "variant": "unpaired",
+      "root": "figure_root",
+      "pdf": "all_method_summary_plots/squares_all_methods_2x2.pdf"
+    },
+    {
+      "candidate_id": "circles_all_methods",
+      "slot_id": "circles_all_methods",
+      "section": "Appendix",
+      "title": "Circles: all-method summary",
+      "variant": "unpaired",
+      "root": "figure_root",
+      "pdf": "all_method_summary_plots/circles_all_methods_5x2_axes.pdf"
+    },
+    {
+      "candidate_id": "ellipses_all_methods",
+      "slot_id": "ellipses_all_methods",
+      "section": "Appendix",
+      "title": "Ellipses: all-method summary",
+      "variant": "unpaired",
+      "root": "figure_root",
+      "pdf": "all_method_summary_plots/ellipses_all_methods_5x2_axes.pdf"
+    },
+    {
+      "candidate_id": "zalesak_all_methods",
+      "slot_id": "zalesak_all_methods",
+      "section": "Appendix",
+      "title": "Zalesak: all-method summary",
+      "variant": "unpaired",
+      "root": "figure_root",
+      "pdf": "all_method_summary_plots/zalesak_all_methods_2x2.pdf"
+    },
+    {
+      "candidate_id": "lines_resolution_with_endpoints",
+      "slot_id": "lines_resolution",
+      "section": "Appendix",
+      "title": "Lines: resolution study",
+      "variant": "with_endpoints",
+      "root": "figure_root",
+      "pdf": "resolution/lines/summary_plots/lines_resolution_cartesian_vs_perturbed_with_endpoints.pdf"
+    },
+    {
+      "candidate_id": "lines_resolution_clean",
+      "slot_id": "lines_resolution",
+      "section": "Appendix",
+      "title": "Lines: resolution study",
+      "variant": "clean",
+      "root": "figure_root",
+      "pdf": "resolution/lines/summary_plots/lines_resolution_cartesian_vs_perturbed_clean.pdf"
+    },
+    {
+      "candidate_id": "squares_resolution_with_endpoints",
+      "slot_id": "squares_resolution",
+      "section": "Appendix",
+      "title": "Squares: resolution study",
+      "variant": "with_endpoints",
+      "root": "figure_root",
+      "pdf": "resolution/squares/summary_plots/squares_resolution_cartesian_vs_perturbed_with_endpoints.pdf"
+    },
+    {
+      "candidate_id": "squares_resolution_clean",
+      "slot_id": "squares_resolution",
+      "section": "Appendix",
+      "title": "Squares: resolution study",
+      "variant": "clean",
+      "root": "figure_root",
+      "pdf": "resolution/squares/summary_plots/squares_resolution_cartesian_vs_perturbed_clean.pdf"
+    },
+    {
+      "candidate_id": "circles_resolution_with_endpoints",
+      "slot_id": "circles_resolution",
+      "section": "Appendix",
+      "title": "Circles: resolution study",
+      "variant": "with_endpoints",
+      "root": "figure_root",
+      "pdf": "resolution/circles/summary_plots/circles_resolution_cartesian_vs_perturbed_with_endpoints.pdf"
+    },
+    {
+      "candidate_id": "circles_resolution_clean",
+      "slot_id": "circles_resolution",
+      "section": "Appendix",
+      "title": "Circles: resolution study",
+      "variant": "clean",
+      "root": "figure_root",
+      "pdf": "resolution/circles/summary_plots/circles_resolution_cartesian_vs_perturbed_clean.pdf"
+    },
+    {
+      "candidate_id": "ellipses_resolution_with_endpoints",
+      "slot_id": "ellipses_resolution",
+      "section": "Appendix",
+      "title": "Ellipses: resolution study",
+      "variant": "with_endpoints",
+      "root": "figure_root",
+      "pdf": "resolution/ellipses/summary_plots/ellipses_resolution_cartesian_vs_perturbed_with_endpoints.pdf"
+    },
+    {
+      "candidate_id": "ellipses_resolution_clean",
+      "slot_id": "ellipses_resolution",
+      "section": "Appendix",
+      "title": "Ellipses: resolution study",
+      "variant": "clean",
+      "root": "figure_root",
+      "pdf": "resolution/ellipses/summary_plots/ellipses_resolution_cartesian_vs_perturbed_clean.pdf"
+    },
+    {
+      "candidate_id": "zalesak_resolution_with_endpoints",
+      "slot_id": "zalesak_resolution",
+      "section": "Appendix",
+      "title": "Zalesak: resolution study",
+      "variant": "with_endpoints",
+      "root": "figure_root",
+      "pdf": "resolution/zalesak/summary_plots/zalesak_resolution_cartesian_vs_perturbed_with_endpoints.pdf"
+    },
+    {
+      "candidate_id": "zalesak_resolution_clean",
+      "slot_id": "zalesak_resolution",
+      "section": "Appendix",
+      "title": "Zalesak: resolution study",
+      "variant": "clean",
+      "root": "figure_root",
+      "pdf": "resolution/zalesak/summary_plots/zalesak_resolution_cartesian_vs_perturbed_clean.pdf"
+    },
+    {
+      "candidate_id": "ellipses_appendix_c0_metrics",
+      "slot_id": "ellipses_appendix_c0_metrics",
+      "section": "Appendix",
+      "title": "Ellipses: guarded C0 metrics",
+      "variant": "unpaired",
+      "root": "c0_root",
+      "pdf": "summary_plots/ellipses_appendix_c0_2x2.pdf"
+    },
+    {
+      "candidate_id": "ellipses_appendix_c0_representative_with_endpoints",
+      "slot_id": "ellipses_appendix_c0_representative",
+      "section": "Appendix",
+      "title": "Ellipses: guarded C0 representative",
+      "variant": "with_endpoints",
+      "root": "c0_root",
+      "pdf": "representative_cases/ellipses_appendix_c0_representative_with_endpoints.pdf"
+    },
+    {
+      "candidate_id": "ellipses_appendix_c0_representative_clean",
+      "slot_id": "ellipses_appendix_c0_representative",
+      "section": "Appendix",
+      "title": "Ellipses: guarded C0 representative",
+      "variant": "clean",
+      "root": "c0_root",
+      "pdf": "representative_cases/ellipses_appendix_c0_representative_clean.pdf"
+    },
+    {
+      "candidate_id": "zalesak_appendix_c0_metrics",
+      "slot_id": "zalesak_appendix_c0_metrics",
+      "section": "Appendix",
+      "title": "Zalesak: guarded C0 metrics",
+      "variant": "unpaired",
+      "root": "c0_root",
+      "pdf": "summary_plots/zalesak_appendix_c0_2x2.pdf"
+    },
+    {
+      "candidate_id": "zalesak_appendix_c0_representative_with_endpoints",
+      "slot_id": "zalesak_appendix_c0_representative",
+      "section": "Appendix",
+      "title": "Zalesak: guarded C0 representative",
+      "variant": "with_endpoints",
+      "root": "c0_root",
+      "pdf": "representative_cases/zalesak_appendix_c0_representative_with_endpoints.pdf"
+    },
+    {
+      "candidate_id": "zalesak_appendix_c0_representative_clean",
+      "slot_id": "zalesak_appendix_c0_representative",
+      "section": "Appendix",
+      "title": "Zalesak: guarded C0 representative",
+      "variant": "clean",
+      "root": "c0_root",
+      "pdf": "representative_cases/zalesak_appendix_c0_representative_clean.pdf"
+    }
+  ]
+}
