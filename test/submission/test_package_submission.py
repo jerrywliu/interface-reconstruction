@@ -16,6 +16,7 @@ from submission.package_submission import (
     DEFAULT_PAPER_ENTRYPOINT,
     RELEASE_PAYLOADS,
     SubmissionPackagingError,
+    _extract_archive_safely,
     _safe_relative_path,
     build_submission_package,
     discover_paper_source_files,
@@ -35,6 +36,14 @@ def _sha256(path: Path) -> str:
 
 def _manifest_identifier(release: Path) -> str:
     return f"sha256:{_sha256(release / 'SHA256SUMS')}"
+
+
+def _tree_snapshot(root: Path) -> dict[str, str]:
+    return {
+        path.relative_to(root).as_posix(): _sha256(path)
+        for path in sorted(root.rglob("*"))
+        if path.is_file() and ".git" not in path.relative_to(root).parts
+    }
 
 
 def _passing_audit(root: Path) -> AuditReport:
@@ -86,7 +95,21 @@ def _git(root: Path, *arguments: str) -> str:
 def _write_fake_latexmk(path: Path, *, fail_at: int | None = None) -> Path:
     path.write_text(
         "#!/usr/bin/env python3\n"
-        "import pathlib, sys\n"
+        "import os, pathlib, sys\n"
+        "if '-norc' not in sys.argv:\n"
+        "    print('missing -norc', file=sys.stderr)\n"
+        "    raise SystemExit(10)\n"
+        "for variable in ('TEXINPUTS', 'BIBINPUTS', 'BSTINPUTS', 'TEXMFHOME', "
+        "'TEXMFCONFIG', 'TEXMFVAR', 'TEXMFCACHE', 'TEXMFOUTPUT', 'HOME', "
+        "'XDG_CONFIG_HOME', 'LATEXMKRC', 'LATEXMKRCSYS', 'PERL5LIB', "
+        "'PERL5OPT'):\n"
+        "    if 'hostile' in os.environ.get(variable, ''):\n"
+        "        print(f'hostile environment leaked through {variable}', file=sys.stderr)\n"
+        "        raise SystemExit(11)\n"
+        "for variable in ('TEXINPUTS', 'BIBINPUTS', 'BSTINPUTS'):\n"
+        "    if os.environ.get(variable) != 'interface-reconstruction-paper//:':\n"
+        "        print(f'unsanitized search path {variable}', file=sys.stderr)\n"
+        "        raise SystemExit(12)\n"
         "script = pathlib.Path(__file__)\n"
         "counter = script.with_suffix('.count')\n"
         "count = int(counter.read_text()) + 1 if counter.exists() else 1\n"
@@ -115,12 +138,23 @@ def _make_inputs(tmp_path: Path) -> tuple[Path, Path, Path, str, Path]:
     tmp_path.mkdir(parents=True, exist_ok=True)
     release = tmp_path / "release_final"
     for source_relative, _, _ in RELEASE_PAYLOADS:
+        if source_relative == "SHA256SUMS":
+            continue
         path = release / source_relative
         if source_relative == "diagnostics/source_snapshot.tar.gz":
             _write_source_snapshot(path)
             continue
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(f"synthetic {source_relative}\n", encoding="utf-8")
+    release_manifest = release / "SHA256SUMS"
+    release_files = sorted(path for path in release.rglob("*") if path.is_file())
+    release_manifest.write_text(
+        "".join(
+            f"{_sha256(path)}  {path.relative_to(release).as_posix()}\n"
+            for path in release_files
+        ),
+        encoding="utf-8",
+    )
 
     paper = tmp_path / "paper-worktree"
     source = paper / "interface-reconstruction-paper"
@@ -183,6 +217,7 @@ def _plan(tmp_path: Path, output: Path):
         approved_figures_manifest=manifest,
         raw_data_deposition="https://doi.org/10.1234/interface.release",
         raw_data_manifest_identifier=_manifest_identifier(release),
+        acknowledge_unverified_remote_deposit=True,
         latexmk_executable=str(latexmk),
         output_dir=output,
         audit_runner=_passing_audit,
@@ -258,6 +293,7 @@ def test_plan_fails_closed_when_release_audit_fails(tmp_path):
             approved_figures_manifest=manifest,
             raw_data_deposition="https://doi.org/10.1234/interface.release",
             raw_data_manifest_identifier=_manifest_identifier(release),
+            acknowledge_unverified_remote_deposit=True,
             latexmk_executable=str(latexmk),
             output_dir=output,
             audit_runner=_failed_audit,
@@ -287,6 +323,7 @@ def test_plan_rejects_unapproved_manuscript_graphic(tmp_path):
             approved_figures_manifest=manifest,
             raw_data_deposition="https://doi.org/10.1234/interface.release",
             raw_data_manifest_identifier=_manifest_identifier(release),
+            acknowledge_unverified_remote_deposit=True,
             latexmk_executable=str(latexmk),
             output_dir=tmp_path / "package",
             audit_runner=_passing_audit,
@@ -325,9 +362,17 @@ def test_build_stages_compact_payload_and_valid_checksums(tmp_path):
     assert inventory["raw_data"]["deposition"]["manifest_identifier"].startswith(
         "sha256:"
     )
+    assert (
+        inventory["raw_data"]["deposition"]["verification_status"]
+        == "manual_acknowledgment_remote_contents_unverified"
+    )
+    assert inventory["raw_data"]["deposition"]["network_assertion_made"] is False
+    assert not (package / "provenance" / "deposit").exists()
     assert inventory["release"]["audit_passed"] is True
+    assert inventory["release"]["staged_payloads_verified_against_release_manifest"]
     assert inventory["paper"]["git_commit"] == plan.paper_commit
     assert inventory["paper"]["clean_pinned_worktree_verified"] is True
+    assert inventory["paper"]["bytes_materialized_from_pinned_git_objects"] is True
     assert (
         inventory["approved_figures"][0]["approval_reference"] == "synthetic-review-1"
     )
@@ -336,6 +381,8 @@ def test_build_stages_compact_payload_and_valid_checksums(tmp_path):
     )
     assert build_record["staged_compile_passed"] is True
     assert build_record["compile_outputs_in_package"] is False
+    assert build_record["external_tex_search_environment_discarded"] is True
+    assert build_record["user_texmf_and_latexmkrc_disabled"] is True
     assert int(Path(plan.latexmk_executable).with_suffix(".count").read_text()) == 3
 
 
@@ -347,6 +394,7 @@ def test_plan_requires_exact_clean_paper_commit(tmp_path):
         "approved_figures_manifest": manifest,
         "raw_data_deposition": "https://doi.org/10.1234/interface.release",
         "raw_data_manifest_identifier": _manifest_identifier(release),
+        "acknowledge_unverified_remote_deposit": True,
         "latexmk_executable": str(latexmk),
         "output_dir": tmp_path / "package",
         "audit_runner": _passing_audit,
@@ -372,6 +420,7 @@ def test_plan_rejects_inner_paper_directory_as_worktree_root(tmp_path):
             approved_figures_manifest=manifest,
             raw_data_deposition="https://doi.org/10.1234/interface.release",
             raw_data_manifest_identifier=_manifest_identifier(release),
+            acknowledge_unverified_remote_deposit=True,
             latexmk_executable=str(latexmk),
             output_dir=tmp_path / "package",
             audit_runner=_passing_audit,
@@ -409,6 +458,7 @@ def test_plan_fails_when_disposable_manuscript_compile_fails(tmp_path):
             approved_figures_manifest=manifest,
             raw_data_deposition="https://doi.org/10.1234/interface.release",
             raw_data_manifest_identifier=_manifest_identifier(release),
+            acknowledge_unverified_remote_deposit=True,
             latexmk_executable=str(latexmk),
             output_dir=tmp_path / "package",
             audit_runner=_passing_audit,
@@ -429,6 +479,7 @@ def test_build_fails_closed_when_extracted_manuscript_compile_fails(tmp_path):
         approved_figures_manifest=manifest,
         raw_data_deposition="https://doi.org/10.1234/interface.release",
         raw_data_manifest_identifier=_manifest_identifier(release),
+        acknowledge_unverified_remote_deposit=True,
         latexmk_executable=str(latexmk),
         output_dir=output,
         audit_runner=_passing_audit,
@@ -455,6 +506,215 @@ def test_build_rechecks_paper_worktree_after_planning(tmp_path):
     assert not output.exists()
 
 
+@pytest.mark.parametrize("relative", ("perturbed_sweep.csv", "SHA256SUMS"))
+def test_build_rejects_release_payload_mutated_after_planning(tmp_path, relative):
+    output = tmp_path / "deliverable" / "bundle"
+    plan = _plan(tmp_path / "inputs", output)
+    payload = plan.release_root / relative
+    payload.write_text("mutated after planning\n", encoding="utf-8")
+
+    with pytest.raises(
+        SubmissionPackagingError, match="staged source checksum mismatch"
+    ):
+        build_submission_package(plan)
+
+    assert not output.exists()
+    assert not output.with_suffix(".tar.gz").exists()
+
+
+@pytest.mark.parametrize("index_flag", ("--assume-unchanged", "--skip-worktree"))
+def test_paper_bytes_come_from_commit_despite_hidden_worktree_edit(
+    tmp_path, index_flag
+):
+    release, paper, manifest, paper_commit, latexmk = _make_inputs(tmp_path)
+    entrypoint = paper / DEFAULT_PAPER_ENTRYPOINT
+    committed_bytes = subprocess.run(
+        ["git", "-C", str(paper), "show", f"{paper_commit}:{DEFAULT_PAPER_ENTRYPOINT}"],
+        check=True,
+        capture_output=True,
+    ).stdout
+    figure_relative = "interface-reconstruction-paper/figs/approved.pdf"
+    committed_figure = subprocess.run(
+        ["git", "-C", str(paper), "show", f"{paper_commit}:{figure_relative}"],
+        check=True,
+        capture_output=True,
+    ).stdout
+    entrypoint.write_text("hostile worktree replacement\n", encoding="utf-8")
+    worktree_figure = paper / figure_relative
+    worktree_figure.write_bytes(b"hostile worktree figure\n")
+    _git(
+        paper,
+        "update-index",
+        index_flag,
+        DEFAULT_PAPER_ENTRYPOINT,
+        figure_relative,
+    )
+    assert _git(paper, "status", "--porcelain", "--untracked-files=all") == ""
+
+    output = tmp_path / "bundle"
+    plan = plan_submission_package(
+        release_root=release,
+        paper_worktree_root=paper,
+        paper_commit=paper_commit,
+        approved_figures_manifest=manifest,
+        raw_data_deposition="https://doi.org/10.1234/interface.release",
+        raw_data_manifest_identifier=_manifest_identifier(release),
+        acknowledge_unverified_remote_deposit=True,
+        latexmk_executable=str(latexmk),
+        output_dir=output,
+        audit_runner=_passing_audit,
+        checksum_verifier=_checksums_pass,
+        pdf_inspector=_vector_pdf,
+    )
+    package, _ = build_submission_package(plan, create_archive=False)
+
+    packaged_entrypoint = package / "manuscript" / "source" / DEFAULT_PAPER_ENTRYPOINT
+    assert packaged_entrypoint.read_bytes() == committed_bytes
+    assert packaged_entrypoint.read_bytes() != entrypoint.read_bytes()
+    packaged_figure = package / "manuscript" / "source" / figure_relative
+    assert packaged_figure.read_bytes() == committed_figure
+    assert packaged_figure.read_bytes() != worktree_figure.read_bytes()
+
+
+def test_compile_environment_discards_hostile_tex_configuration(tmp_path, monkeypatch):
+    hostile_home = tmp_path / "hostile-home"
+    hostile_home.mkdir()
+    (hostile_home / ".latexmkrc").write_text("die 'hostile rc loaded';\n")
+    for variable in (
+        "TEXINPUTS",
+        "BIBINPUTS",
+        "BSTINPUTS",
+        "TEXMFHOME",
+        "TEXMFCONFIG",
+        "TEXMFVAR",
+        "TEXMFCACHE",
+        "TEXMFOUTPUT",
+        "LATEXMKRC",
+        "LATEXMKRCSYS",
+        "PERL5LIB",
+        "PERL5OPT",
+    ):
+        monkeypatch.setenv(variable, f"/hostile/{variable.lower()}")
+    monkeypatch.setenv("HOME", str(hostile_home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(hostile_home / ".config"))
+
+    output = tmp_path / "bundle"
+    plan = _plan(tmp_path / "inputs", output)
+
+    assert plan.paper_commit
+    assert not output.exists()
+
+
+def test_remote_deposit_requires_evidence_or_explicit_manual_acknowledgment(tmp_path):
+    release, paper, manifest, paper_commit, latexmk = _make_inputs(tmp_path)
+    common = {
+        "release_root": release,
+        "paper_worktree_root": paper,
+        "paper_commit": paper_commit,
+        "approved_figures_manifest": manifest,
+        "raw_data_deposition": "https://doi.org/10.1234/interface.release",
+        "raw_data_manifest_identifier": _manifest_identifier(release),
+        "latexmk_executable": str(latexmk),
+        "output_dir": tmp_path / "bundle",
+        "audit_runner": _passing_audit,
+        "checksum_verifier": _checksums_pass,
+        "pdf_inspector": _vector_pdf,
+    }
+    with pytest.raises(SubmissionPackagingError, match="remote deposit contents"):
+        plan_submission_package(**common)
+
+    bad_manifest = tmp_path / "bad-downloaded-SHA256SUMS"
+    bad_manifest.write_text("different bytes\n", encoding="utf-8")
+    with pytest.raises(SubmissionPackagingError, match="bytes do not match"):
+        plan_submission_package(
+            deposited_release_manifest=bad_manifest,
+            **common,
+        )
+
+
+def test_supplied_deposit_manifest_is_checked_and_packaged(tmp_path):
+    release, paper, manifest, paper_commit, latexmk = _make_inputs(tmp_path)
+    downloaded = tmp_path / "downloaded-SHA256SUMS"
+    downloaded.write_bytes((release / "SHA256SUMS").read_bytes())
+    output = tmp_path / "bundle"
+    plan = plan_submission_package(
+        release_root=release,
+        paper_worktree_root=paper,
+        paper_commit=paper_commit,
+        approved_figures_manifest=manifest,
+        raw_data_deposition="https://doi.org/10.1234/interface.release",
+        raw_data_manifest_identifier=_manifest_identifier(release),
+        deposited_release_manifest=downloaded,
+        latexmk_executable=str(latexmk),
+        output_dir=output,
+        audit_runner=_passing_audit,
+        checksum_verifier=_checksums_pass,
+        pdf_inspector=_vector_pdf,
+    )
+    package, _ = build_submission_package(plan, create_archive=False)
+
+    evidence = package / "provenance" / "deposit" / "SHA256SUMS.downloaded"
+    assert evidence.read_bytes() == (release / "SHA256SUMS").read_bytes()
+    inventory = json.loads((package / "INVENTORY.json").read_text(encoding="utf-8"))
+    deposition = inventory["raw_data"]["deposition"]
+    assert deposition["verification_status"] == "supplied_manifest_bytes_verified"
+    assert deposition["supplied_manifest_bytes_verified"] is True
+    assert deposition["network_assertion_made"] is False
+
+
+def test_dry_run_plan_does_not_mutate_release_paper_or_output(tmp_path):
+    inputs = tmp_path / "inputs"
+    release, paper, manifest, paper_commit, latexmk = _make_inputs(inputs)
+    release_before = _tree_snapshot(release)
+    paper_before = _tree_snapshot(paper)
+    output = tmp_path / "deliverable" / "bundle"
+
+    plan_submission_package(
+        release_root=release,
+        paper_worktree_root=paper,
+        paper_commit=paper_commit,
+        approved_figures_manifest=manifest,
+        raw_data_deposition="https://doi.org/10.1234/interface.release",
+        raw_data_manifest_identifier=_manifest_identifier(release),
+        acknowledge_unverified_remote_deposit=True,
+        latexmk_executable=str(latexmk),
+        output_dir=output,
+        audit_runner=_passing_audit,
+        checksum_verifier=_checksums_pass,
+        pdf_inspector=_vector_pdf,
+    )
+
+    assert _tree_snapshot(release) == release_before
+    assert _tree_snapshot(paper) == paper_before
+    assert not output.exists()
+    assert not output.with_suffix(".tar.gz").exists()
+    assert not list(output.parent.glob(f".{output.name}.staging-*"))
+
+
+@pytest.mark.parametrize("member_kind", ("traversal", "symlink", "special"))
+def test_archive_extraction_rejects_hostile_members(tmp_path, member_kind):
+    archive_path = tmp_path / f"{member_kind}.tar.gz"
+    with tarfile.open(archive_path, "w:gz") as archive:
+        if member_kind == "traversal":
+            info = tarfile.TarInfo("../outside")
+            info.size = 1
+            archive.addfile(info, io.BytesIO(b"x"))
+        elif member_kind == "symlink":
+            info = tarfile.TarInfo("bundle/link")
+            info.type = tarfile.SYMTYPE
+            info.linkname = "../../outside"
+            archive.addfile(info)
+        else:
+            info = tarfile.TarInfo("bundle/device")
+            info.type = tarfile.CHRTYPE
+            archive.addfile(info)
+
+    with pytest.raises(SubmissionPackagingError, match="unsafe|link|special"):
+        _extract_archive_safely(archive_path, tmp_path / "extract")
+
+    assert not (tmp_path / "outside").exists()
+
+
 def test_deterministic_archives_match_for_identical_inputs(tmp_path):
     inputs = tmp_path / "inputs"
     release, paper, manifest, paper_commit, latexmk = _make_inputs(inputs)
@@ -469,6 +729,7 @@ def test_deterministic_archives_match_for_identical_inputs(tmp_path):
             approved_figures_manifest=manifest,
             raw_data_deposition="https://doi.org/10.1234/interface.release",
             raw_data_manifest_identifier=_manifest_identifier(release),
+            acknowledge_unverified_remote_deposit=True,
             latexmk_executable=str(latexmk),
             output_dir=output,
             audit_runner=_passing_audit,

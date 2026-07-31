@@ -15,12 +15,18 @@ It does not modify the release, the paper source, or Overleaf.
 6. A non-placeholder DOI or URL for the complete raw-data deposit.
 7. A `sha256:<digest>` identifier for the exact `SHA256SUMS` deposited with the
    complete release.
+8. Either a locally downloaded/fetched copy of the deposited `SHA256SUMS`, or an
+   explicit acknowledgment that remote deposit contents remain a manual gate.
 
 The packager reruns the full release audit and verifies every entry in the release
 checksum manifest. A stale audit claim, incomplete sweep, failed run, changed raw
 file, missing checksum, dirty or mismatched paper worktree, failed manuscript
 compile, rasterized figure, unembedded figure font, unapproved
 `\includegraphics` target, or mismatched deposit-manifest digest stops packaging.
+Every compact release payload is checked again after it is copied into staging,
+using the digest frozen in the release `SHA256SUMS`. This closes the interval
+between planning and materialization; mutating either a payload or the manifest
+after planning aborts packaging and removes partial outputs.
 
 Generate and verify the complete-release checksum manifest after all final release
 artifacts have been installed:
@@ -47,9 +53,12 @@ test -z "$(git -C "$PAPER_WORKTREE" status --porcelain --untracked-files=all)"
 test -f "$PAPER_WORKTREE/interface-reconstruction-paper/interface-reconstruction.tex"
 ```
 
-The packager requires the full 40-character commit, confirms `HEAD` exactly, and
-packages only tracked files under `interface-reconstruction-paper/`. Approved
-figures must also be tracked at that commit.
+The packager requires the full 40-character commit and confirms `HEAD` exactly.
+It enumerates the committed tree with `git ls-tree` and materializes source and
+figure bytes with `git cat-file` using pinned object IDs. Worktree cleanliness is
+still required as an operator gate, but worktree bytes are never packaged. Thus
+`assume-unchanged`, `skip-worktree`, and worktree races cannot substitute different
+manuscript content. Approved figures must be tracked at that commit.
 
 ## Figure Approval Manifest
 
@@ -85,6 +94,23 @@ fails on any mismatch. The normalized deposit record in the package binds togeth
 the deposition location, release directory name, `SHA256SUMS` filename, and exact
 manifest digest. The external deposit must expose the same `SHA256SUMS` bytes.
 
+Preferred verification supplies a copy downloaded or fetched from the deposit:
+
+```sh
+export DEPOSITED_MANIFEST=/path/to/downloaded/SHA256SUMS
+cmp "$RELEASE/SHA256SUMS" "$DEPOSITED_MANIFEST"
+```
+
+Pass it with `--deposited-release-manifest "$DEPOSITED_MANIFEST"`. The packager
+requires exact byte equality, rechecks the staged evidence digest, and includes it
+as `provenance/deposit/SHA256SUMS.downloaded`.
+
+When the deposited manifest cannot yet be fetched, omit that file and pass
+`--acknowledge-unverified-remote-deposit`. The package then records
+`manual_acknowledgment_remote_contents_unverified`. This is an explicit manual
+submission gate, not a remote verification claim. The packager performs no network
+request and never claims that a DOI/URL was reachable or that its contents matched.
+
 ## Dry Run
 
 Dry run performs the expensive scientific audit, full checksum verification,
@@ -100,6 +126,7 @@ python submission/package_submission.py \
   --review-bundle "$REVIEW_PDF" \
   --raw-data-deposition "https://doi.org/10.xxxx/record" \
   --raw-data-manifest-id "$RAW_DATA_MANIFEST_ID" \
+  --deposited-release-manifest "$DEPOSITED_MANIFEST" \
   --output-dir "$PACKAGE" \
   --dry-run
 ```
@@ -110,11 +137,22 @@ only when a staged directory without the outer archive is required.
 
 For a real archive, manuscript compilation is checked three times: from the exact
 planned source during preflight, from a disposable copy of the staged package, and
-from a disposable copy of the extracted archive. The compile uses `latexmk -pdf`
+from a disposable copy of the extracted archive. The compile uses `latexmk -norc -pdf`
 with `interface-reconstruction-paper/interface-reconstruction.tex`. All TeX build
 outputs go to temporary directories outside the package. Package checksums are
 verified before and after the extracted-source compile, so generated files cannot
 contaminate checksum-sealed content.
+
+Compile gates discard inherited `TEXINPUTS`, `BIBINPUTS`, `BSTINPUTS`, all
+`TEXMF*` variables, latexmk rc selectors, and Perl library/startup overrides. They
+install exact source-only search prefixes with system defaults, use isolated
+`HOME`, `XDG_CONFIG_HOME`, `TEXMFHOME`, `TEXMFCONFIG`, and cache directories, and
+pass `-norc` so user and global latexmkrc files cannot affect acceptance. System
+TeX packages remain available through the normal distribution defaults.
+
+Dry-run writes only to temporary directories. It does not create the output
+directory, archive, staging sibling, TeX product in the paper checkout, or release
+artifact.
 
 ## Package Layout
 
@@ -132,6 +170,7 @@ provenance/approved_figures.csv
 provenance/manuscript_build.json
 provenance/vector_pdf_qa.json
 provenance/RAW_DATA_DEPOSITION.md
+provenance/deposit/SHA256SUMS.downloaded  # only when supplied
 provenance/release/...
 ```
 
@@ -146,7 +185,8 @@ merge-, and fallback-indexed tables. It retains the aggregate result table, run
 inventory, full-release checksum manifest, and deposition record. The external
 deposit must contain the complete audited release and the exact checksum manifest
 identified by `--raw-data-manifest-id`, so each paper result can be traced back to
-its raw bundle.
+its raw bundle. Without a supplied deposited manifest, remote-content verification
+remains a separately recorded manual gate.
 
 The package's own `SHA256SUMS` covers every staged file except itself. Verify it with:
 

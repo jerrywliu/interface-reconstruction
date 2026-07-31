@@ -32,7 +32,7 @@ from submission.audit_final_release import (
 from submission.pdf_vector_qa import PdfQaReport, inspect_pdf
 
 
-PACKAGE_SCHEMA_VERSION = 2
+PACKAGE_SCHEMA_VERSION = 3
 RELEASE_SHA256_MANIFEST = "SHA256SUMS"
 DEFAULT_PAPER_SOURCE_SUBDIR = "interface-reconstruction-paper"
 DEFAULT_PAPER_ENTRYPOINT = "interface-reconstruction-paper/interface-reconstruction.tex"
@@ -123,15 +123,33 @@ class SubmissionPackagingError(RuntimeError):
 @dataclass(frozen=True)
 class ApprovedFigure:
     paper_path: str
-    source_path: Path
+    source_path: str
+    source: "ContentSource"
     sha256: str
     approval_reference: str
 
 
 @dataclass(frozen=True)
+class GitTreeEntry:
+    path: str
+    object_id: str
+    mode: str
+
+
+@dataclass(frozen=True)
+class ContentSource:
+    kind: str
+    label: str
+    expected_sha256: str
+    path: Path | None = None
+    git_repository: Path | None = None
+    git_object_id: str | None = None
+
+
+@dataclass(frozen=True)
 class PlannedFile:
     destination: str
-    source: Path
+    source: ContentSource
     role: str
 
 
@@ -151,6 +169,7 @@ class PaperGitState:
     source_subdir: str
     entrypoint: str
     tracked_paths: frozenset[str]
+    tree_entries: tuple[GitTreeEntry, ...]
 
 
 @dataclass(frozen=True)
@@ -160,6 +179,9 @@ class RawDataDeposit:
     manifest_name: str
     manifest_identifier: str
     manifest_sha256: str
+    verification_status: str
+    supplied_manifest_bytes_verified: bool
+    network_assertion_made: bool
 
 
 @dataclass(frozen=True)
@@ -187,6 +209,10 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
 
 
 def _safe_relative_path(value: str, label: str) -> str:
@@ -217,6 +243,64 @@ def _require_regular_file(path: Path, label: str) -> Path:
     return path
 
 
+def _filesystem_source(
+    path: Path,
+    *,
+    label: str,
+    expected_sha256: str | None = None,
+) -> ContentSource:
+    path = _require_regular_file(path, label)
+    digest = expected_sha256 or _sha256(path)
+    if len(digest) != 64 or any(
+        character not in "0123456789abcdef" for character in digest
+    ):
+        raise SubmissionPackagingError(f"invalid expected SHA-256 for {label}")
+    return ContentSource(
+        kind="filesystem",
+        label=label,
+        expected_sha256=digest,
+        path=path,
+    )
+
+
+def _load_release_sha256_manifest(path: Path) -> dict[str, str]:
+    path = _require_regular_file(path, "complete-release checksum manifest")
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError) as exc:
+        raise SubmissionPackagingError(
+            f"could not read complete-release checksum manifest: {exc}"
+        ) from exc
+    records: dict[str, str] = {}
+    ordered_paths: list[str] = []
+    for line_number, line in enumerate(lines, start=1):
+        if len(line) < 67 or line[64:66] != "  ":
+            raise SubmissionPackagingError(
+                f"invalid complete-release checksum line {line_number}"
+            )
+        digest = line[:64].lower()
+        relative = _safe_relative_path(
+            line[66:], f"complete-release checksum path on line {line_number}"
+        )
+        if any(character not in "0123456789abcdef" for character in digest):
+            raise SubmissionPackagingError(
+                f"invalid complete-release SHA-256 on line {line_number}"
+            )
+        if relative in records:
+            raise SubmissionPackagingError(
+                f"duplicate complete-release checksum path: {relative}"
+            )
+        records[relative] = digest
+        ordered_paths.append(relative)
+    if not records:
+        raise SubmissionPackagingError("complete-release checksum manifest is empty")
+    if ordered_paths != sorted(ordered_paths):
+        raise SubmissionPackagingError(
+            "complete-release checksum manifest paths are not sorted"
+        )
+    return records
+
+
 def _validate_deposition_location(value: str) -> str:
     value = value.strip()
     if not DEPOSITION_PATTERN.match(value):
@@ -234,7 +318,10 @@ def _validate_deposition(
     location: str,
     manifest_identifier: str,
     release_root: Path,
-) -> RawDataDeposit:
+    *,
+    deposited_manifest_file: Path | None,
+    acknowledge_unverified_remote_deposit: bool,
+) -> tuple[RawDataDeposit, ContentSource | None]:
     location = _validate_deposition_location(location)
     identifier = manifest_identifier.strip().lower()
     match = SHA256_IDENTIFIER_PATTERN.fullmatch(identifier)
@@ -246,26 +333,77 @@ def _validate_deposition(
         release_root / RELEASE_SHA256_MANIFEST,
         "complete-release checksum manifest",
     )
-    actual_digest = _sha256(manifest)
+    manifest_bytes = manifest.read_bytes()
+    actual_digest = _sha256_bytes(manifest_bytes)
     expected_digest = match.group(1)
     if actual_digest != expected_digest:
         raise SubmissionPackagingError(
             "raw-data manifest identifier does not match the audited release "
             f"{RELEASE_SHA256_MANIFEST}: expected sha256:{actual_digest}"
         )
-    return RawDataDeposit(
-        location=location,
-        release_name=release_root.name,
-        manifest_name=RELEASE_SHA256_MANIFEST,
-        manifest_identifier=identifier,
-        manifest_sha256=actual_digest,
+    if deposited_manifest_file is not None and acknowledge_unverified_remote_deposit:
+        raise SubmissionPackagingError(
+            "provide either a deposited manifest file or the explicit manual "
+            "acknowledgment, not both"
+        )
+    evidence: ContentSource | None = None
+    if deposited_manifest_file is not None:
+        supplied = _require_regular_file(
+            deposited_manifest_file,
+            "supplied deposited release manifest",
+        )
+        supplied_bytes = supplied.read_bytes()
+        if supplied_bytes != manifest_bytes:
+            raise SubmissionPackagingError(
+                "supplied deposited release manifest bytes do not match the "
+                "audited release SHA256SUMS"
+            )
+        evidence = _filesystem_source(
+            supplied,
+            label="supplied deposited release manifest",
+            expected_sha256=actual_digest,
+        )
+        verification_status = "supplied_manifest_bytes_verified"
+        supplied_verified = True
+    else:
+        if not acknowledge_unverified_remote_deposit:
+            raise SubmissionPackagingError(
+                "remote deposit contents are unverified; supply "
+                "--deposited-release-manifest or explicitly acknowledge the "
+                "manual gate with --acknowledge-unverified-remote-deposit"
+            )
+        verification_status = "manual_acknowledgment_remote_contents_unverified"
+        supplied_verified = False
+    return (
+        RawDataDeposit(
+            location=location,
+            release_name=release_root.name,
+            manifest_name=RELEASE_SHA256_MANIFEST,
+            manifest_identifier=identifier,
+            manifest_sha256=actual_digest,
+            verification_status=verification_status,
+            supplied_manifest_bytes_verified=supplied_verified,
+            network_assertion_made=False,
+        ),
+        evidence,
     )
 
 
 def _run_git(worktree_root: Path, arguments: Sequence[str]) -> bytes:
+    environment = os.environ.copy()
+    for variable in (
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    ):
+        environment.pop(variable, None)
     try:
         completed = subprocess.run(
-            ["git", "-C", str(worktree_root), *arguments],
+            ["git", "--no-replace-objects", "-C", str(worktree_root), *arguments],
+            env=environment,
             check=False,
             capture_output=True,
         )
@@ -279,6 +417,35 @@ def _run_git(worktree_root: Path, arguments: Sequence[str]) -> bytes:
             f"paper Git inspection failed ({' '.join(arguments)}): {detail}"
         )
     return completed.stdout
+
+
+def _read_git_blob(repository: Path, object_id: str) -> bytes:
+    return _run_git(repository, ("cat-file", "blob", object_id))
+
+
+def _paper_entry_map(state: PaperGitState) -> dict[str, GitTreeEntry]:
+    return {entry.path: entry for entry in state.tree_entries}
+
+
+def _git_content_source(
+    state: PaperGitState,
+    path: str,
+    *,
+    label: str,
+) -> ContentSource:
+    entry = _paper_entry_map(state).get(path)
+    if entry is None:
+        raise SubmissionPackagingError(
+            f"{label} is not present in paper commit {state.commit}: {path}"
+        )
+    data = _read_git_blob(state.worktree_root, entry.object_id)
+    return ContentSource(
+        kind="git_blob",
+        label=f"paper-git:{state.commit}:{path}",
+        expected_sha256=_sha256_bytes(data),
+        git_repository=state.worktree_root,
+        git_object_id=entry.object_id,
+    )
 
 
 def inspect_paper_worktree(
@@ -344,13 +511,28 @@ def inspect_paper_worktree(
             "paper worktree is not clean: " + "; ".join(entries[:5])
         )
 
-    tracked = _run_git(
+    tree = _run_git(
         worktree_root,
-        ("ls-files", "-z", "--", source_subdir),
+        ("ls-tree", "-r", "-z", "--full-tree", actual_commit, "--", source_subdir),
     )
-    tracked_paths = frozenset(
-        item.decode("utf-8") for item in tracked.split(b"\0") if item
-    )
+    entries: list[GitTreeEntry] = []
+    for raw_record in tree.split(b"\0"):
+        if not raw_record:
+            continue
+        try:
+            metadata, raw_path = raw_record.split(b"\t", 1)
+            mode, object_type, object_id = metadata.decode("ascii").split(" ", 2)
+            path = _safe_relative_path(raw_path.decode("utf-8"), "paper Git tree path")
+        except (UnicodeError, ValueError) as exc:
+            raise SubmissionPackagingError(
+                "could not parse pinned paper Git tree"
+            ) from exc
+        if object_type != "blob" or mode not in {"100644", "100755"}:
+            raise SubmissionPackagingError(
+                f"paper commit contains unsupported entry {path}: {mode} {object_type}"
+            )
+        entries.append(GitTreeEntry(path=path, object_id=object_id, mode=mode))
+    tracked_paths = frozenset(entry.path for entry in entries)
     if not tracked_paths:
         raise SubmissionPackagingError(
             f"paper commit tracks no files under {source_subdir}/"
@@ -359,23 +541,17 @@ def inspect_paper_worktree(
         raise SubmissionPackagingError(
             f"paper entrypoint is not tracked at {expected_commit}: {entrypoint}"
         )
-    source_root = worktree_root.joinpath(*source_parts)
-    if not source_root.is_dir():
-        raise SubmissionPackagingError(
-            f"paper source subdirectory is missing: {source_root}"
-        )
-    if not (worktree_root / entrypoint).is_file():
-        raise SubmissionPackagingError(f"paper entrypoint is missing: {entrypoint}")
     return PaperGitState(
         worktree_root=worktree_root,
         commit=actual_commit,
         source_subdir=source_subdir,
         entrypoint=entrypoint,
         tracked_paths=tracked_paths,
+        tree_entries=tuple(sorted(entries, key=lambda item: item.path)),
     )
 
 
-def _paper_source_is_allowed(path: Path) -> bool:
+def _paper_source_is_allowed(path: Path | PurePosixPath) -> bool:
     return (
         path.suffix.lower() in PAPER_SOURCE_SUFFIXES
         or path.name in PAPER_SOURCE_NAMES
@@ -421,41 +597,54 @@ def discover_paper_source_files(
     return tuple(included), tuple(excluded)
 
 
-def _require_tracked_paper_file(
-    path: Path,
-    paper_state: PaperGitState,
-    label: str,
-) -> None:
-    try:
-        relative = path.resolve().relative_to(paper_state.worktree_root).as_posix()
-    except ValueError as exc:
+def discover_paper_source_paths(
+    state: PaperGitState,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Select manuscript source paths from the pinned commit tree."""
+    included: list[str] = []
+    excluded: list[str] = []
+    for relative in sorted(state.tracked_paths):
+        pure = PurePosixPath(relative)
+        if _paper_source_is_allowed(pure):
+            included.append(relative)
+        else:
+            excluded.append(relative)
+    if not included:
         raise SubmissionPackagingError(
-            f"{label} is outside the pinned paper worktree: {path}"
-        ) from exc
-    if relative not in paper_state.tracked_paths:
-        raise SubmissionPackagingError(
-            f"{label} is not tracked at paper commit {paper_state.commit}: {relative}"
+            "pinned paper commit contains no allowlisted source files"
         )
+    if not any(PurePosixPath(path).suffix.lower() == ".tex" for path in included):
+        raise SubmissionPackagingError("pinned paper commit contains no TeX source")
+    return tuple(included), tuple(excluded)
 
 
 def discover_imported_graphics(
     paper_source_root: Path, paper_source_files: Sequence[Path]
 ) -> tuple[str, ...]:
     """Return uncommented ``includegraphics`` targets from manuscript TeX files."""
+    texts: list[tuple[str, str]] = []
+    for path in paper_source_files:
+        if path.suffix.lower() != ".tex":
+            continue
+        try:
+            texts.append((str(path), path.read_text(encoding="utf-8")))
+        except (OSError, UnicodeError) as exc:
+            raise SubmissionPackagingError(
+                f"could not read TeX source {path}: {exc}"
+            ) from exc
+    return _discover_imported_graphics_from_texts(texts)
+
+
+def _discover_imported_graphics_from_texts(
+    texts: Sequence[tuple[str, str]],
+) -> tuple[str, ...]:
     pattern = re.compile(
         r"\\includegraphics(?:\s*\[[^\]]*\])?\s*\{([^}]+)\}",
         re.MULTILINE,
     )
     targets: set[str] = set()
-    for path in paper_source_files:
-        if path.suffix.lower() != ".tex":
-            continue
-        try:
-            lines = path.read_text(encoding="utf-8").splitlines()
-        except (OSError, UnicodeError) as exc:
-            raise SubmissionPackagingError(
-                f"could not read TeX source {path}: {exc}"
-            ) from exc
+    for label, text_value in texts:
+        lines = text_value.splitlines()
         uncommented = []
         for line in lines:
             pieces = re.split(r"(?<!\\)%", line, maxsplit=1)
@@ -475,12 +664,37 @@ def discover_imported_graphics(
     return tuple(sorted(targets))
 
 
+def discover_imported_graphics_from_git(
+    state: PaperGitState,
+    paper_source_paths: Sequence[str],
+) -> tuple[str, ...]:
+    entries = _paper_entry_map(state)
+    texts: list[tuple[str, str]] = []
+    for path in paper_source_paths:
+        if PurePosixPath(path).suffix.lower() != ".tex":
+            continue
+        entry = entries[path]
+        try:
+            text_value = _read_git_blob(state.worktree_root, entry.object_id).decode(
+                "utf-8"
+            )
+        except UnicodeError as exc:
+            raise SubmissionPackagingError(
+                f"could not decode TeX source from paper commit: {path}"
+            ) from exc
+        texts.append((path, text_value))
+    return _discover_imported_graphics_from_texts(texts)
+
+
 def load_approved_figures(
-    manifest_path: Path, paper_source_root: Path
+    manifest_path: Path, paper_source: Path | PaperGitState
 ) -> tuple[ApprovedFigure, ...]:
     """Load checksum-pinned, explicitly approved vector figures."""
     manifest_path = _require_regular_file(manifest_path, "approved-figures manifest")
-    paper_source_root = Path(paper_source_root).resolve()
+    paper_state = paper_source if isinstance(paper_source, PaperGitState) else None
+    paper_source_root = (
+        None if paper_state is not None else Path(paper_source).resolve()
+    )
     try:
         with manifest_path.open(newline="", encoding="utf-8") as stream:
             reader = csv.DictReader(stream)
@@ -523,16 +737,27 @@ def load_approved_figures(
         source_relative = _safe_relative_path(
             source_value, f"figure row {row_number} source_path"
         )
-        source_path = paper_source_root.joinpath(*PurePosixPath(source_relative).parts)
-        try:
-            source_path.resolve().relative_to(paper_source_root)
-        except ValueError as exc:
-            raise SubmissionPackagingError(
-                f"approved figure escapes the paper source root: {source_value}"
-            ) from exc
-        source_path = _require_regular_file(
-            source_path, f"approved figure {paper_path}"
-        )
+        if paper_state is not None:
+            source = _git_content_source(
+                paper_state,
+                source_relative,
+                label=f"approved figure {paper_path}",
+            )
+        else:
+            assert paper_source_root is not None
+            filesystem_path = paper_source_root.joinpath(
+                *PurePosixPath(source_relative).parts
+            )
+            try:
+                filesystem_path.resolve().relative_to(paper_source_root)
+            except ValueError as exc:
+                raise SubmissionPackagingError(
+                    f"approved figure escapes the paper source root: {source_value}"
+                ) from exc
+            source = _filesystem_source(
+                filesystem_path,
+                label=f"approved figure {paper_path}",
+            )
 
         expected_digest = str(row.get("sha256", "")).strip().lower()
         if len(expected_digest) != 64 or any(
@@ -541,7 +766,7 @@ def load_approved_figures(
             raise SubmissionPackagingError(
                 f"figure row {row_number} has an invalid SHA-256 digest"
             )
-        actual_digest = _sha256(source_path)
+        actual_digest = source.expected_sha256
         if actual_digest != expected_digest:
             raise SubmissionPackagingError(
                 f"approved figure checksum mismatch: {paper_path}"
@@ -554,7 +779,8 @@ def load_approved_figures(
         figures.append(
             ApprovedFigure(
                 paper_path=paper_path,
-                source_path=source_path,
+                source_path=source_relative,
+                source=source,
                 sha256=expected_digest,
                 approval_reference=approval_reference,
             )
@@ -682,13 +908,44 @@ def _compile_manuscript_tree(
         build_dir = scratch / "build"
         build_dir.mkdir()
         environment = os.environ.copy()
+        for variable in tuple(environment):
+            if variable.startswith("TEXMF") or variable in {
+                "TEXINPUTS",
+                "BIBINPUTS",
+                "BSTINPUTS",
+                "LATEXMKRC",
+                "LATEXMKRCSYS",
+                "PERL5LIB",
+                "PERL5OPT",
+            }:
+                environment.pop(variable, None)
         search_prefix = f"{source_subdir}//:"
         for variable in ("TEXINPUTS", "BIBINPUTS", "BSTINPUTS"):
-            environment[variable] = search_prefix + environment.get(variable, "")
+            environment[variable] = search_prefix
+        isolated_home = scratch / "home"
+        isolated_texmf_home = scratch / "texmf-home"
+        isolated_texmf_config = scratch / "texmf-config"
+        isolated_texmf_var = scratch / "texmf-var"
+        for directory in (
+            isolated_home,
+            isolated_home / ".config",
+            isolated_texmf_home,
+            isolated_texmf_config,
+            isolated_texmf_var,
+        ):
+            directory.mkdir()
+        environment["HOME"] = str(isolated_home)
+        environment["XDG_CONFIG_HOME"] = str(isolated_home / ".config")
+        environment["TEXMFHOME"] = str(isolated_texmf_home)
+        environment["TEXMFCONFIG"] = str(isolated_texmf_config)
+        environment["TEXMFVAR"] = str(isolated_texmf_var)
+        environment["TEXMFCACHE"] = str(isolated_texmf_var)
+        environment["TEXMFOUTPUT"] = str(build_dir)
         environment["SOURCE_DATE_EPOCH"] = "0"
         environment["TZ"] = "UTC"
         command = [
             executable,
+            "-norc",
             "-pdf",
             "-interaction=nonstopmode",
             "-halt-on-error",
@@ -745,7 +1002,7 @@ def _materialize_manuscript_files(
         relative = item.destination[len(prefix) :]
         if not relative:
             raise SubmissionPackagingError("empty manuscript package destination")
-        _copy_file(
+        _copy_content_source(
             item.source,
             destination_root.joinpath(*PurePosixPath(relative).parts),
         )
@@ -782,6 +1039,8 @@ def plan_submission_package(
     raw_data_deposition: str,
     raw_data_manifest_identifier: str,
     output_dir: Path,
+    deposited_release_manifest: Path | None = None,
+    acknowledge_unverified_remote_deposit: bool = False,
     paper_source_subdir: str = DEFAULT_PAPER_SOURCE_SUBDIR,
     paper_entrypoint: str = DEFAULT_PAPER_ENTRYPOINT,
     latexmk_executable: str = "latexmk",
@@ -803,10 +1062,12 @@ def plan_submission_package(
         source_subdir=paper_source_subdir,
         entrypoint=paper_entrypoint,
     )
-    deposition = _validate_deposition(
+    deposition, deposit_evidence = _validate_deposition(
         raw_data_deposition,
         raw_data_manifest_identifier,
         release_root,
+        deposited_manifest_file=deposited_release_manifest,
+        acknowledge_unverified_remote_deposit=(acknowledge_unverified_remote_deposit),
     )
     archive_path = output_dir.with_suffix(output_dir.suffix + ".tar.gz")
     if output_dir.exists():
@@ -826,33 +1087,22 @@ def plan_submission_package(
                 f"output directory cannot be inside the {label}: {output_dir}"
             )
     audit_report = _audit_release_or_fail(release_root, audit_runner, checksum_verifier)
-
-    paper_files, excluded = discover_paper_source_files(
-        paper_state.worktree_root,
-        tracked_paths=paper_state.tracked_paths,
+    release_manifest_records = _load_release_sha256_manifest(
+        release_root / RELEASE_SHA256_MANIFEST
     )
+
+    paper_files, excluded = discover_paper_source_paths(paper_state)
     figures = load_approved_figures(
         approved_figures_manifest,
-        paper_state.worktree_root,
+        paper_state,
     )
-    for source in paper_files:
-        _require_tracked_paper_file(source, paper_state, "manuscript source")
-    for figure in figures:
-        _require_tracked_paper_file(
-            figure.source_path,
-            paper_state,
-            f"approved figure {figure.paper_path}",
-        )
-    approved_source_paths = {
-        figure.source_path.relative_to(paper_state.worktree_root).as_posix()
-        for figure in figures
-    }
+    approved_source_paths = {figure.source_path for figure in figures}
     excluded = tuple(
         relative for relative in excluded if relative not in approved_source_paths
     )
     approved_paths = {figure.paper_path for figure in figures}
     imported_graphics = set(
-        discover_imported_graphics(paper_state.worktree_root, paper_files)
+        discover_imported_graphics_from_git(paper_state, paper_files)
     )
     missing_approvals = sorted(imported_graphics - approved_paths)
     if missing_approvals:
@@ -861,47 +1111,82 @@ def plan_submission_package(
             + ", ".join(missing_approvals)
         )
     figure_qa: list[PdfQaReport] = []
-    for figure in figures:
-        try:
-            report = pdf_inspector(figure.source_path, require_fonts=False)
-        except Exception as exc:
-            raise SubmissionPackagingError(
-                f"could not inspect approved figure {figure.paper_path}: {exc}"
-            ) from exc
-        if not report.passed:
-            raise SubmissionPackagingError(
-                f"approved figure is not submission-grade vector PDF: "
-                f"{figure.paper_path}: {', '.join(report.issues)}"
-            )
-        figure_qa.append(report)
+    with tempfile.TemporaryDirectory(prefix="submission-figure-qa-") as temp:
+        for index, figure in enumerate(figures):
+            figure_path = Path(temp) / f"figure-{index}.pdf"
+            _copy_content_source(figure.source, figure_path)
+            try:
+                report = pdf_inspector(figure_path, require_fonts=False)
+            except Exception as exc:
+                raise SubmissionPackagingError(
+                    f"could not inspect approved figure {figure.paper_path}: {exc}"
+                ) from exc
+            if not report.passed:
+                raise SubmissionPackagingError(
+                    f"approved figure is not submission-grade vector PDF: "
+                    f"{figure.paper_path}: {', '.join(report.issues)}"
+                )
+            figure_qa.append(report)
 
     planned: list[PlannedFile] = []
     destinations: set[str] = set()
 
-    def add(destination: str, source: Path, role: str) -> None:
+    def add(destination: str, source: ContentSource, role: str) -> None:
         destination = _safe_relative_path(destination, "package destination")
         if destination in destinations:
             raise SubmissionPackagingError(
                 f"duplicate package destination: {destination}"
             )
         destinations.add(destination)
-        planned.append(
-            PlannedFile(destination, _require_regular_file(source, role), role)
-        )
+        planned.append(PlannedFile(destination, source, role))
 
     for source_relative, destination, role in RELEASE_PAYLOADS:
-        add(destination, release_root / source_relative, role)
-    for source in paper_files:
-        relative = source.relative_to(paper_state.worktree_root).as_posix()
-        add(f"manuscript/source/{relative}", source, "manuscript_source")
+        if source_relative == RELEASE_SHA256_MANIFEST:
+            expected_digest = deposition.manifest_sha256
+        else:
+            expected_digest = release_manifest_records.get(source_relative)
+            if expected_digest is None:
+                raise SubmissionPackagingError(
+                    "release payload is absent from the complete-release checksum "
+                    f"manifest: {source_relative}"
+                )
+        add(
+            destination,
+            _filesystem_source(
+                release_root / source_relative,
+                label=f"release:{source_relative}",
+                expected_sha256=expected_digest,
+            ),
+            role,
+        )
+    for relative in paper_files:
+        add(
+            f"manuscript/source/{relative}",
+            _git_content_source(
+                paper_state,
+                relative,
+                label=f"manuscript source {relative}",
+            ),
+            "manuscript_source",
+        )
     for figure in figures:
         add(
             f"manuscript/source/{figure.paper_path}",
-            figure.source_path,
+            figure.source,
             "approved_vector_figure",
         )
     for source, relative in _review_bundle_files(review_bundle):
-        add(f"manuscript/review/{relative}", source, "review_bundle")
+        add(
+            f"manuscript/review/{relative}",
+            _filesystem_source(source, label=f"review:{relative}"),
+            "review_bundle",
+        )
+    if deposit_evidence is not None:
+        add(
+            "provenance/deposit/SHA256SUMS.downloaded",
+            deposit_evidence,
+            "deposited_release_manifest_evidence",
+        )
 
     planned_files = tuple(sorted(planned, key=lambda item: item.destination))
     _preflight_manuscript_compile(
@@ -950,29 +1235,31 @@ def _copy_file(source: Path, destination: Path) -> None:
     os.utime(destination, (0, 0), follow_symlinks=False)
 
 
-def _source_label(plan: PackagePlan, source: Path) -> str:
-    for root, prefix in (
-        (plan.release_root, "release"),
-        (plan.paper_worktree_root, "paper"),
-    ):
-        try:
-            relative = source.relative_to(root)
-        except ValueError:
-            continue
-        return f"{prefix}:{relative.as_posix()}"
-    if plan.review_bundle is not None:
-        review_root = (
-            plan.review_bundle
-            if plan.review_bundle.is_dir()
-            else plan.review_bundle.parent
+def _copy_content_source(source: ContentSource, destination: Path) -> None:
+    if source.kind == "filesystem":
+        if source.path is None:
+            raise SubmissionPackagingError(
+                f"filesystem source lacks a path: {source.label}"
+            )
+        _copy_file(_require_regular_file(source.path, source.label), destination)
+    elif source.kind == "git_blob":
+        if source.git_repository is None or source.git_object_id is None:
+            raise SubmissionPackagingError(f"Git source is incomplete: {source.label}")
+        _write_bytes(
+            destination,
+            _read_git_blob(source.git_repository, source.git_object_id),
         )
-        try:
-            relative = source.relative_to(review_root)
-        except ValueError:
-            pass
-        else:
-            return f"review:{relative.as_posix()}"
-    return source.name
+    else:
+        raise SubmissionPackagingError(
+            f"unsupported content-source kind {source.kind!r}: {source.label}"
+        )
+    actual_digest = _sha256(destination)
+    if actual_digest != source.expected_sha256:
+        destination.unlink(missing_ok=True)
+        raise SubmissionPackagingError(
+            f"staged source checksum mismatch for {source.label}: "
+            f"expected {source.expected_sha256}, found {actual_digest}"
+        )
 
 
 def _inventory_entry(
@@ -982,7 +1269,7 @@ def _inventory_entry(
     return InventoryEntry(
         path=planned.destination,
         role=planned.role,
-        source=_source_label(plan, planned.source),
+        source=planned.source.label,
         size_bytes=path.stat().st_size,
         sha256=_sha256(path),
     )
@@ -1011,6 +1298,7 @@ def _write_inventory(
             "audit_passed": True,
             "audit_summary": dict(sorted(plan.audit_summary.items())),
             "full_release_sha256_manifest": "provenance/release/SHA256SUMS",
+            "staged_payloads_verified_against_release_manifest": True,
         },
         "raw_data": {
             "included": False,
@@ -1027,6 +1315,7 @@ def _write_inventory(
             "source_subdirectory": plan.paper_source_subdir,
             "entrypoint": plan.paper_entrypoint,
             "clean_pinned_worktree_verified": True,
+            "bytes_materialized_from_pinned_git_objects": True,
             "tracked_file_count": plan.paper_tracked_file_count,
         },
         "approved_figures": [
@@ -1082,20 +1371,25 @@ This package was assembled from the completed, programmatically audited release
 ## Raw Scientific Data
 
 The 970 raw run bundles and large case/cell/merge diagnostic tables are deliberately
-excluded from this compact submission package. They are deposited at:
+excluded from this compact submission package. Their declared deposit location is:
 
 {plan.raw_data_deposit.location}
 
 `provenance/release/SHA256SUMS` identifies every file in the complete deposited
 release. Its deposit binding is `{plan.raw_data_deposit.manifest_identifier}`.
+Deposit verification status is `{plan.raw_data_deposit.verification_status}`.
+The packager makes no network-access assertion.
 `provenance/RAW_DATA_DEPOSITION.md` records the exclusion boundary.
 
 ## Manuscript Provenance
 
-The manuscript source came from clean paper commit `{plan.paper_commit}`. The
-packager compiled the staged source from a disposable copy. When this package was
-created with its outer archive, it also verified package checksums and compiled a
-disposable copy of the extracted manuscript before reporting success.
+The manuscript source came from paper commit `{plan.paper_commit}`. Source and
+figure bytes were read from pinned Git objects, not from the worktree. The
+packager compiled the staged source from a disposable copy with external TeX
+search paths, user TEXMF trees, and latexmk configuration disabled. When this
+package was created with its outer archive, it also verified package checksums
+and compiled a disposable copy of the extracted manuscript before reporting
+success.
 
 ## Verification
 
@@ -1114,17 +1408,23 @@ def _write_deposition_record(root: Path, plan: PackagePlan) -> None:
     text = f"""# Raw Data Deposition
 
 - Complete release identifier: `{plan.raw_data_deposit.release_name}`
-- Deposition: {plan.raw_data_deposit.location}
+- Declared deposition: {plan.raw_data_deposit.location}
 - Raw data included in this compact package: no
 - Complete release checksum manifest: `provenance/release/SHA256SUMS`
 - Deposited release-manifest identifier: `{plan.raw_data_deposit.manifest_identifier}`
 - Release-manifest filename: `{plan.raw_data_deposit.manifest_name}`
 - Release-manifest SHA-256: `{plan.raw_data_deposit.manifest_sha256}`
+- Verification status: `{plan.raw_data_deposit.verification_status}`
+- Supplied manifest bytes verified: `{str(plan.raw_data_deposit.supplied_manifest_bytes_verified).lower()}`
+- Network assertion made by packager: `{str(plan.raw_data_deposit.network_assertion_made).lower()}`
 
 The external deposit should contain the complete audited release, including
 `raw_runs/` and the case-, cell-, merge-, and fallback-indexed diagnostic tables.
 The compact package retains the aggregate results and run inventory needed to map
-paper results to those deposited bundles.
+paper results to those deposited bundles. When
+`provenance/deposit/SHA256SUMS.downloaded` is present, its bytes were supplied to
+the packager and matched exactly. Otherwise remote contents remain an explicit
+manual submission gate; this record does not claim that the DOI/URL was fetched.
 """
     _write_text(root / "provenance" / "RAW_DATA_DEPOSITION.md", text)
 
@@ -1142,6 +1442,7 @@ def _write_manuscript_build_record(
         "entrypoint": plan.paper_entrypoint,
         "compiler": Path(plan.latexmk_executable).name,
         "compile_arguments": [
+            "-norc",
             "-pdf",
             "-interaction=nonstopmode",
             "-halt-on-error",
@@ -1149,6 +1450,9 @@ def _write_manuscript_build_record(
             plan.paper_entrypoint,
         ],
         "clean_pinned_worktree_verified": True,
+        "paper_bytes_materialized_from_git_objects": True,
+        "external_tex_search_environment_discarded": True,
+        "user_texmf_and_latexmkrc_disabled": True,
         "preflight_compile_passed": True,
         "staged_compile_passed": True,
         "compile_outputs_in_package": False,
@@ -1169,6 +1473,7 @@ def _write_release_audit_record(root: Path, plan: PackagePlan) -> None:
         "release_name": plan.release_root.name,
         "summaries": dict(sorted(plan.audit_summary.items())),
         "full_release_checksums_verified": True,
+        "staged_release_payloads_verified_against_manifest": True,
     }
     _write_text(
         root / "provenance" / "release" / "audit_report.json",
@@ -1417,15 +1722,6 @@ def build_submission_package(
         raise SubmissionPackagingError(
             "paper tracked-file inventory changed after package planning"
         )
-    current_deposit = _validate_deposition(
-        plan.raw_data_deposit.location,
-        plan.raw_data_deposit.manifest_identifier,
-        plan.release_root,
-    )
-    if current_deposit != plan.raw_data_deposit:
-        raise SubmissionPackagingError(
-            "raw-data release-manifest binding changed after package planning"
-        )
     output_dir = plan.output_dir
     archive_path = output_dir.with_suffix(output_dir.suffix + ".tar.gz")
     if output_dir.exists():
@@ -1440,7 +1736,7 @@ def build_submission_package(
     try:
         for item in plan.files:
             destination = staging.joinpath(*PurePosixPath(item.destination).parts)
-            _copy_file(item.source, destination)
+            _copy_content_source(item.source, destination)
 
         _compile_manuscript_tree(
             staging / "manuscript" / "source",
@@ -1532,6 +1828,10 @@ def _plan_payload(plan: PackagePlan) -> dict:
         "raw_data_included": False,
         "raw_data_deposition": plan.raw_data_deposit.location,
         "raw_data_manifest_identifier": (plan.raw_data_deposit.manifest_identifier),
+        "raw_data_deposit_verification_status": (
+            plan.raw_data_deposit.verification_status
+        ),
+        "network_assertion_made": False,
         "paper_commit": plan.paper_commit,
         "paper_entrypoint": plan.paper_entrypoint,
         "manuscript_compile_preflight_passed": True,
@@ -1585,6 +1885,22 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         required=True,
         help="sha256:<digest> of the complete release SHA256SUMS file",
     )
+    parser.add_argument(
+        "--deposited-release-manifest",
+        type=Path,
+        help=(
+            "optional locally downloaded/fetched SHA256SUMS from the deposit; "
+            "its bytes must exactly match the audited release manifest"
+        ),
+    )
+    parser.add_argument(
+        "--acknowledge-unverified-remote-deposit",
+        action="store_true",
+        help=(
+            "explicitly acknowledge that the packager did not verify remote "
+            "deposit contents; required when no deposited manifest is supplied"
+        ),
+    )
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument(
         "--dry-run",
@@ -1613,6 +1929,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             review_bundle=args.review_bundle,
             raw_data_deposition=args.raw_data_deposition,
             raw_data_manifest_identifier=args.raw_data_manifest_identifier,
+            deposited_release_manifest=args.deposited_release_manifest,
+            acknowledge_unverified_remote_deposit=(
+                args.acknowledge_unverified_remote_deposit
+            ),
             output_dir=args.output_dir,
         )
         if args.dry_run:
