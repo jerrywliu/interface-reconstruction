@@ -1,12 +1,14 @@
-import copy
 import csv
 import hashlib
 import io
 import json
+import os
+import subprocess
 import tarfile
 from pathlib import Path
 
 import pytest
+import submission.audit_final_release as audit_module
 
 from submission.audit_final_release import (
     RUN_CONTEXT_FIELDS,
@@ -16,6 +18,8 @@ from submission.audit_final_release import (
 )
 
 
+PRODUCTION_COMMIT = "505aefa454328d4ba34ade5e7247050a0acfc793"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 COMMIT = "a" * 40
 SAVE_NAME = "submission_test_perturb_sweep_lines_linear_r0p5_w0p0_s0"
 
@@ -67,16 +71,23 @@ def _run_context() -> dict[str, object]:
     }
 
 
-def _run_manifest() -> dict:
+def _run_manifest(repository=None) -> dict:
+    executable = (
+        repository / "experiments" / "static" / "lines.py"
+        if repository is not None
+        else Path("experiments/static/lines.py")
+    )
     return {
         "schema_version": 1,
         "source_commit": COMMIT,
         "source_branch": "main",
         "experiment": "lines",
         "command": (
-            "python -m experiments.static.lines --facet_algo linear "
+            f"{executable} --facet_algo linear "
             "--resolution 0.5 --perturb_wiggle 0.0 --perturb_seed 0 "
-            "--plic_fallback LVIRA --corner_behavior_profile pre_f8_corner"
+            "--plic_fallback LVIRA "
+            "--rescue_profile exact_linear_support_only "
+            "--corner_behavior_profile pre_f8_corner"
         ),
         "parameters": {
             "facet_algo": "linear",
@@ -128,24 +139,61 @@ def _config() -> dict:
     }
 
 
+def _git(repository: Path, *arguments: str) -> bytes:
+    return subprocess.check_output(["git", "-C", str(repository), *arguments])
+
+
+@pytest.fixture(autouse=True)
+def _trusted_source_repository(tmp_path, monkeypatch):
+    global COMMIT
+    repository = tmp_path
+    _git(repository, "init", "-q")
+    _git(repository, "config", "user.name", "Release Audit Test")
+    _git(repository, "config", "user.email", "release-audit@example.invalid")
+
+    source_config = _config()
+    source_config["status"] = "candidate_not_frozen"
+    source_config["source"]["target_commit"] = None
+    _write_json(repository / "submission" / "submission_config.json", source_config)
+    (repository / "requirements.txt").write_text("numpy==1.23.4\n", encoding="utf-8")
+    for relative in audit_module.PRODUCTION_SOURCE_SHA256:
+        data = _git(PROJECT_ROOT, "show", f"{PRODUCTION_COMMIT}:{relative}")
+        path = repository / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+
+    _git(repository, "add", ".")
+    environment = {
+        **os.environ,
+        "GIT_AUTHOR_DATE": "2026-07-31T00:00:00+00:00",
+        "GIT_COMMITTER_DATE": "2026-07-31T00:00:00+00:00",
+    }
+    subprocess.check_call(
+        ["git", "-C", str(repository), "commit", "-q", "-m", "fixture source"],
+        env=environment,
+    )
+    COMMIT = _git(repository, "rev-parse", "HEAD").decode().strip()
+    monkeypatch.setattr(audit_module, "FINAL_SOURCE_COMMIT", COMMIT)
+
+
 def _make_release(root: Path) -> Path:
     root.mkdir()
     config = _config()
     _write_json(root / "submission_config.resolved.json", config)
 
-    source_config = copy.deepcopy(config)
-    source_config["status"] = "candidate_not_frozen"
-    source_config["source"]["target_commit"] = None
-    source_config_bytes = (json.dumps(source_config, indent=2) + "\n").encode()
-    requirements_bytes = b"numpy==1.23.4\n"
+    repository = root.parent
+    source_config_bytes = (
+        repository / "submission" / "submission_config.json"
+    ).read_bytes()
+    requirements_bytes = (repository / "requirements.txt").read_bytes()
+    tracked_paths = _git(repository, "ls-files", "-z").rstrip(b"\0").split(b"\0")
+    snapshot_files = {
+        relative.decode(): (repository / relative.decode()).read_bytes()
+        for relative in tracked_paths
+        if relative
+    }
     snapshot_path = root / "diagnostics" / "source_snapshot.tar.gz"
-    _snapshot(
-        snapshot_path,
-        {
-            "submission/submission_config.json": source_config_bytes,
-            "requirements.txt": requirements_bytes,
-        },
-    )
+    _snapshot(snapshot_path, snapshot_files)
     _write_json(
         root / "diagnostics" / "source_state.json",
         {
@@ -153,8 +201,9 @@ def _make_release(root: Path) -> Path:
             "source_branch": "main",
             "source_dirty": False,
             "source_status": [],
+            "excluded_roots": sorted(audit_module.SNAPSHOT_EXCLUDED_ROOTS),
             "snapshot_sha256": hashlib.sha256(snapshot_path.read_bytes()).hexdigest(),
-            "snapshot_file_count": 2,
+            "snapshot_file_count": len(snapshot_files),
         },
     )
     _write_json(
@@ -163,6 +212,7 @@ def _make_release(root: Path) -> Path:
             "repository": {
                 "commit": COMMIT,
                 "branch": "main",
+                "root": str(repository),
                 "source_dirty": False,
             },
             "input_fingerprints": [
@@ -184,11 +234,15 @@ def _make_release(root: Path) -> Path:
         {
             "status": "completed",
             "command": (
-                "python -m experiments.static.run_perturbed_sweeps "
-                "--rescue_profile exact_linear_support_only"
+                f"{repository / 'experiments/static/run_perturbed_sweeps.py'} "
+                "--plic_fallback LVIRA "
+                "--rescue_profile exact_linear_support_only "
+                "--corner_behavior_profile pre_f8_corner"
             ),
             "parameters": {
+                "plic_fallback": "LVIRA",
                 "rescue_profile": "exact_linear_support_only",
+                "corner_behavior_profile": "pre_f8_corner",
             },
             "planned_run_count": 1,
             "planned_case_count": 2,
@@ -238,7 +292,7 @@ def _make_release(root: Path) -> Path:
     )
     _write_jsonl(
         root / "diagnostics" / "run_manifests.jsonl",
-        [{**context, "manifest": _run_manifest()}],
+        [{**context, "manifest": _run_manifest(repository)}],
     )
 
     all_metric_fields = [
@@ -283,6 +337,8 @@ def _make_release(root: Path) -> Path:
         raw_cell = {
             "case_index": case_index,
             "cell_id": f"{case_index},0",
+            "cell_x": case_index,
+            "cell_y": 0,
             "final_facet_class": "linear",
             "facet_geometry_json": json.dumps(
                 {"class": "linear", "p_left": [0, 0], "p_right": [1, 1]}
@@ -309,6 +365,8 @@ def _make_release(root: Path) -> Path:
             *RUN_CONTEXT_FIELDS,
             "case_index",
             "cell_id",
+            "cell_x",
+            "cell_y",
             "final_facet_class",
             "facet_geometry_json",
         ],
@@ -367,7 +425,7 @@ def _make_release(root: Path) -> Path:
     )
 
     bundle = root / "raw_runs" / SAVE_NAME
-    _write_json(bundle / "run_manifest.json", _run_manifest())
+    _write_json(bundle / "run_manifest.json", _run_manifest(repository))
     _write_jsonl(bundle / "metrics" / "case_geometry.jsonl", raw_geometry_rows)
     _write_csv(
         bundle / "metrics" / "case_metrics.csv",
@@ -381,7 +439,14 @@ def _make_release(root: Path) -> Path:
     )
     _write_csv(
         bundle / "metrics" / "cell_metrics.csv",
-        ["case_index", "cell_id", "final_facet_class", "facet_geometry_json"],
+        [
+            "case_index",
+            "cell_id",
+            "cell_x",
+            "cell_y",
+            "final_facet_class",
+            "facet_geometry_json",
+        ],
         raw_cell_rows,
     )
     _write_csv(
@@ -480,50 +545,67 @@ def _rewrite_snapshot(root: Path, files: dict[str, bytes]) -> None:
     _write_json(state_path, state)
 
 
-def _enable_authoritative_rescue_inheritance(root: Path) -> None:
-    snapshot_path = root / "diagnostics" / "source_snapshot.tar.gz"
-    files = _snapshot_files(snapshot_path)
-    files.update(
+def _retarget_release(root: Path, target_commit: str) -> None:
+    config_path = root / "submission_config.resolved.json"
+    config = json.loads(config_path.read_text())
+    config["source"]["target_commit"] = target_commit
+    _write_json(config_path, config)
+
+    state_path = root / "diagnostics" / "source_state.json"
+    state = json.loads(state_path.read_text())
+    state["source_commit"] = target_commit
+    _write_json(state_path, state)
+
+    environment_path = root / "environment.json"
+    environment = json.loads(environment_path.read_text())
+    environment["repository"]["commit"] = target_commit
+    _write_json(environment_path, environment)
+
+    for relative in (
+        "diagnostics/run_inventory.csv",
+        "diagnostics/case_metrics.csv",
+        "diagnostics/cell_metrics.csv",
+        "diagnostics/merge_events.csv",
+        "diagnostics/unresolved_plic_fallbacks.csv",
+    ):
+        path = root / relative
+        fieldnames, rows = _read_csv(path)
+        for row in rows:
+            row["source_commit"] = target_commit
+        _write_csv(path, fieldnames, rows)
+
+    geometry_path = root / "diagnostics" / "case_geometry.jsonl"
+    geometry_rows = [
+        json.loads(line) for line in geometry_path.read_text().splitlines()
+    ]
+    for row in geometry_rows:
+        row["source_commit"] = target_commit
+    _write_jsonl(geometry_path, geometry_rows)
+
+    manifests_path = root / "diagnostics" / "run_manifests.jsonl"
+    manifest_rows = [
+        json.loads(line) for line in manifests_path.read_text().splitlines()
+    ]
+    for row in manifest_rows:
+        row["source_commit"] = target_commit
+        row["manifest"]["source_commit"] = target_commit
+    _write_jsonl(manifests_path, manifest_rows)
+
+    raw_path = root / "raw_runs" / SAVE_NAME / "run_manifest.json"
+    raw = json.loads(raw_path.read_text())
+    raw["source_commit"] = target_commit
+    _write_json(raw_path, raw)
+
+    repository = root.parent
+    tracked = _git(repository, "ls-files", "-z").rstrip(b"\0").split(b"\0")
+    _rewrite_snapshot(
+        root,
         {
-            "submission/run_final_static_sweep.sh": (
-                b"python -m experiments.static.run_perturbed_sweeps "
-                b"--rescue_profile exact_linear_support_only\n"
-            ),
-            "main/structs/meshes/merge_mesh.py": b"""
-class MergeMesh:
-    default_rescue_profile = "exact_linear_support_only"
-
-    def fitFacets(self, merge_ids, rescue_profile="exact_linear_support_only"):
-        pass
-""",
-            "util/reconstruction.py": b"""
-from main.structs.meshes.merge_mesh import MergeMesh
-
-def _run_with_merge(m, merge_ids, algo_kwargs):
-    m.fitFacets(
-        merge_ids,
-        rescue_profile=algo_kwargs.get(
-            "rescue_profile", MergeMesh.default_rescue_profile
-        ),
-    )
-""",
-            "experiments/static/lines.py": b"""
-def main(m, facet_algo, do_c0, output_dirs, plic_fallback, corner_profile):
-    runReconstruction(
-        m,
-        facet_algo,
-        do_c0,
-        0,
-        output_dirs,
-        algo_kwargs={
-            "plic_fallback": plic_fallback,
-            "corner_behavior_profile": corner_profile,
+            relative.decode(): (repository / relative.decode()).read_bytes()
+            for relative in tracked
+            if relative
         },
     )
-""",
-        }
-    )
-    _rewrite_snapshot(root, files)
 
 
 def _omit_rescue_profile_everywhere(root: Path) -> None:
@@ -552,11 +634,17 @@ def _omit_rescue_profile_everywhere(root: Path) -> None:
     consolidated = json.loads(manifests_path.read_text())
     consolidated["rescue_profile"] = ""
     consolidated["manifest"]["parameters"].pop("rescue_profile", None)
+    consolidated["manifest"]["command"] = consolidated["manifest"]["command"].replace(
+        "--rescue_profile exact_linear_support_only ", ""
+    )
     _write_jsonl(manifests_path, [consolidated])
 
     raw_path = root / "raw_runs" / SAVE_NAME / "run_manifest.json"
     raw = json.loads(raw_path.read_text())
     raw["parameters"].pop("rescue_profile", None)
+    raw["command"] = raw["command"].replace(
+        "--rescue_profile exact_linear_support_only ", ""
+    )
     _write_json(raw_path, raw)
 
 
@@ -662,6 +750,40 @@ def test_duplicate_nonfinite_case_and_aggregate_coverage_fail(tmp_path):
     assert "missing aggregate key" in messages
 
 
+def test_csv_trailing_fields_are_rejected_before_reconciliation(tmp_path):
+    root = _make_release(tmp_path / "release")
+    path = root / "raw_runs" / SAVE_NAME / "metrics" / "case_metrics.csv"
+    lines = path.read_text(encoding="utf-8").splitlines()
+    lines[1] += ",injected"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    messages = _messages(report)
+    assert not report.ok
+    assert "has trailing fields beyond the header" in messages
+    assert "injected" in messages
+
+
+@pytest.mark.parametrize("malicious_number", ["1e999999999", "9" * 1000])
+def test_numeric_parsing_rejects_unbounded_exponents_and_lengths(
+    tmp_path, malicious_number
+):
+    root = _make_release(tmp_path / "release")
+    _mutate_csv(
+        root / "diagnostics" / "run_inventory.csv",
+        0,
+        "resolution",
+        malicious_number,
+    )
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    messages = _messages(report)
+    assert not report.ok
+    assert "outside the audited range" in messages or "is too long" in messages
+
+
 def test_missing_scientific_artifact_and_preview_directory_fail(tmp_path):
     root = _make_release(tmp_path / "release")
     bundle = root / "raw_runs" / SAVE_NAME
@@ -702,6 +824,73 @@ def test_source_config_environment_and_run_commit_must_agree(tmp_path):
     assert "environment commit does not match" in messages
     assert "resolved config differs" in messages
     assert "raw run manifest commit mismatch" in messages
+
+
+def test_target_commit_must_exist_as_a_git_object(tmp_path, monkeypatch):
+    root = _make_release(tmp_path / "release")
+    nonexistent = "b" * 40
+    monkeypatch.setattr(audit_module, "FINAL_SOURCE_COMMIT", nonexistent)
+    config_path = root / "submission_config.resolved.json"
+    config = json.loads(config_path.read_text())
+    config["source"]["target_commit"] = nonexistent
+    _write_json(config_path, config)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    messages = _messages(report)
+    assert not report.ok
+    assert "target_commit does not exist as an exact Git commit object" in messages
+
+
+def test_self_reported_snapshot_hash_cannot_hide_git_byte_mismatch(tmp_path):
+    root = _make_release(tmp_path / "release")
+    snapshot_path = root / "diagnostics" / "source_snapshot.tar.gz"
+    files = _snapshot_files(snapshot_path)
+    files["requirements.txt"] += b"tampered==1\n"
+    _rewrite_snapshot(root, files)
+
+    environment_path = root / "environment.json"
+    environment = json.loads(environment_path.read_text())
+    for fingerprint in environment["input_fingerprints"]:
+        if fingerprint["path"] == "requirements.txt":
+            fingerprint["size_bytes"] = len(files["requirements.txt"])
+            fingerprint["sha256"] = hashlib.sha256(
+                files["requirements.txt"]
+            ).hexdigest()
+    _write_json(environment_path, environment)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    messages = _messages(report)
+    assert not report.ok
+    assert (
+        "source snapshot bytes differ from target_commit for requirements.txt"
+        in messages
+    )
+
+
+def test_committed_dead_alternate_call_fails_reviewed_source_fingerprint(
+    tmp_path, monkeypatch
+):
+    root = _make_release(tmp_path / "release")
+    source_path = tmp_path / "experiments" / "static" / "lines.py"
+    source_path.write_bytes(
+        source_path.read_bytes()
+        + b"\n\ndef dead_alternate_path():\n    return runReconstruction()\n"
+    )
+    _git(tmp_path, "add", "experiments/static/lines.py")
+    _git(tmp_path, "commit", "-q", "-m", "add dead alternate path")
+    changed_commit = _git(tmp_path, "rev-parse", "HEAD").decode().strip()
+    monkeypatch.setattr(audit_module, "FINAL_SOURCE_COMMIT", changed_commit)
+    _retarget_release(root, changed_commit)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    messages = _messages(report)
+    assert not report.ok
+    assert "production source fingerprint mismatch" in messages
+    assert "experiments/static/lines.py" in messages
+    assert "source snapshot bytes differ from target_commit" not in messages
 
 
 @pytest.mark.parametrize(
@@ -762,6 +951,23 @@ def test_value_level_reconciliation_rejects_raw_tampering(tmp_path):
     assert "case_metrics.csv/case_index=0 column facet_gap" in messages
 
 
+def test_matching_raw_and_consolidated_non_lvira_fallbacks_still_fail(tmp_path):
+    root = _make_release(tmp_path / "release")
+    _add_provenance_rows(root)
+    for relative in (
+        "diagnostics/unresolved_plic_fallbacks.csv",
+        f"raw_runs/{SAVE_NAME}/metrics/unresolved_plic_fallbacks.csv",
+    ):
+        _mutate_csv(root / relative, 0, "policy", "ELVIRA")
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    messages = _messages(report)
+    assert not report.ok
+    assert messages.count("policy differs from production") >= 2
+    assert "'ELVIRA' != 'LVIRA'" in messages
+
+
 def test_reconciliation_reports_missing_and_unexpected_stable_keys(tmp_path):
     root = _make_release(tmp_path / "release")
     _mutate_csv(root / "diagnostics" / "cell_metrics.csv", 0, "cell_id", "99,99")
@@ -772,8 +978,33 @@ def test_reconciliation_reports_missing_and_unexpected_stable_keys(tmp_path):
     assert not report.ok
     assert "missing consolidated row" in messages
     assert "cell_id=0,0" in messages
-    assert "unexpected consolidated row" in messages
-    assert "cell_id=99,99" in messages
+    assert "cell_id is not canonical for cell_x/cell_y" in messages
+    assert "'99,99' != '0,0'" in messages
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value", "expected_message"),
+    [
+        ("cell_id", "00,0", "cell_id is not canonical"),
+        ("cell_x", "0.5", "cell_x is not a canonical integer"),
+        ("cell_y", "1e999999999", "cell_y is not a canonical integer"),
+    ],
+)
+def test_cell_ids_require_bounded_integer_coordinates(
+    tmp_path, field_name, value, expected_message
+):
+    root = _make_release(tmp_path / "release")
+    for relative in (
+        "diagnostics/cell_metrics.csv",
+        f"raw_runs/{SAVE_NAME}/metrics/cell_metrics.csv",
+    ):
+        _mutate_csv(root / relative, 0, field_name, value)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    messages = _messages(report)
+    assert not report.ok
+    assert expected_message in messages
 
 
 def test_equivalent_decimal_serialization_reconciles_exactly(tmp_path):
@@ -794,6 +1025,89 @@ def test_expected_case_summary_repair_is_reproduced_before_reconciliation(tmp_pa
     report = audit_final_release(root, required_runs=1, required_cases=2)
 
     assert report.ok, _messages(report)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "option", "expected"),
+    [
+        ("plic_fallback", "--plic_fallback", "LVIRA"),
+        ("rescue_profile", "--rescue_profile", "exact_linear_support_only"),
+        (
+            "corner_behavior_profile",
+            "--corner_behavior_profile",
+            "pre_f8_corner",
+        ),
+    ],
+)
+@pytest.mark.parametrize("mutation", ["parameter", "command"])
+def test_controller_binds_every_production_profile(
+    tmp_path, field_name, option, expected, mutation
+):
+    root = _make_release(tmp_path / "release")
+    path = root / "sweep_manifest.json"
+    manifest = json.loads(path.read_text())
+    if mutation == "parameter":
+        manifest["parameters"][field_name] = "different"
+    else:
+        manifest["command"] = manifest["command"].replace(
+            f"{option} {expected}", f"{option} different"
+        )
+    _write_json(path, manifest)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    messages = _messages(report)
+    assert not report.ok
+    assert "controller" in messages
+    assert field_name in messages or option in messages
+
+
+@pytest.mark.parametrize(
+    ("field_name", "option", "expected"),
+    [
+        ("plic_fallback", "--plic_fallback", "LVIRA"),
+        ("rescue_profile", "--rescue_profile", "exact_linear_support_only"),
+        (
+            "corner_behavior_profile",
+            "--corner_behavior_profile",
+            "pre_f8_corner",
+        ),
+    ],
+)
+def test_explicit_raw_profile_requires_matching_raw_command_evidence(
+    tmp_path, field_name, option, expected
+):
+    root = _make_release(tmp_path / "release")
+    path = root / "raw_runs" / SAVE_NAME / "run_manifest.json"
+    manifest = json.loads(path.read_text())
+    manifest["command"] = manifest["command"].replace(f"{option} {expected}", "")
+    _write_json(path, manifest)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    messages = _messages(report)
+    assert not report.ok
+    assert (
+        "raw child manifest command does not contain exactly one matching" in messages
+    )
+    assert option in messages
+
+
+def test_consolidated_child_command_is_profile_bound(tmp_path):
+    root = _make_release(tmp_path / "release")
+    path = root / "diagnostics" / "run_manifests.jsonl"
+    row = json.loads(path.read_text())
+    row["manifest"]["command"] = row["manifest"]["command"].replace(
+        "--plic_fallback LVIRA", "--plic_fallback Youngs"
+    )
+    _write_jsonl(path, [row])
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    messages = _messages(report)
+    assert not report.ok
+    assert "consolidated child manifest command" in messages
+    assert "--plic_fallback" in messages
 
 
 @pytest.mark.parametrize(
@@ -869,7 +1183,6 @@ def test_rescue_profile_is_enforced_across_all_provenance_layers(tmp_path, sourc
 def test_authoritative_non_zalesak_rescue_inheritance_is_allowed(tmp_path):
     root = _make_release(tmp_path / "release")
     _add_provenance_rows(root)
-    _enable_authoritative_rescue_inheritance(root)
     _omit_rescue_profile_everywhere(root)
 
     report = audit_final_release(root, required_runs=1, required_cases=2)
@@ -881,10 +1194,32 @@ def test_authoritative_non_zalesak_rescue_inheritance_is_allowed(tmp_path):
     assert "1 non-Zalesak runs" in report.warnings[0]
 
 
+def test_rescue_omission_pattern_must_match_across_provenance_layers(tmp_path):
+    root = _make_release(tmp_path / "release")
+    _omit_rescue_profile_everywhere(root)
+    _mutate_csv(
+        root / "diagnostics" / "run_inventory.csv",
+        0,
+        "rescue_profile",
+        "exact_linear_support_only",
+    )
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    messages = _messages(report)
+    assert not report.ok
+    assert "omission pattern is inconsistent across provenance layers" in messages
+    assert len(report.warnings) == 1
+    assert "Audited rescue_profile" in report.warnings[0]
+
+
 def test_matching_child_option_allows_redundant_raw_field_omission(tmp_path):
     root = _make_release(tmp_path / "release")
-    _enable_authoritative_rescue_inheritance(root)
     _omit_rescue_profile_everywhere(root)
+    consolidated_path = root / "diagnostics" / "run_manifests.jsonl"
+    consolidated = json.loads(consolidated_path.read_text())
+    consolidated["manifest"]["command"] += " --rescue_profile exact_linear_support_only"
+    _write_jsonl(consolidated_path, [consolidated])
     raw_path = root / "raw_runs" / SAVE_NAME / "run_manifest.json"
     raw = json.loads(raw_path.read_text())
     raw["command"] += " --rescue_profile exact_linear_support_only"
@@ -897,12 +1232,27 @@ def test_matching_child_option_allows_redundant_raw_field_omission(tmp_path):
     assert len(report.warnings) == 1
 
 
+def test_rescue_command_omission_pattern_must_match_between_manifests(tmp_path):
+    root = _make_release(tmp_path / "release")
+    _omit_rescue_profile_everywhere(root)
+    raw_path = root / "raw_runs" / SAVE_NAME / "run_manifest.json"
+    raw = json.loads(raw_path.read_text())
+    raw["command"] += " --rescue_profile exact_linear_support_only"
+    _write_json(raw_path, raw)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    messages = _messages(report)
+    assert not report.ok
+    assert "command-option omission pattern is inconsistent" in messages
+    assert len(report.warnings) == 1
+
+
 @pytest.mark.parametrize("conflict_source", ["raw_parameter", "raw_command"])
 def test_inherited_rescue_profile_rejects_lower_level_conflicts(
     tmp_path, conflict_source
 ):
     root = _make_release(tmp_path / "release")
-    _enable_authoritative_rescue_inheritance(root)
     _omit_rescue_profile_everywhere(root)
     raw_path = root / "raw_runs" / SAVE_NAME / "run_manifest.json"
     raw = json.loads(raw_path.read_text())
@@ -922,7 +1272,6 @@ def test_inherited_rescue_profile_rejects_lower_level_conflicts(
 
 def test_rescue_inheritance_rejects_conflicting_global_pin(tmp_path):
     root = _make_release(tmp_path / "release")
-    _enable_authoritative_rescue_inheritance(root)
     _omit_rescue_profile_everywhere(root)
     manifest_path = root / "sweep_manifest.json"
     manifest = json.loads(manifest_path.read_text())
@@ -934,12 +1283,11 @@ def test_rescue_inheritance_rejects_conflicting_global_pin(tmp_path):
     messages = _messages(report)
     assert not report.ok
     assert "omission cannot be inherited" in messages
-    assert "sweep manifest rescue_profile does not match" in messages
+    assert "controller parameter rescue_profile differs from production" in messages
 
 
 def test_rescue_inheritance_rejects_missing_child_command_proof(tmp_path):
     root = _make_release(tmp_path / "release")
-    _enable_authoritative_rescue_inheritance(root)
     _omit_rescue_profile_everywhere(root)
     raw_path = root / "raw_runs" / SAVE_NAME / "run_manifest.json"
     raw = json.loads(raw_path.read_text())
@@ -950,18 +1298,17 @@ def test_rescue_inheritance_rejects_missing_child_command_proof(tmp_path):
 
     messages = _messages(report)
     assert not report.ok
-    assert "raw rescue_profile omission is unproven" in messages
+    assert "raw child manifest command evidence is invalid" in messages
     assert "command is absent or empty" in messages
 
 
 def test_rescue_inheritance_rejects_unverified_child_driver(tmp_path):
     root = _make_release(tmp_path / "release")
-    _enable_authoritative_rescue_inheritance(root)
     _omit_rescue_profile_everywhere(root)
     raw_path = root / "raw_runs" / SAVE_NAME / "run_manifest.json"
     raw = json.loads(raw_path.read_text())
     raw["command"] = raw["command"].replace(
-        "experiments.static.lines", "experiments.static.circles"
+        "experiments/static/lines.py", "experiments/static/circles.py"
     )
     _write_json(raw_path, raw)
 
@@ -969,13 +1316,11 @@ def test_rescue_inheritance_rejects_unverified_child_driver(tmp_path):
 
     messages = _messages(report)
     assert not report.ok
-    assert "raw rescue_profile omission is unproven" in messages
-    assert "does not invoke snapshotted driver" in messages
+    assert "raw child manifest does not invoke reviewed driver" in messages
 
 
 def test_rescue_inheritance_rejects_unproven_source_default(tmp_path):
     root = _make_release(tmp_path / "release")
-    _enable_authoritative_rescue_inheritance(root)
     _omit_rescue_profile_everywhere(root)
     snapshot_path = root / "diagnostics" / "source_snapshot.tar.gz"
     files = _snapshot_files(snapshot_path)
@@ -992,7 +1337,8 @@ def _run_with_merge(m, merge_ids, algo_kwargs):
     messages = _messages(report)
     assert not report.ok
     assert "omission cannot be inherited" in messages
-    assert "reconstruction wrapper does not inherit" in messages
+    assert "source snapshot bytes differ from target_commit" in messages
+    assert "production source fingerprint mismatch" in messages
 
 
 def test_sha256_manifest_is_sorted_complete_and_verifiable(tmp_path):
