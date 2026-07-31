@@ -239,6 +239,25 @@ def _make_inputs(tmp_path: Path) -> tuple[Path, Path, Path, str, Path]:
         encoding="utf-8",
     )
     (source / "references.bib").write_text("% bibliography\n", encoding="utf-8")
+    generator_map = paper / "docs" / "PAPER_EXPERIMENT_MAP.md"
+    generator_map.parent.mkdir(parents=True)
+    generator_map.write_text(
+        "# Paper Experiment Map\n\nPinned final-generator map.\n",
+        encoding="utf-8",
+    )
+    generator_submission = paper / "submission"
+    generator_submission.mkdir()
+    (generator_submission / "final_figure_orchestrator.py").write_text(
+        "print('synthetic orchestrator')\n", encoding="utf-8"
+    )
+    (generator_submission / "run_final_figure_orchestrator").write_text(
+        '#!/bin/sh\nexec python3 submission/final_figure_orchestrator.py "$@"\n',
+        encoding="utf-8",
+    )
+    (generator_submission / "run_final_figure_orchestrator").chmod(0o755)
+    (generator_submission / "final_figure_candidates.json").write_text(
+        '{"candidates": []}\n', encoding="utf-8"
+    )
     (paper / ".gitignore").write_text("*.aux\n", encoding="utf-8")
     (source / "interface-reconstruction.aux").write_text(
         "generated\n", encoding="utf-8"
@@ -282,6 +301,8 @@ def _plan(tmp_path: Path, output: Path):
     release, paper, manifest, paper_commit, latexmk = _make_inputs(tmp_path)
     return plan_submission_package(
         release_root=release,
+        generator_worktree_root=paper,
+        generator_commit=paper_commit,
         paper_worktree_root=paper,
         paper_commit=paper_commit,
         approved_figures_manifest=manifest,
@@ -340,6 +361,8 @@ def test_committed_excluded_build_directory_is_not_packaged(tmp_path):
 
     plan = plan_submission_package(
         release_root=release,
+        generator_worktree_root=paper,
+        generator_commit=paper_commit,
         paper_worktree_root=paper,
         paper_commit=paper_commit,
         approved_figures_manifest=manifest,
@@ -386,6 +409,8 @@ def test_plan_rejects_existing_package_namespace_overlap(tmp_path, relationship)
     ):
         plan_submission_package(
             release_root=release,
+            generator_worktree_root=paper,
+            generator_commit=paper_commit,
             paper_worktree_root=paper,
             paper_commit=paper_commit,
             approved_figures_manifest=manifest,
@@ -468,6 +493,8 @@ def test_plan_fails_closed_when_release_audit_fails(tmp_path):
     with pytest.raises(SubmissionPackagingError, match="final release audit failed"):
         plan_submission_package(
             release_root=release,
+            generator_worktree_root=paper,
+            generator_commit=paper_commit,
             paper_worktree_root=paper,
             paper_commit=paper_commit,
             approved_figures_manifest=manifest,
@@ -488,6 +515,8 @@ def test_plan_requires_existing_private_output_parent(tmp_path):
     release, paper, manifest, paper_commit, latexmk = _make_inputs(tmp_path)
     common = {
         "release_root": release,
+        "generator_worktree_root": paper,
+        "generator_commit": paper_commit,
         "paper_worktree_root": paper,
         "paper_commit": paper_commit,
         "approved_figures_manifest": manifest,
@@ -541,6 +570,8 @@ def test_plan_rejects_unapproved_manuscript_graphic(tmp_path):
     with pytest.raises(SubmissionPackagingError, match="absent from"):
         plan_submission_package(
             release_root=release,
+            generator_worktree_root=paper,
+            generator_commit=paper_commit,
             paper_worktree_root=paper,
             paper_commit=paper_commit,
             approved_figures_manifest=manifest,
@@ -571,8 +602,22 @@ def test_build_stages_compact_payload_and_valid_checksums(tmp_path):
         name == output.name or name.startswith(f"{output.name}/")
         for name in archive_names
     )
-    assert (package / "code" / "source_snapshot.tar.gz").is_file()
+    scientific_snapshot = package / "code" / "scientific_source_snapshot.tar.gz"
+    generator_snapshot = package / "code" / "figure_generator_snapshot.tar.gz"
+    assert scientific_snapshot.is_file()
+    assert generator_snapshot.is_file()
+    assert scientific_snapshot.read_bytes() != generator_snapshot.read_bytes()
     assert (package / "docs" / "PAPER_EXPERIMENT_MAP.md").is_file()
+    assert "Pinned final-generator map" in (
+        package / "docs" / "PAPER_EXPERIMENT_MAP.md"
+    ).read_text(encoding="utf-8")
+    with tarfile.open(generator_snapshot, "r:gz") as generator_archive:
+        names = generator_archive.getnames()
+    assert (
+        "interface-reconstruction-generator/submission/final_figure_orchestrator.py"
+        in names
+    )
+    assert "interface-reconstruction-generator/docs/PAPER_EXPERIMENT_MAP.md" in names
     assert (
         package
         / "manuscript"
@@ -600,9 +645,36 @@ def test_build_stages_compact_payload_and_valid_checksums(tmp_path):
     assert not (package / "provenance" / "deposit").exists()
     assert inventory["release"]["audit_passed"] is True
     assert inventory["release"]["staged_payloads_verified_against_release_manifest"]
+    assert inventory["code"]["scientific_source_snapshot"]["sha256"] == _sha256(
+        scientific_snapshot
+    )
+    generator_inventory = inventory["code"]["figure_generator_snapshot"]
+    assert generator_inventory["git_commit"] == plan.generator_commit
+    assert generator_inventory["git_tree"] == plan.generator_tree_object_id
+    assert generator_inventory["sha256"] == _sha256(generator_snapshot)
+    map_inventory = inventory["code"]["paper_experiment_map"]
+    assert map_inventory["git_commit"] == plan.generator_commit
+    assert map_inventory["sha256"] == _sha256(
+        package / "docs" / "PAPER_EXPERIMENT_MAP.md"
+    )
     assert inventory["paper"]["git_commit"] == plan.paper_commit
     assert inventory["paper"]["clean_pinned_worktree_verified"] is True
     assert inventory["paper"]["bytes_materialized_from_pinned_git_objects"] is True
+    code_record = json.loads(
+        (package / "provenance" / "code_snapshots.json").read_text(encoding="utf-8")
+    )
+    assert code_record["scientific_source_snapshot"]["path"] == (
+        "code/scientific_source_snapshot.tar.gz"
+    )
+    assert code_record["figure_generator_snapshot"]["git_commit"] == (
+        plan.generator_commit
+    )
+    assert code_record["figure_generator_snapshot"]["git_tree"] == (
+        plan.generator_tree_object_id
+    )
+    assert code_record["paper_experiment_map"]["git_object_id"] == (
+        plan.generator_experiment_map_object_id
+    )
     assert (
         inventory["approved_figures"][0]["approval_reference"] == "synthetic-review-1"
     )
@@ -763,6 +835,8 @@ def test_plan_requires_exact_clean_paper_commit(tmp_path):
     release, paper, manifest, paper_commit, latexmk = _make_inputs(tmp_path)
     common = {
         "release_root": release,
+        "generator_worktree_root": paper,
+        "generator_commit": paper_commit,
         "paper_worktree_root": paper,
         "approved_figures_manifest": manifest,
         "raw_data_deposition": "https://doi.org/10.1234/interface.release",
@@ -783,11 +857,122 @@ def test_plan_requires_exact_clean_paper_commit(tmp_path):
         plan_submission_package(paper_commit=paper_commit, **common)
 
 
+def test_plan_requires_exact_clean_generator_commit(tmp_path):
+    release, paper, manifest, paper_commit, latexmk = _make_inputs(tmp_path)
+    common = {
+        "release_root": release,
+        "generator_worktree_root": paper,
+        "paper_worktree_root": paper,
+        "paper_commit": paper_commit,
+        "approved_figures_manifest": manifest,
+        "raw_data_deposition": "https://doi.org/10.1234/interface.release",
+        "raw_data_manifest_identifier": _manifest_identifier(release),
+        "acknowledge_unverified_remote_deposit": True,
+        "latexmk_executable": str(latexmk),
+        "output_dir": tmp_path / "package",
+        "audit_runner": _passing_audit,
+        "checksum_verifier": _checksums_pass,
+        "pdf_inspector": _vector_pdf,
+    }
+
+    with pytest.raises(SubmissionPackagingError, match="generator commit mismatch"):
+        plan_submission_package(generator_commit="0" * 40, **common)
+
+    (paper / "docs" / "PAPER_EXPERIMENT_MAP.md").write_text(
+        "dirty generator map\n", encoding="utf-8"
+    )
+    with pytest.raises(
+        SubmissionPackagingError, match="generator worktree is not clean"
+    ):
+        plan_submission_package(generator_commit=paper_commit, **common)
+
+
+def test_build_rechecks_generator_worktree_after_planning(tmp_path):
+    output = tmp_path / "deliverable" / "bundle"
+    plan = _plan(tmp_path / "inputs", output)
+    generator = (
+        plan.generator_worktree_root / "submission" / "final_figure_orchestrator.py"
+    )
+    generator.write_text("changed after planning\n", encoding="utf-8")
+
+    with pytest.raises(
+        SubmissionPackagingError, match="generator worktree is not clean"
+    ):
+        build_submission_package(plan)
+
+    assert not output.exists()
+
+
+def test_generator_bytes_come_from_commit_despite_hidden_worktree_edit(tmp_path):
+    release, paper, manifest, paper_commit, latexmk = _make_inputs(tmp_path)
+    map_relative = "docs/PAPER_EXPERIMENT_MAP.md"
+    committed_map = subprocess.run(
+        ["git", "-C", str(paper), "show", f"{paper_commit}:{map_relative}"],
+        check=True,
+        capture_output=True,
+    ).stdout
+    worktree_map = paper / map_relative
+    worktree_map.write_text("hostile hidden map\n", encoding="utf-8")
+    _git(paper, "update-index", "--assume-unchanged", map_relative)
+    assert _git(paper, "status", "--porcelain", "--untracked-files=all") == ""
+
+    output = tmp_path / "bundle"
+    plan = plan_submission_package(
+        release_root=release,
+        generator_worktree_root=paper,
+        generator_commit=paper_commit,
+        paper_worktree_root=paper,
+        paper_commit=paper_commit,
+        approved_figures_manifest=manifest,
+        raw_data_deposition="https://doi.org/10.1234/interface.release",
+        raw_data_manifest_identifier=_manifest_identifier(release),
+        acknowledge_unverified_remote_deposit=True,
+        latexmk_executable=str(latexmk),
+        output_dir=output,
+        audit_runner=_passing_audit,
+        checksum_verifier=_checksums_pass,
+        pdf_inspector=_vector_pdf,
+    )
+    package, _ = build_submission_package(plan, create_archive=False)
+
+    packaged_map = package / map_relative
+    assert packaged_map.read_bytes() == committed_map
+    assert packaged_map.read_bytes() != worktree_map.read_bytes()
+    with tarfile.open(
+        package / "code" / "figure_generator_snapshot.tar.gz", "r:gz"
+    ) as archive:
+        stream = archive.extractfile(
+            f"interface-reconstruction-generator/{map_relative}"
+        )
+        assert stream is not None
+        assert stream.read() == committed_map
+
+
+def test_generator_object_substitution_fails_closed(tmp_path, monkeypatch):
+    output = tmp_path / "deliverable" / "bundle"
+    plan = _plan(tmp_path / "inputs", output)
+    original_read = package_submission._read_git_blob
+
+    def substituted_blob(repository, object_id):
+        if object_id == plan.generator_experiment_map_object_id:
+            return b"substituted object bytes\n"
+        return original_read(repository, object_id)
+
+    monkeypatch.setattr(package_submission, "_read_git_blob", substituted_blob)
+    with pytest.raises(SubmissionPackagingError, match="pinned object ID"):
+        build_submission_package(plan)
+
+    assert not output.exists()
+    assert not output.with_suffix(".tar.gz").exists()
+
+
 def test_plan_rejects_inner_paper_directory_as_worktree_root(tmp_path):
     release, paper, manifest, paper_commit, latexmk = _make_inputs(tmp_path)
     with pytest.raises(SubmissionPackagingError, match="Git top level"):
         plan_submission_package(
             release_root=release,
+            generator_worktree_root=paper,
+            generator_commit=paper_commit,
             paper_worktree_root=paper / "interface-reconstruction-paper",
             paper_commit=paper_commit,
             approved_figures_manifest=manifest,
@@ -807,6 +992,8 @@ def test_plan_binds_deposit_to_exact_release_manifest(tmp_path):
     with pytest.raises(SubmissionPackagingError, match="does not match"):
         plan_submission_package(
             release_root=release,
+            generator_worktree_root=paper,
+            generator_commit=paper_commit,
             paper_worktree_root=paper,
             paper_commit=paper_commit,
             approved_figures_manifest=manifest,
@@ -826,6 +1013,8 @@ def test_plan_fails_when_disposable_manuscript_compile_fails(tmp_path):
     with pytest.raises(SubmissionPackagingError, match="manuscript compile failed"):
         plan_submission_package(
             release_root=release,
+            generator_worktree_root=paper,
+            generator_commit=paper_commit,
             paper_worktree_root=paper,
             paper_commit=paper_commit,
             approved_figures_manifest=manifest,
@@ -848,6 +1037,8 @@ def test_build_fails_closed_when_extracted_manuscript_compile_fails(tmp_path):
     output.parent.mkdir()
     plan = plan_submission_package(
         release_root=release,
+        generator_worktree_root=paper,
+        generator_commit=paper_commit,
         paper_worktree_root=paper,
         paper_commit=paper_commit,
         approved_figures_manifest=manifest,
@@ -931,6 +1122,8 @@ def test_paper_bytes_come_from_commit_despite_hidden_worktree_edit(
     output = tmp_path / "bundle"
     plan = plan_submission_package(
         release_root=release,
+        generator_worktree_root=paper,
+        generator_commit=paper_commit,
         paper_worktree_root=paper,
         paper_commit=paper_commit,
         approved_figures_manifest=manifest,
@@ -986,6 +1179,8 @@ def test_remote_deposit_requires_evidence_or_explicit_manual_acknowledgment(tmp_
     release, paper, manifest, paper_commit, latexmk = _make_inputs(tmp_path)
     common = {
         "release_root": release,
+        "generator_worktree_root": paper,
+        "generator_commit": paper_commit,
         "paper_worktree_root": paper,
         "paper_commit": paper_commit,
         "approved_figures_manifest": manifest,
@@ -1016,6 +1211,8 @@ def test_supplied_deposit_manifest_is_checked_and_packaged(tmp_path):
     output = tmp_path / "bundle"
     plan = plan_submission_package(
         release_root=release,
+        generator_worktree_root=paper,
+        generator_commit=paper_commit,
         paper_worktree_root=paper,
         paper_commit=paper_commit,
         approved_figures_manifest=manifest,
@@ -1064,6 +1261,8 @@ def test_dry_run_plan_does_not_mutate_release_paper_or_output(tmp_path):
 
     plan_submission_package(
         release_root=release,
+        generator_worktree_root=paper,
+        generator_commit=paper_commit,
         paper_worktree_root=paper,
         paper_commit=paper_commit,
         approved_figures_manifest=manifest,
@@ -1120,11 +1319,14 @@ def test_deterministic_archives_match_for_identical_inputs(tmp_path):
     release, paper, manifest, paper_commit, latexmk = _make_inputs(inputs)
 
     archives = []
+    generator_snapshots = []
     for parent in (tmp_path / "first", tmp_path / "second"):
         parent.mkdir()
         output = parent / "bundle"
         plan = plan_submission_package(
             release_root=release,
+            generator_worktree_root=paper,
+            generator_commit=paper_commit,
             paper_worktree_root=paper,
             paper_commit=paper_commit,
             approved_figures_manifest=manifest,
@@ -1137,11 +1339,15 @@ def test_deterministic_archives_match_for_identical_inputs(tmp_path):
             checksum_verifier=_checksums_pass,
             pdf_inspector=_vector_pdf,
         )
-        _, archive = build_submission_package(plan)
+        package, archive = build_submission_package(plan)
         archives.append(archive)
+        generator_snapshots.append(
+            _sha256(package / "code" / "figure_generator_snapshot.tar.gz")
+        )
 
     assert archives[0] is not None and archives[1] is not None
     assert _sha256(archives[0]) == _sha256(archives[1])
+    assert generator_snapshots[0] == generator_snapshots[1]
 
 
 def test_paper_source_symlink_is_rejected(tmp_path):

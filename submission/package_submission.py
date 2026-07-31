@@ -7,6 +7,7 @@ import argparse
 import csv
 import gzip
 import hashlib
+import io
 import json
 import os
 import re
@@ -34,12 +35,22 @@ from submission.audit_final_release import (
 from submission.pdf_vector_qa import PdfQaReport, inspect_pdf
 
 
-PACKAGE_SCHEMA_VERSION = 3
+PACKAGE_SCHEMA_VERSION = 4
 RELEASE_SHA256_MANIFEST = "SHA256SUMS"
 PACKAGE_ROOT_MARKERS = ("INVENTORY.json", "SHA256SUMS")
 DEFAULT_PAPER_SOURCE_SUBDIR = "interface-reconstruction-paper"
 DEFAULT_PAPER_ENTRYPOINT = "interface-reconstruction-paper/interface-reconstruction.tex"
 DEFAULT_MANUSCRIPT_COMPILE_TIMEOUT_SECONDS = 300
+GENERATOR_ARCHIVE_ROOT = "interface-reconstruction-generator"
+GENERATOR_EXPERIMENT_MAP = "docs/PAPER_EXPERIMENT_MAP.md"
+REQUIRED_GENERATOR_PATHS = frozenset(
+    {
+        GENERATOR_EXPERIMENT_MAP,
+        "submission/final_figure_candidates.json",
+        "submission/final_figure_orchestrator.py",
+        "submission/run_final_figure_orchestrator",
+    }
+)
 
 RELEASE_PAYLOADS = (
     (
@@ -77,8 +88,8 @@ RELEASE_PAYLOADS = (
     ),
     (
         "diagnostics/source_snapshot.tar.gz",
-        "code/source_snapshot.tar.gz",
-        "code_archive",
+        "code/scientific_source_snapshot.tar.gz",
+        "scientific_source_snapshot",
     ),
 )
 
@@ -147,6 +158,8 @@ class ContentSource:
     path: Path | None = None
     git_repository: Path | None = None
     git_object_id: str | None = None
+    git_tree_entries: tuple[GitTreeEntry, ...] | None = None
+    git_archive_root: str | None = None
 
 
 @dataclass(frozen=True)
@@ -176,6 +189,15 @@ class PaperGitState:
 
 
 @dataclass(frozen=True)
+class GeneratorGitState:
+    worktree_root: Path
+    commit: str
+    tree_object_id: str
+    tracked_paths: frozenset[str]
+    tree_entries: tuple[GitTreeEntry, ...]
+
+
+@dataclass(frozen=True)
 class RawDataDeposit:
     location: str
     release_name: str
@@ -190,6 +212,13 @@ class RawDataDeposit:
 @dataclass(frozen=True)
 class PackagePlan:
     release_root: Path
+    generator_worktree_root: Path
+    generator_commit: str
+    generator_tree_object_id: str
+    generator_tracked_file_count: int
+    generator_archive_sha256: str
+    generator_experiment_map_object_id: str
+    generator_experiment_map_sha256: str
     paper_worktree_root: Path
     paper_commit: str
     paper_source_subdir: str
@@ -656,13 +685,99 @@ def _run_git(worktree_root: Path, arguments: Sequence[str]) -> bytes:
         if not detail:
             detail = completed.stdout.decode("utf-8", errors="replace").strip()
         raise SubmissionPackagingError(
-            f"paper Git inspection failed ({' '.join(arguments)}): {detail}"
+            f"Git inspection failed ({' '.join(arguments)}): {detail}"
         )
     return completed.stdout
 
 
 def _read_git_blob(repository: Path, object_id: str) -> bytes:
     return _run_git(repository, ("cat-file", "blob", object_id))
+
+
+def _verified_git_blob(repository: Path, entry: GitTreeEntry) -> bytes:
+    data = _read_git_blob(repository, entry.object_id)
+    header = f"blob {len(data)}\0".encode("ascii")
+    actual_object_id = hashlib.sha1(header + data).hexdigest()
+    if actual_object_id != entry.object_id:
+        raise SubmissionPackagingError(
+            "Git blob bytes do not match the pinned object ID for "
+            f"{entry.path}: expected {entry.object_id}, found {actual_object_id}"
+        )
+    return data
+
+
+def _parse_git_tree(raw_tree: bytes, *, label: str) -> tuple[GitTreeEntry, ...]:
+    entries: list[GitTreeEntry] = []
+    for raw_record in raw_tree.split(b"\0"):
+        if not raw_record:
+            continue
+        try:
+            metadata, raw_path = raw_record.split(b"\t", 1)
+            mode, object_type, object_id = metadata.decode("ascii").split(" ", 2)
+            path = _safe_relative_path(
+                raw_path.decode("utf-8"), f"{label} Git tree path"
+            )
+        except (UnicodeError, ValueError) as exc:
+            raise SubmissionPackagingError(
+                f"could not parse pinned {label} Git tree"
+            ) from exc
+        if object_type != "blob" or mode not in {"100644", "100755"}:
+            raise SubmissionPackagingError(
+                f"{label} commit contains unsupported entry "
+                f"{path}: {mode} {object_type}"
+            )
+        entries.append(GitTreeEntry(path=path, object_id=object_id, mode=mode))
+    return tuple(sorted(entries, key=lambda item: item.path))
+
+
+def _git_tree_archive_bytes(
+    repository: Path,
+    entries: Sequence[GitTreeEntry],
+    *,
+    archive_root: str,
+) -> bytes:
+    archive_root_path = PurePosixPath(
+        _safe_relative_path(archive_root, "generator archive root")
+    )
+    if len(archive_root_path.parts) != 1:
+        raise SubmissionPackagingError(
+            f"generator archive root must have one path component: {archive_root}"
+        )
+
+    output = io.BytesIO()
+    with gzip.GzipFile(filename="", mode="wb", fileobj=output, mtime=0) as stream:
+        with tarfile.open(
+            fileobj=stream, mode="w", format=tarfile.PAX_FORMAT
+        ) as archive:
+            directories = {PurePosixPath()}
+            for entry in entries:
+                relative = PurePosixPath(entry.path)
+                directories.update(relative.parents)
+            for relative in sorted(
+                directories, key=lambda path: (len(path.parts), path.as_posix())
+            ):
+                archive_path = archive_root_path / relative
+                info = tarfile.TarInfo(archive_path.as_posix())
+                info.type = tarfile.DIRTYPE
+                info.mode = 0o755
+                info.uid = 0
+                info.gid = 0
+                info.uname = ""
+                info.gname = ""
+                info.mtime = 0
+                archive.addfile(info)
+            for entry in entries:
+                data = _verified_git_blob(repository, entry)
+                info = tarfile.TarInfo((archive_root_path / entry.path).as_posix())
+                info.size = len(data)
+                info.mode = 0o755 if entry.mode == "100755" else 0o644
+                info.uid = 0
+                info.gid = 0
+                info.uname = ""
+                info.gname = ""
+                info.mtime = 0
+                archive.addfile(info, io.BytesIO(data))
+    return output.getvalue()
 
 
 def _paper_entry_map(state: PaperGitState) -> dict[str, GitTreeEntry]:
@@ -687,6 +802,126 @@ def _git_content_source(
         expected_sha256=_sha256_bytes(data),
         git_repository=state.worktree_root,
         git_object_id=entry.object_id,
+    )
+
+
+def _generator_content_source(
+    state: GeneratorGitState,
+    path: str,
+    *,
+    label: str,
+) -> ContentSource:
+    entries = {entry.path: entry for entry in state.tree_entries}
+    entry = entries.get(path)
+    if entry is None:
+        raise SubmissionPackagingError(
+            f"{label} is not present in generator commit {state.commit}: {path}"
+        )
+    data = _verified_git_blob(state.worktree_root, entry)
+    return ContentSource(
+        kind="git_blob",
+        label=f"generator-git:{state.commit}:{path}",
+        expected_sha256=_sha256_bytes(data),
+        git_repository=state.worktree_root,
+        git_object_id=entry.object_id,
+    )
+
+
+def _generator_archive_source(state: GeneratorGitState) -> ContentSource:
+    archive_bytes = _git_tree_archive_bytes(
+        state.worktree_root,
+        state.tree_entries,
+        archive_root=GENERATOR_ARCHIVE_ROOT,
+    )
+    return ContentSource(
+        kind="git_tree_archive",
+        label=(f"generator-git-tree:{state.commit}:{state.tree_object_id}"),
+        expected_sha256=_sha256_bytes(archive_bytes),
+        git_repository=state.worktree_root,
+        git_object_id=state.tree_object_id,
+        git_tree_entries=state.tree_entries,
+        git_archive_root=GENERATOR_ARCHIVE_ROOT,
+    )
+
+
+def inspect_generator_worktree(
+    worktree_root: Path,
+    expected_commit: str,
+) -> GeneratorGitState:
+    """Require the exact clean repository used to control final-figure generation."""
+    raw_root = Path(worktree_root)
+    if raw_root.is_symlink():
+        raise SubmissionPackagingError(
+            f"generator worktree root cannot be a symbolic link: {raw_root}"
+        )
+    worktree_root = raw_root.resolve()
+    if not worktree_root.is_dir():
+        raise SubmissionPackagingError(
+            f"generator worktree root is not a directory: {worktree_root}"
+        )
+    expected_commit = expected_commit.strip().lower()
+    if FULL_GIT_COMMIT_PATTERN.fullmatch(expected_commit) is None:
+        raise SubmissionPackagingError(
+            "generator commit must be a full 40-character hexadecimal Git SHA"
+        )
+
+    top_level = Path(
+        _run_git(worktree_root, ("rev-parse", "--show-toplevel"))
+        .decode("utf-8")
+        .strip()
+    ).resolve()
+    if top_level != worktree_root:
+        raise SubmissionPackagingError(
+            "generator worktree root must be the Git top level: " f"{top_level}"
+        )
+    actual_commit = (
+        _run_git(worktree_root, ("rev-parse", "HEAD")).decode("ascii").strip().lower()
+    )
+    if actual_commit != expected_commit:
+        raise SubmissionPackagingError(
+            "generator commit mismatch: "
+            f"expected {expected_commit}, found {actual_commit}"
+        )
+    status = _run_git(
+        worktree_root,
+        ("status", "--porcelain=v1", "-z", "--untracked-files=all"),
+    )
+    if status:
+        entries = [
+            item.decode("utf-8", errors="replace")
+            for item in status.split(b"\0")
+            if item
+        ]
+        raise SubmissionPackagingError(
+            "generator worktree is not clean: " + "; ".join(entries[:5])
+        )
+
+    tree_object_id = (
+        _run_git(worktree_root, ("rev-parse", f"{actual_commit}^{{tree}}"))
+        .decode("ascii")
+        .strip()
+        .lower()
+    )
+    tree_entries = _parse_git_tree(
+        _run_git(
+            worktree_root,
+            ("ls-tree", "-r", "-z", "--full-tree", actual_commit),
+        ),
+        label="generator",
+    )
+    tracked_paths = frozenset(entry.path for entry in tree_entries)
+    missing = sorted(REQUIRED_GENERATOR_PATHS - tracked_paths)
+    if missing:
+        raise SubmissionPackagingError(
+            "generator commit is missing required final-figure control files: "
+            + ", ".join(missing)
+        )
+    return GeneratorGitState(
+        worktree_root=worktree_root,
+        commit=actual_commit,
+        tree_object_id=tree_object_id,
+        tracked_paths=tracked_paths,
+        tree_entries=tree_entries,
     )
 
 
@@ -757,23 +992,7 @@ def inspect_paper_worktree(
         worktree_root,
         ("ls-tree", "-r", "-z", "--full-tree", actual_commit, "--", source_subdir),
     )
-    entries: list[GitTreeEntry] = []
-    for raw_record in tree.split(b"\0"):
-        if not raw_record:
-            continue
-        try:
-            metadata, raw_path = raw_record.split(b"\t", 1)
-            mode, object_type, object_id = metadata.decode("ascii").split(" ", 2)
-            path = _safe_relative_path(raw_path.decode("utf-8"), "paper Git tree path")
-        except (UnicodeError, ValueError) as exc:
-            raise SubmissionPackagingError(
-                "could not parse pinned paper Git tree"
-            ) from exc
-        if object_type != "blob" or mode not in {"100644", "100755"}:
-            raise SubmissionPackagingError(
-                f"paper commit contains unsupported entry {path}: {mode} {object_type}"
-            )
-        entries.append(GitTreeEntry(path=path, object_id=object_id, mode=mode))
+    entries = _parse_git_tree(tree, label="paper")
     tracked_paths = frozenset(entry.path for entry in entries)
     if not tracked_paths:
         raise SubmissionPackagingError(
@@ -789,7 +1008,7 @@ def inspect_paper_worktree(
         source_subdir=source_subdir,
         entrypoint=entrypoint,
         tracked_paths=tracked_paths,
-        tree_entries=tuple(sorted(entries, key=lambda item: item.path)),
+        tree_entries=entries,
     )
 
 
@@ -1067,30 +1286,6 @@ def _review_bundle_files(path: Path | None) -> tuple[tuple[Path, str], ...]:
     return tuple(files)
 
 
-def _extract_experiment_map(source_snapshot: Path, destination: Path) -> None:
-    member_name = "docs/PAPER_EXPERIMENT_MAP.md"
-    try:
-        with tarfile.open(source_snapshot, "r:gz") as archive:
-            members = [
-                member for member in archive.getmembers() if member.name == member_name
-            ]
-            if len(members) != 1 or not members[0].isfile():
-                raise SubmissionPackagingError(
-                    f"audited source snapshot must contain exactly one {member_name}"
-                )
-            stream = archive.extractfile(members[0])
-            if stream is None:
-                raise SubmissionPackagingError(
-                    f"could not read {member_name} from audited source snapshot"
-                )
-            data = stream.read()
-    except (OSError, tarfile.TarError) as exc:
-        raise SubmissionPackagingError(
-            f"could not inspect source snapshot: {exc}"
-        ) from exc
-    _write_bytes(destination, data)
-
-
 def _audit_release_or_fail(
     release_root: Path,
     audit_runner: Callable[[Path], AuditReport],
@@ -1277,6 +1472,8 @@ def _preflight_manuscript_compile(
 def plan_submission_package(
     *,
     release_root: Path,
+    generator_worktree_root: Path,
+    generator_commit: str,
     paper_worktree_root: Path,
     paper_commit: str,
     approved_figures_manifest: Path,
@@ -1301,6 +1498,10 @@ def plan_submission_package(
         raise SubmissionPackagingError(
             f"release root is not a directory: {release_root}"
         )
+    generator_state = inspect_generator_worktree(
+        generator_worktree_root,
+        generator_commit,
+    )
     paper_state = inspect_paper_worktree(
         paper_worktree_root,
         paper_commit,
@@ -1322,6 +1523,7 @@ def plan_submission_package(
         raise SubmissionPackagingError(f"output archive already exists: {archive_path}")
     for protected_root, label in (
         (release_root, "release root"),
+        (generator_state.worktree_root, "generator worktree root"),
         (paper_state.worktree_root, "paper worktree root"),
     ):
         try:
@@ -1405,6 +1607,25 @@ def plan_submission_package(
             ),
             role,
         )
+    generator_archive = _generator_archive_source(generator_state)
+    experiment_map = _generator_content_source(
+        generator_state,
+        GENERATOR_EXPERIMENT_MAP,
+        label="paper experiment map",
+    )
+    experiment_map_entry = {
+        entry.path: entry for entry in generator_state.tree_entries
+    }[GENERATOR_EXPERIMENT_MAP]
+    add(
+        "code/figure_generator_snapshot.tar.gz",
+        generator_archive,
+        "figure_generator_source_snapshot",
+    )
+    add(
+        GENERATOR_EXPERIMENT_MAP,
+        experiment_map,
+        "paper_experiment_map",
+    )
     for relative in paper_files:
         add(
             f"manuscript/source/{relative}",
@@ -1444,6 +1665,13 @@ def plan_submission_package(
 
     return PackagePlan(
         release_root=release_root,
+        generator_worktree_root=generator_state.worktree_root,
+        generator_commit=generator_state.commit,
+        generator_tree_object_id=generator_state.tree_object_id,
+        generator_tracked_file_count=len(generator_state.tracked_paths),
+        generator_archive_sha256=generator_archive.expected_sha256,
+        generator_experiment_map_object_id=experiment_map_entry.object_id,
+        generator_experiment_map_sha256=experiment_map.expected_sha256,
         paper_worktree_root=paper_state.worktree_root,
         paper_commit=paper_state.commit,
         paper_source_subdir=paper_state.source_subdir,
@@ -1497,6 +1725,23 @@ def _copy_content_source(source: ContentSource, destination: Path) -> None:
             destination,
             _read_git_blob(source.git_repository, source.git_object_id),
         )
+    elif source.kind == "git_tree_archive":
+        if (
+            source.git_repository is None
+            or source.git_tree_entries is None
+            or source.git_archive_root is None
+        ):
+            raise SubmissionPackagingError(
+                f"Git tree archive source is incomplete: {source.label}"
+            )
+        _write_bytes(
+            destination,
+            _git_tree_archive_bytes(
+                source.git_repository,
+                source.git_tree_entries,
+                archive_root=source.git_archive_root,
+            ),
+        )
     else:
         raise SubmissionPackagingError(
             f"unsupported content-source kind {source.kind!r}: {source.label}"
@@ -1539,6 +1784,11 @@ def _write_inventory(
     plan: PackagePlan,
     entries: Sequence[InventoryEntry],
 ) -> None:
+    scientific_snapshot = next(
+        item
+        for item in plan.files
+        if item.destination == "code/scientific_source_snapshot.tar.gz"
+    )
     payload = {
         "schema_version": PACKAGE_SCHEMA_VERSION,
         "release": {
@@ -1547,6 +1797,28 @@ def _write_inventory(
             "audit_summary": dict(sorted(plan.audit_summary.items())),
             "full_release_sha256_manifest": "provenance/release/SHA256SUMS",
             "staged_payloads_verified_against_release_manifest": True,
+        },
+        "code": {
+            "scientific_source_snapshot": {
+                "path": "code/scientific_source_snapshot.tar.gz",
+                "authority": "audited_release_checksum_manifest",
+                "sha256": scientific_snapshot.source.expected_sha256,
+            },
+            "figure_generator_snapshot": {
+                "path": "code/figure_generator_snapshot.tar.gz",
+                "git_commit": plan.generator_commit,
+                "git_tree": plan.generator_tree_object_id,
+                "sha256": plan.generator_archive_sha256,
+                "tracked_file_count": plan.generator_tracked_file_count,
+                "clean_pinned_worktree_verified": True,
+                "bytes_materialized_from_pinned_git_objects": True,
+            },
+            "paper_experiment_map": {
+                "path": GENERATOR_EXPERIMENT_MAP,
+                "git_commit": plan.generator_commit,
+                "git_object_id": plan.generator_experiment_map_object_id,
+                "sha256": plan.generator_experiment_map_sha256,
+            },
         },
         "raw_data": {
             "included": False,
@@ -1605,12 +1877,15 @@ This package was assembled from the completed, programmatically audited release
 
 ## Contents
 
-- `code/source_snapshot.tar.gz`: exact clean source archive recorded by the final sweep.
+- `code/scientific_source_snapshot.tar.gz`: exact scientific source archive recorded by the final sweep.
+- `code/figure_generator_snapshot.tar.gz`: exact final-figure generator and control repository from pinned commit `{plan.generator_commit}`.
 - `manuscript/source/`: allowlisted manuscript source plus checksum-pinned approved vector figures.
 - `manuscript/review/`: optional review material supplied to the packager.
 - `results/perturbed_sweep.csv`: audited aggregate result table.
 - `docs/PAPER_EXPERIMENT_MAP.md`: paper-to-code and paper-to-result map from
-  the audited source snapshot.
+  the pinned final-figure generator commit.
+- `provenance/code_snapshots.json`: distinct scientific and figure-generator
+  source authorities, commits, Git tree/object IDs, and SHA-256 digests.
 - `provenance/release/`: resolved configuration, environment, source state,
   run inventory, and full-release checksums.
 - `provenance/vector_pdf_qa.json`: zero-raster and font-embedding audit for every approved figure.
@@ -1638,6 +1913,14 @@ search paths, user TEXMF trees, and latexmk configuration disabled. When this
 package was created with its outer archive, it also verified package checksums
 and compiled a disposable copy of the extracted manuscript before reporting
 success.
+
+## Code Provenance
+
+The scientific source snapshot is the exact archive checksum-pinned by the
+audited numerical release. The separately named final-figure generator snapshot
+was materialized from Git blobs at commit `{plan.generator_commit}` and tree
+`{plan.generator_tree_object_id}`; no generator worktree file bytes were copied.
+The experiment map is the pinned blob from the same generator commit.
 
 ## Verification
 
@@ -1725,6 +2008,43 @@ def _write_release_audit_record(root: Path, plan: PackagePlan) -> None:
     }
     _write_text(
         root / "provenance" / "release" / "audit_report.json",
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+    )
+
+
+def _write_code_snapshot_record(root: Path, plan: PackagePlan) -> None:
+    scientific = next(
+        item
+        for item in plan.files
+        if item.destination == "code/scientific_source_snapshot.tar.gz"
+    )
+    payload = {
+        "schema_version": 1,
+        "scientific_source_snapshot": {
+            "path": scientific.destination,
+            "authority": "audited_release_checksum_manifest",
+            "sha256": scientific.source.expected_sha256,
+            "release_name": plan.release_root.name,
+        },
+        "figure_generator_snapshot": {
+            "path": "code/figure_generator_snapshot.tar.gz",
+            "git_commit": plan.generator_commit,
+            "git_tree": plan.generator_tree_object_id,
+            "sha256": plan.generator_archive_sha256,
+            "tracked_file_count": plan.generator_tracked_file_count,
+            "clean_pinned_worktree_verified": True,
+            "bytes_materialized_from_pinned_git_objects": True,
+            "archive_root": GENERATOR_ARCHIVE_ROOT,
+        },
+        "paper_experiment_map": {
+            "path": GENERATOR_EXPERIMENT_MAP,
+            "git_commit": plan.generator_commit,
+            "git_object_id": plan.generator_experiment_map_object_id,
+            "sha256": plan.generator_experiment_map_sha256,
+        },
+    }
+    _write_text(
+        root / "provenance" / "code_snapshots.json",
         json.dumps(payload, indent=2, sort_keys=True) + "\n",
     )
 
@@ -2007,6 +2327,17 @@ def build_submission_package(
     plan: PackagePlan, *, create_archive: bool = True
 ) -> tuple[Path, Path | None]:
     """Atomically materialize a validated package and optional deterministic archive."""
+    generator_state = inspect_generator_worktree(
+        plan.generator_worktree_root,
+        plan.generator_commit,
+    )
+    if (
+        generator_state.tree_object_id != plan.generator_tree_object_id
+        or len(generator_state.tracked_paths) != plan.generator_tracked_file_count
+    ):
+        raise SubmissionPackagingError(
+            "generator Git tree changed after package planning"
+        )
     paper_state = inspect_paper_worktree(
         plan.paper_worktree_root,
         plan.paper_commit,
@@ -2064,10 +2395,6 @@ def build_submission_package(
                 entrypoint=plan.paper_entrypoint,
                 latexmk_executable=plan.latexmk_executable,
             )
-            _extract_experiment_map(
-                staging / "code" / "source_snapshot.tar.gz",
-                staging / "docs" / "PAPER_EXPERIMENT_MAP.md",
-            )
             _write_deposition_record(staging, plan)
             _write_manuscript_build_record(
                 staging,
@@ -2075,6 +2402,7 @@ def build_submission_package(
                 archive_verification_required=create_archive,
             )
             _write_release_audit_record(staging, plan)
+            _write_code_snapshot_record(staging, plan)
             _write_figure_approval_record(staging, plan)
             _write_vector_qa_record(staging, plan)
             _write_package_readme(staging, plan)
@@ -2082,11 +2410,6 @@ def build_submission_package(
             entries = tuple(
                 [_inventory_entry(staging, item, plan) for item in plan.files]
                 + [
-                    _generated_inventory_entry(
-                        staging,
-                        "docs/PAPER_EXPERIMENT_MAP.md",
-                        "paper_experiment_map",
-                    ),
                     _generated_inventory_entry(
                         staging,
                         "provenance/RAW_DATA_DEPOSITION.md",
@@ -2101,6 +2424,11 @@ def build_submission_package(
                         staging,
                         "provenance/release/audit_report.json",
                         "release_audit_record",
+                    ),
+                    _generated_inventory_entry(
+                        staging,
+                        "provenance/code_snapshots.json",
+                        "code_snapshot_provenance",
                     ),
                     _generated_inventory_entry(
                         staging,
@@ -2192,6 +2520,10 @@ def _plan_payload(plan: PackagePlan) -> dict:
             plan.raw_data_deposit.verification_status
         ),
         "network_assertion_made": False,
+        "generator_commit": plan.generator_commit,
+        "generator_tree": plan.generator_tree_object_id,
+        "generator_archive_sha256": plan.generator_archive_sha256,
+        "generator_experiment_map_sha256": plan.generator_experiment_map_sha256,
         "paper_commit": plan.paper_commit,
         "paper_entrypoint": plan.paper_entrypoint,
         "manuscript_compile_preflight_passed": True,
@@ -2207,6 +2539,17 @@ def _plan_payload(plan: PackagePlan) -> dict:
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--release-root", type=Path, required=True)
+    parser.add_argument(
+        "--generator-worktree-root",
+        type=Path,
+        required=True,
+        help="clean Git top level containing the final-figure generator controls",
+    )
+    parser.add_argument(
+        "--generator-commit",
+        required=True,
+        help="full 40-character generator Git commit required at the worktree HEAD",
+    )
     parser.add_argument(
         "--paper-worktree-root",
         "--paper-source-root",
@@ -2288,6 +2631,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         plan = plan_submission_package(
             release_root=args.release_root,
+            generator_worktree_root=args.generator_worktree_root,
+            generator_commit=args.generator_commit,
             paper_worktree_root=args.paper_worktree_root,
             paper_commit=args.paper_commit,
             paper_source_subdir=args.paper_source_subdir,
