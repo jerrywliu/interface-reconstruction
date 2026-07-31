@@ -30,14 +30,20 @@ using the digest frozen in the release `SHA256SUMS`. This closes the interval
 between planning and materialization; mutating either a payload or the manifest
 after planning aborts before final publication.
 
-Generate and verify the complete-release checksum manifest after all final release
-artifacts have been installed:
+Seal and verify a private complete-release snapshot after all final release
+artifacts have been installed. The source release is never modified:
 
 ```sh
+install -d -m 700 "$HOME/interface-release-seals"
+SEALED_RELEASE="$HOME/interface-release-seals/$(basename "$RELEASE").sealed"
+test ! -e "$SEALED_RELEASE"
 python submission/audit_final_release.py "$RELEASE" \
   --write-sha256-manifest \
+  --sealed-release-output "$SEALED_RELEASE" \
   --verify-sha256-manifest
 ```
+
+Use `"$SEALED_RELEASE"` for the packager's `--release-root` argument.
 
 Create a separate clean paper worktree at the exact commit selected for submission.
 Do not point the packager at the active Overleaf checkout or at the inner manuscript

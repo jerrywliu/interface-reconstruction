@@ -22,8 +22,8 @@ The remaining reproducibility risk is primarily platform breadth rather than
 algorithmic. The launcher captures the exact sweep environment, while the pinned
 public stack now has a clean macOS arm64 CPython 3.9 install, full-suite, numerical
 smoke, and vector-figure validation. The two stacks agree to the tested tolerances
-but are not claimed to be bitwise portable. The release audit can generate and
-verify a whole-release checksum manifest after the approved figure packet is added.
+but are not claimed to be bitwise portable. The release audit can seal and verify a
+whole-release checksum snapshot after the approved figure packet is added.
 
 ## Status By Area
 
@@ -162,9 +162,11 @@ exception.
 
 ### Source snapshot trust
 
-The audit disables Git replacement objects for every Git operation and verifies the
-exact commit and blob object hashes itself. It enumerates the commit with
-`git ls-tree -rz` and reads each allowed regular-file blob with `git cat-file`, so
+The audit uses a fixed absolute, root-owned Git executable with a minimal scrubbed
+environment, disables Git replacement objects for every operation, and verifies the
+exact commit, linked root-tree, and blob object hashes itself. It enumerates the
+verified tree with `git ls-tree -rz` and reads each allowed regular-file blob with
+`git cat-file`, so
 archive attributes such as `export-ignore` cannot remove tracked source from the
 oracle. A seek-aware wrapper limits gzip output to the canonical Git-tree payload
 plus fixed per-member and global metadata allowances before `tarfile` can process
@@ -193,27 +195,63 @@ and parse before the controller counts a run as successful.
 The audit reconciles every consolidated CSV row, case-geometry JSON object, and
 nested run-manifest object against its archived raw counterpart using stable run,
 case, cell, merge, and event keys. JSON numbers are compared canonically and
-bundle-relative paths are normalized without permitting absolute or parent paths.
+parsed as bounded decimals before comparison, so values beyond binary64 precision
+remain distinguishable; bundle-relative paths are normalized without permitting
+absolute or parent paths.
 Cell provenance is also joined to unresolved-fallback events by run, case, and
-merge component: fallback cells and events must both report `LVIRA`, every event
-must have exactly the corresponding fallback component, and nonfallback cells may
-not claim a fallback policy.
+merge component: fallback cells, the exact `plic_fallback` merge event, and the
+unresolved-event row must identify the same member cells and `LVIRA` line. The line
+endpoints must also occur in the saved facet-metadata geometry. Nonfallback cells
+may not claim a fallback policy. Every child manifest is independently bound to the
+resolved benchmark config, mesh and perturbation controls, sampling seeds and case
+count, and benchmark-specific geometry constants. Case geometry must also agree
+across all methods and settings, remain inside the frozen sampling domain, and obey
+the exact line-endpoint, rotated-square, or rotated-slot construction recorded by
+the reviewed drivers.
 
 Remaining archival risks:
 
 - `sweep_manifest.json` uses absolute paths for aggregate artifacts, so it is not
   fully relocatable even though the raw-run inventory is relative;
 - a whole-release SHA-256 manifest is intentionally absent until approved figures
-  are installed;
+  are installed and the immutable snapshot is sealed;
 - read-only permission bits prevent casual edits but are not an integrity proof;
 - `submission/audit_final_release.py` now verifies expected run/case counts,
   duplicate keys, required finite metrics, raw-bundle coverage, source/config
-  consistency, and optional checksum generation/verification.
+  consistency, and sealed-snapshot checksum generation/verification.
 
-Before upload, generate a sorted SHA-256 manifest rooted at the release directory,
-copy the bundle, verify the manifest at the destination, and retain the audit report
-beside it. The checksum manifest should be generated only after figures and the
-environment record are final.
+### Sealing the final 5.9 GB release
+
+Direct checksum writes into a live release are forbidden because auditing one tree
+and hashing it later leaves a mutation race. The sealing command instead creates a
+private staging snapshot, hashes it, audits it, hashes it again, writes and verifies
+the ledger, makes the snapshot read-only, verifies the ledger again, and publishes
+the entire directory with an atomic no-replace rename. On APFS it first attempts
+`clonefile`, so the current 5.9 GB release is normally cloned copy-on-write; it falls
+back to a byte copy when cloning is unavailable. Put the private parent on the same
+APFS volume for the fast path and retain 5.9 GB of free space for the portable
+fallback.
+
+The canonical release remains read-only and unchanged. The destination must not
+exist, and its existing parent must be owned by the invoking user with mode `0700`
+or stricter:
+
+```bash
+SOURCE="results/static/submission_static_20260731_012430_505aefa45432"
+SEAL_PARENT="$HOME/interface-release-seals"
+SEALED="$SEAL_PARENT/$(basename "$SOURCE").sealed"
+
+install -d -m 700 "$SEAL_PARENT"
+test ! -e "$SEALED"
+python submission/audit_final_release.py "$SOURCE" \
+  --write-sha256-manifest \
+  --sealed-release-output "$SEALED" \
+  --verify-sha256-manifest
+```
+
+Use `"$SEALED"`, not `"$SOURCE"`, as the release input to submission packaging.
+The checksum manifest should be created only after figures and the environment
+record are final.
 
 ## Generated Files And Stale Code
 

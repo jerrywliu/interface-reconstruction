@@ -5,6 +5,7 @@ import io
 import json
 import os
 import shlex
+import stat
 import subprocess
 import tarfile
 from pathlib import Path
@@ -16,6 +17,7 @@ from submission.audit_final_release import (
     RUN_CONTEXT_FIELDS,
     audit_final_release,
     generate_sha256_manifest,
+    seal_release_snapshot,
     verify_sha256_manifest,
 )
 
@@ -156,17 +158,27 @@ def _run_manifest(repository=None) -> dict:
         "source_branch": "main",
         "experiment": "lines",
         "command": (
-            f"{executable} --facet_algo linear "
+            f"{executable} --config static/line --facet_algo linear "
             "--resolution 0.5 --perturb_wiggle 0.0 --perturb_seed 0 "
+            f"--save_name {SAVE_NAME} --mesh_type perturbed_quads "
+            "--perturb_fix_boundary 1 --num_lines 2 "
             "--plic_fallback LVIRA "
             "--rescue_profile exact_linear_support_only "
             "--corner_behavior_profile pre_f8_corner"
         ),
         "parameters": {
+            "config": "static/line",
             "facet_algo": "linear",
             "resolution": 0.5,
             "perturb_wiggle": 0.0,
             "perturb_seed": 0,
+            "mesh_type": "perturbed_quads",
+            "perturb_fix_boundary": 1,
+            "perturb_type": None,
+            "perturb_max_tries": None,
+            "case_indices": None,
+            "do_c0": False,
+            "random_seed": 42,
             "plic_fallback": "LVIRA",
             "rescue_profile": "exact_linear_support_only",
             "corner_behavior_profile": "pre_f8_corner",
@@ -194,6 +206,10 @@ def _config() -> dict:
             "unresolved_orientation_fallback": "LVIRA",
         },
         "benchmark_grid": {
+            "grid_size": 100.0,
+            "mesh_type": "perturbed Cartesian quadrilaterals",
+            "perturbation_type": "random",
+            "fix_boundary_nodes": True,
             "seed": 0,
             "trials_per_setting": 2,
             "wiggles": [0.0],
@@ -203,11 +219,13 @@ def _config() -> dict:
         "benchmarks": {
             "lines": {
                 "driver": "experiments.static.lines",
+                "config": "config/static/line.yaml",
                 "resolutions": "full_resolutions",
                 "methods": ["linear"],
                 "planned_runs": 1,
             }
         },
+        "numerics": {"mesh_fraction_threshold": 1e-10},
         "planned_totals": {"runs": 1, "cases": 2},
     }
 
@@ -229,6 +247,23 @@ def _trusted_source_repository(tmp_path, monkeypatch):
     source_config["source"]["target_commit"] = None
     _write_json(repository / "submission" / "submission_config.json", source_config)
     (repository / "requirements.txt").write_text("numpy==1.23.4\n", encoding="utf-8")
+    benchmark_config = repository / "config" / "static" / "line.yaml"
+    benchmark_config.parent.mkdir(parents=True, exist_ok=True)
+    benchmark_config.write_text(
+        """MESH:
+  GRID_SIZE: 100
+  RESOLUTION: 0.5
+  TYPE: cartesian
+  PERTURB:
+    WIGGLE: 0.0
+    SEED: 0
+    FIX_BOUNDARY: true
+GEOMS:
+  THRESHOLD: 1.0e-10
+  DO_C0: false
+""",
+        encoding="utf-8",
+    )
     for relative in audit_module.PRODUCTION_SOURCE_SHA256:
         data = _git(PROJECT_ROOT, "show", f"{PRODUCTION_COMMIT}:{relative}")
         path = repository / relative
@@ -400,10 +435,13 @@ def _make_release(root: Path) -> Path:
         case_rows.append({**context, **raw_case})
         truth_vtp = f"vtk/true/true_line{case_index}.vtp"
         truth_metadata = f"vtk/true/true_line{case_index}.facet_metadata.json"
+        angle = case_index * 3.141592653589793
         raw_geometry = {
             "case_index": case_index,
             "geometry_type": "line",
-            "angle": float(case_index),
+            "angle": angle,
+            "p_left": [50.0, 50.0],
+            "p_right": [50.2, 50.0 if case_index == 0 else 50.0],
             "truth_vtp": truth_vtp,
             "truth_metadata": truth_metadata,
         }
@@ -415,7 +453,9 @@ def _make_release(root: Path) -> Path:
             "cell_x": case_index,
             "cell_y": 0,
             "merge_id": case_index,
+            "merge_component_size": 1,
             "final_facet_class": "linear",
+            "final_facet_name": "linear",
             "construction_path": "direct_fit",
             "fallback_policy": "",
             "facet_geometry_json": json.dumps(
@@ -446,7 +486,9 @@ def _make_release(root: Path) -> Path:
             "cell_x",
             "cell_y",
             "merge_id",
+            "merge_component_size",
             "final_facet_class",
+            "final_facet_name",
             "construction_path",
             "fallback_policy",
             "facet_geometry_json",
@@ -455,12 +497,34 @@ def _make_release(root: Path) -> Path:
     )
     _write_csv(
         root / "diagnostics" / "merge_events.csv",
-        [*RUN_CONTEXT_FIELDS, "case_index", "event_order", "event_kind"],
+        [
+            *RUN_CONTEXT_FIELDS,
+            "case_index",
+            "event_order",
+            "merge_id",
+            "member_cells_json",
+            "stage",
+            "event_kind",
+            "fallback_policy",
+            "fallback_reason",
+            "previous_facet_class",
+            "previous_facet_name",
+            "facet_class",
+            "facet_name",
+        ],
         [],
     )
     _write_csv(
         root / "diagnostics" / "unresolved_plic_fallbacks.csv",
-        [*RUN_CONTEXT_FIELDS, "case_index", "merge_id", "policy"],
+        [
+            *RUN_CONTEXT_FIELDS,
+            "case_index",
+            "merge_id",
+            "setting",
+            "policy",
+            "facet_name",
+            "num_vertices",
+        ],
         [],
     )
 
@@ -526,7 +590,9 @@ def _make_release(root: Path) -> Path:
             "cell_x",
             "cell_y",
             "merge_id",
+            "merge_component_size",
             "final_facet_class",
+            "final_facet_name",
             "construction_path",
             "fallback_policy",
             "facet_geometry_json",
@@ -535,12 +601,32 @@ def _make_release(root: Path) -> Path:
     )
     _write_csv(
         bundle / "metrics" / "merge_events.csv",
-        ["case_index", "event_order", "event_kind"],
+        [
+            "case_index",
+            "event_order",
+            "merge_id",
+            "member_cells_json",
+            "stage",
+            "event_kind",
+            "fallback_policy",
+            "fallback_reason",
+            "previous_facet_class",
+            "previous_facet_name",
+            "facet_class",
+            "facet_name",
+        ],
         [],
     )
     _write_csv(
         bundle / "metrics" / "unresolved_plic_fallbacks.csv",
-        ["case_index", "merge_id", "policy"],
+        [
+            "case_index",
+            "merge_id",
+            "setting",
+            "policy",
+            "facet_name",
+            "num_vertices",
+        ],
         [],
     )
     (bundle / "metrics" / "hausdorff.txt").write_text("1.0\n3.0\n")
@@ -580,12 +666,64 @@ def _mutate_csv(path: Path, row_index: int, field_name: str, value: str) -> None
     _write_csv(path, fieldnames, rows)
 
 
+def _mutate_raw_and_consolidated_csv(
+    root: Path, table_name: str, field_name: str, value: str
+) -> None:
+    _mutate_csv(root / "diagnostics" / table_name, 0, field_name, value)
+    _mutate_csv(
+        root / "raw_runs" / SAVE_NAME / "metrics" / table_name,
+        0,
+        field_name,
+        value,
+    )
+
+
 def _add_provenance_rows(root: Path) -> None:
     context = _run_context()
-    merge_fields = ["case_index", "event_order", "event_kind"]
-    raw_merge = {"case_index": 0, "event_order": 1, "event_kind": "facet_assignment"}
-    fallback_fields = ["case_index", "merge_id", "policy"]
-    raw_fallback = {"case_index": 0, "merge_id": 7, "policy": "LVIRA"}
+    merge_fields = [
+        "case_index",
+        "event_order",
+        "merge_id",
+        "member_cells_json",
+        "stage",
+        "event_kind",
+        "fallback_policy",
+        "fallback_reason",
+        "previous_facet_class",
+        "previous_facet_name",
+        "facet_class",
+        "facet_name",
+    ]
+    raw_merge = {
+        "case_index": 0,
+        "event_order": 1,
+        "merge_id": 7,
+        "member_cells_json": "[[0,0]]",
+        "stage": "linear",
+        "event_kind": "plic_fallback",
+        "fallback_policy": "LVIRA",
+        "fallback_reason": "unresolved_orientation",
+        "previous_facet_class": "missing",
+        "previous_facet_name": "",
+        "facet_class": "linear",
+        "facet_name": "LVIRA",
+    }
+    fallback_fields = [
+        "case_index",
+        "merge_id",
+        "setting",
+        "policy",
+        "facet_name",
+        "num_vertices",
+    ]
+    raw_fallback = {
+        "case_index": 0,
+        "merge_id": 7,
+        "setting": "linear",
+        "policy": "LVIRA",
+        "facet_name": "LVIRA",
+        "num_vertices": 4,
+    }
 
     _write_csv(
         root / "diagnostics" / "merge_events.csv",
@@ -612,7 +750,42 @@ def _add_provenance_rows(root: Path) -> None:
         rows[0]["merge_id"] = "7"
         rows[0]["construction_path"] = "plic_fallback"
         rows[0]["fallback_policy"] = "LVIRA"
+        rows[0]["final_facet_name"] = "LVIRA"
+        rows[0]["facet_geometry_json"] = json.dumps(
+            {
+                "class": "linear",
+                "name": "LVIRA",
+                "p_left": [0, 0],
+                "p_right": [1, 1],
+            },
+            separators=(",", ":"),
+        )
         _write_csv(path, fieldnames, rows)
+
+    metadata_path = (
+        root
+        / "raw_runs"
+        / SAVE_NAME
+        / "vtk"
+        / "reconstructed"
+        / "facets"
+        / "0.facet_metadata.json"
+    )
+    _write_json(
+        metadata_path,
+        {
+            "schema_version": 2,
+            "primitives": [
+                {
+                    "kind": "line",
+                    "source_name": "LVIRA",
+                    "p_left": [0, 0],
+                    "p_right": [1, 1],
+                }
+            ],
+            "corners": [],
+        },
+    )
 
     inventory_path = root / "diagnostics" / "run_inventory.csv"
     fieldnames, rows = _read_csv(inventory_path)
@@ -720,6 +893,18 @@ def _add_argv_to_all_manifests(root: Path) -> None:
     raw_path = root / "raw_runs" / SAVE_NAME / "run_manifest.json"
     raw = json.loads(raw_path.read_text())
     raw["argv"] = shlex.split(raw["command"])
+    _write_json(raw_path, raw)
+
+
+def _mutate_both_child_manifests(root: Path, mutation) -> None:
+    consolidated_path = root / "diagnostics" / "run_manifests.jsonl"
+    consolidated = json.loads(consolidated_path.read_text())
+    mutation(consolidated["manifest"])
+    _write_jsonl(consolidated_path, [consolidated])
+
+    raw_path = root / "raw_runs" / SAVE_NAME / "run_manifest.json"
+    raw = json.loads(raw_path.read_text())
+    mutation(raw)
     _write_json(raw_path, raw)
 
 
@@ -894,6 +1079,55 @@ def test_symlink_alias_cannot_impersonate_reviewed_driver(tmp_path):
     messages = _messages(report)
     assert not report.ok
     assert "does not invoke reviewed driver" in messages
+
+
+def test_release_root_symlink_is_rejected_before_content_reads(tmp_path):
+    root = _make_release(tmp_path / "release")
+    alias = tmp_path / "release-alias"
+    alias.symlink_to(root, target_is_directory=True)
+
+    report = audit_final_release(alias, required_runs=1, required_cases=2)
+
+    assert not report.ok
+    assert "release root is a symbolic link" in _messages(report)
+
+
+def test_required_release_file_symlink_is_rejected(tmp_path):
+    root = _make_release(tmp_path / "release")
+    environment_path = root / "environment.json"
+    target = tmp_path / "environment.saved.json"
+    environment_path.rename(target)
+    environment_path.symlink_to(target)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    assert not report.ok
+    assert "release contains a symbolic link" in _messages(report)
+
+
+def test_optional_release_ancestor_symlink_is_rejected(tmp_path):
+    root = _make_release(tmp_path / "release")
+    bundle = root / "raw_runs" / SAVE_NAME
+    target = tmp_path / "saved-bundle"
+    bundle.rename(target)
+    bundle.symlink_to(target, target_is_directory=True)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    assert not report.ok
+    assert "release contains a symbolic link" in _messages(report)
+
+
+def test_optional_release_file_symlink_is_rejected(tmp_path):
+    root = _make_release(tmp_path / "release")
+    target = tmp_path / "optional-evidence.txt"
+    target.write_text("external\n", encoding="utf-8")
+    (root / "optional-evidence.txt").symlink_to(target)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    assert not report.ok
+    assert "release contains a symbolic link" in _messages(report)
 
 
 def test_future_repository_relative_argv_schema_is_supported(tmp_path):
@@ -1159,11 +1393,14 @@ def test_self_reported_snapshot_hash_cannot_hide_git_byte_mismatch(tmp_path):
 
 def test_every_audit_git_operation_disables_replace_objects(tmp_path, monkeypatch):
     root = _make_release(tmp_path / "release")
+    monkeypatch.setenv("PATH", str(tmp_path / "attacker-bin"))
+    monkeypatch.setenv("GIT_DIR", str(tmp_path / "attacker.git"))
+    monkeypatch.setenv("GIT_OBJECT_DIRECTORY", str(tmp_path / "objects"))
     real_run = subprocess.run
     git_calls = []
 
     def checked_run(command, *args, **kwargs):
-        if command and command[0] == "git":
+        if command and Path(command[0]).name == "git":
             git_calls.append((command, kwargs.get("env", {})))
         return real_run(command, *args, **kwargs)
 
@@ -1173,9 +1410,16 @@ def test_every_audit_git_operation_disables_replace_objects(tmp_path, monkeypatc
 
     assert report.ok, _messages(report)
     assert git_calls
+    assert all(Path(command[0]).is_absolute() for command, _ in git_calls)
     assert all(command[1] == "--no-replace-objects" for command, _ in git_calls)
     assert all(
         environment.get("GIT_NO_REPLACE_OBJECTS") == "1" for _, environment in git_calls
+    )
+    assert all("PATH" not in environment for _, environment in git_calls)
+    assert all("HOME" not in environment for _, environment in git_calls)
+    assert all("GIT_DIR" not in environment for _, environment in git_calls)
+    assert all(
+        "GIT_OBJECT_DIRECTORY" not in environment for _, environment in git_calls
     )
 
 
@@ -1546,6 +1790,27 @@ def test_committed_dead_alternate_call_fails_reviewed_source_fingerprint(
     assert "source snapshot bytes differ from target_commit" not in messages
 
 
+def test_archived_benchmark_yaml_must_match_resolved_mesh_contract(
+    tmp_path, monkeypatch
+):
+    root = _make_release(tmp_path / "release")
+    config_path = tmp_path / "config" / "static" / "line.yaml"
+    config_path.write_text(
+        config_path.read_text().replace("GRID_SIZE: 100", "GRID_SIZE: 99"),
+        encoding="utf-8",
+    )
+    _git(tmp_path, "add", "config/static/line.yaml")
+    _git(tmp_path, "commit", "-q", "-m", "mutate benchmark mesh config")
+    changed_commit = _git(tmp_path, "rev-parse", "HEAD").decode().strip()
+    monkeypatch.setattr(audit_module, "FINAL_SOURCE_COMMIT", changed_commit)
+    _retarget_release(root, changed_commit)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    assert not report.ok
+    assert "MESH.GRID_SIZE differs from resolved configuration" in _messages(report)
+
+
 @pytest.mark.parametrize(
     ("relative_path", "field_name", "tampered_value", "table_name"),
     [
@@ -1668,6 +1933,109 @@ def test_jsonl_reconciliation_normalizes_numbers_and_safe_relative_paths(tmp_pat
     assert report.ok, _messages(report)
 
 
+@pytest.mark.parametrize(
+    ("field_name", "tampered_value"),
+    [
+        ("config", "static/circle"),
+        ("mesh_type", "cartesian"),
+        ("random_seed", 99),
+        ("num_lines", 3),
+        ("perturb_fix_boundary", 0),
+    ],
+)
+def test_coordinated_child_manifest_parameter_tampering_cannot_escape_config_binding(
+    tmp_path, field_name, tampered_value
+):
+    root = _make_release(tmp_path / "release")
+    _mutate_both_child_manifests(
+        root,
+        lambda manifest: manifest["parameters"].__setitem__(field_name, tampered_value),
+    )
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    assert not report.ok
+    assert f"parameter {field_name} differs" in _messages(report)
+
+
+def test_child_command_must_bind_mesh_sampling_and_case_count(tmp_path):
+    root = _make_release(tmp_path / "release")
+
+    def remove_mesh_option(manifest):
+        tokens = shlex.split(manifest["command"])
+        index = tokens.index("--mesh_type")
+        del tokens[index : index + 2]
+        manifest["command"] = " ".join(tokens)
+
+    _mutate_both_child_manifests(root, remove_mesh_option)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    assert not report.ok
+    assert "command does not bind --mesh_type" in _messages(report)
+
+
+def test_coordinated_case_geometry_tampering_fails_benchmark_contract(tmp_path):
+    root = _make_release(tmp_path / "release")
+    for path in (
+        root / "diagnostics" / "case_geometry.jsonl",
+        root / "raw_runs" / SAVE_NAME / "metrics" / "case_geometry.jsonl",
+    ):
+        rows = [json.loads(line) for line in path.read_text().splitlines()]
+        rows[1]["angle"] = 1.25
+        _write_jsonl(path, rows)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    assert not report.ok
+    assert "angle differs from the resolved benchmark geometry" in _messages(report)
+
+
+def test_coordinated_line_endpoint_tampering_fails_geometry_contract(tmp_path):
+    root = _make_release(tmp_path / "release")
+    for path in (
+        root / "diagnostics" / "case_geometry.jsonl",
+        root / "raw_runs" / SAVE_NAME / "metrics" / "case_geometry.jsonl",
+    ):
+        rows = [json.loads(line) for line in path.read_text().splitlines()]
+        rows[0]["p_right"] = [50.3, 50.0]
+        _write_jsonl(path, rows)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    assert not report.ok
+    assert "p_right[0] differs from the resolved benchmark geometry" in _messages(
+        report
+    )
+
+
+def test_json_reconciliation_preserves_sub_float_decimal_distinctions(tmp_path):
+    root = _make_release(tmp_path / "release")
+    consolidated_path = root / "diagnostics" / "case_geometry.jsonl"
+    consolidated_rows = [
+        json.loads(line) for line in consolidated_path.read_text().splitlines()
+    ]
+    consolidated_rows[0]["decimal_probe"] = 1.0
+    _write_jsonl(consolidated_path, consolidated_rows)
+
+    raw_path = root / "raw_runs" / SAVE_NAME / "metrics" / "case_geometry.jsonl"
+    raw_rows = [json.loads(line) for line in raw_path.read_text().splitlines()]
+    raw_rows[0]["decimal_probe"] = 1.0
+    _write_jsonl(raw_path, raw_rows)
+    raw_text = raw_path.read_text()
+    raw_path.write_text(
+        raw_text.replace(
+            '"decimal_probe": 1.0', '"decimal_probe": 1.0000000000000001', 1
+        ),
+        encoding="utf-8",
+    )
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    assert not report.ok
+    assert "$.decimal_probe" in _messages(report)
+
+
 def test_matching_raw_and_consolidated_non_lvira_fallbacks_still_fail(tmp_path):
     root = _make_release(tmp_path / "release")
     _add_provenance_rows(root)
@@ -1734,6 +2102,72 @@ def test_fallback_event_requires_plic_cell_component(tmp_path):
     messages = _messages(report)
     assert not report.ok
     assert "unresolved fallback event has no plic_fallback cell component" in messages
+
+
+def test_fallback_cell_identity_is_checked_beyond_policy(tmp_path):
+    root = _make_release(tmp_path / "release")
+    _add_provenance_rows(root)
+    _mutate_raw_and_consolidated_csv(
+        root, "cell_metrics.csv", "final_facet_name", "not-lvira"
+    )
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    assert not report.ok
+    assert "fallback final_facet_name differs from production" in _messages(report)
+
+
+def test_fallback_cell_geometry_must_match_saved_facet_metadata(tmp_path):
+    root = _make_release(tmp_path / "release")
+    _add_provenance_rows(root)
+    tampered_geometry = json.dumps(
+        {
+            "class": "linear",
+            "name": "LVIRA",
+            "p_left": [0, 0],
+            "p_right": [2, 2],
+        },
+        separators=(",", ":"),
+    )
+    _mutate_raw_and_consolidated_csv(
+        root, "cell_metrics.csv", "facet_geometry_json", tampered_geometry
+    )
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    assert not report.ok
+    assert "saved facet metadata lacks fallback LVIRA geometry" in _messages(report)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "tampered_value", "expected_message"),
+    [
+        (
+            "member_cells_json",
+            "[[1,0]]",
+            "merge-event member cells disagree with cell provenance",
+        ),
+        (
+            "facet_name",
+            "Youngs",
+            "fallback merge-event identity differs from production",
+        ),
+        ("fallback_policy", "ELVIRA", "fallback merge-event identity differs"),
+    ],
+)
+def test_plic_merge_event_is_exactly_bound_to_fallback_component(
+    tmp_path, field_name, tampered_value, expected_message
+):
+    root = _make_release(tmp_path / "release")
+    _add_provenance_rows(root)
+    _mutate_raw_and_consolidated_csv(
+        root, "merge_events.csv", field_name, tampered_value
+    )
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    assert not report.ok
+    assert expected_message in _messages(report)
 
 
 @pytest.mark.parametrize(
@@ -2145,31 +2579,198 @@ def test_sha256_manifest_is_sorted_complete_and_verifiable(tmp_path):
     root = _make_release(tmp_path / "release")
     assert audit_final_release(root, required_runs=1, required_cases=2).ok
 
-    manifest = generate_sha256_manifest(root)
+    os.chmod(tmp_path, 0o700)
+    sealed_root = tmp_path / "sealed-release"
+    manifest = generate_sha256_manifest(
+        root,
+        sealed_release_output=sealed_root,
+        required_runs=1,
+        required_cases=2,
+    )
 
     lines = manifest.read_text(encoding="utf-8").splitlines()
     paths = [line[66:] for line in lines]
     assert paths == sorted(paths)
     assert "SHA256SUMS" not in paths
-    assert verify_sha256_manifest(root) == []
+    assert not (root / "SHA256SUMS").exists()
+    assert verify_sha256_manifest(sealed_root) == []
 
-    environment_path = root / "environment.json"
+    environment_path = sealed_root / "environment.json"
+    os.chmod(environment_path, 0o600)
     environment_path.write_text("tampered\n", encoding="utf-8")
-    errors = verify_sha256_manifest(root)
+    errors = verify_sha256_manifest(sealed_root)
     assert "SHA-256 mismatch: environment.json" in errors
 
 
 def test_sha256_verification_rejects_extra_and_unsorted_files(tmp_path):
     root = _make_release(tmp_path / "release")
-    manifest = generate_sha256_manifest(root)
-    (root / "final_figures" / "new.pdf").parent.mkdir()
-    (root / "final_figures" / "new.pdf").write_bytes(b"vector figure")
+    os.chmod(tmp_path, 0o700)
+    sealed_root = tmp_path / "sealed-release"
+    manifest = generate_sha256_manifest(
+        root,
+        sealed_release_output=sealed_root,
+        required_runs=1,
+        required_cases=2,
+    )
+    os.chmod(sealed_root, 0o700)
+    (sealed_root / "final_figures").mkdir()
+    (sealed_root / "final_figures" / "new.pdf").write_bytes(b"vector figure")
 
-    errors = verify_sha256_manifest(root)
+    errors = verify_sha256_manifest(sealed_root)
     assert "file is absent from SHA-256 manifest: final_figures/new.pdf" in errors
 
-    generate_sha256_manifest(root)
+    (sealed_root / "final_figures" / "new.pdf").unlink()
+    (sealed_root / "final_figures").rmdir()
     lines = manifest.read_text(encoding="utf-8").splitlines()
+    os.chmod(manifest, 0o600)
     manifest.write_text("\n".join(reversed(lines)) + "\n", encoding="utf-8")
-    errors = verify_sha256_manifest(root)
+    errors = verify_sha256_manifest(sealed_root)
     assert "SHA-256 manifest paths are not sorted" in errors
+
+
+def test_sha256_verification_rejects_symlinked_release_root(tmp_path):
+    root = _make_release(tmp_path / "release")
+    os.chmod(tmp_path, 0o700)
+    sealed_root = tmp_path / "sealed-release"
+    generate_sha256_manifest(
+        root,
+        sealed_release_output=sealed_root,
+        required_runs=1,
+        required_cases=2,
+    )
+    alias = tmp_path / "sealed-alias"
+    alias.symlink_to(sealed_root, target_is_directory=True)
+
+    errors = verify_sha256_manifest(alias)
+
+    assert any("release root is a symbolic link" in error for error in errors)
+
+
+def test_live_manifest_generation_is_forbidden(tmp_path):
+    root = _make_release(tmp_path / "release")
+
+    with pytest.raises(
+        audit_module.ReleaseAuditInputError,
+        match="live manifest generation is forbidden",
+    ):
+        generate_sha256_manifest(root)
+
+    assert not (root / "SHA256SUMS").exists()
+
+
+def test_seal_requires_private_parent_and_absent_destination(tmp_path):
+    root = _make_release(tmp_path / "release")
+    public_parent = tmp_path / "public"
+    public_parent.mkdir(mode=0o755)
+    os.chmod(public_parent, 0o755)
+
+    with pytest.raises(
+        audit_module.ReleaseAuditInputError, match="parent must be private"
+    ):
+        seal_release_snapshot(
+            root,
+            public_parent / "sealed",
+            required_runs=1,
+            required_cases=2,
+        )
+
+    private_parent = tmp_path / "private"
+    private_parent.mkdir(mode=0o700)
+    destination = private_parent / "sealed"
+    destination.mkdir()
+    (destination / "sentinel").write_text("keep\n")
+    with pytest.raises(
+        audit_module.ReleaseAuditInputError, match="destination already exists"
+    ):
+        seal_release_snapshot(root, destination, required_runs=1, required_cases=2)
+    assert (destination / "sentinel").read_text() == "keep\n"
+
+
+def test_seal_detects_mutation_between_audit_and_ledger(tmp_path, monkeypatch):
+    root = _make_release(tmp_path / "release")
+    private_parent = tmp_path / "private"
+    private_parent.mkdir(mode=0o700)
+    destination = private_parent / "sealed"
+    real_audit = audit_module.audit_final_release
+
+    def audit_then_mutate(staging, **kwargs):
+        report = real_audit(staging, **kwargs)
+        environment = Path(staging) / "environment.json"
+        environment.write_text(environment.read_text() + "\n", encoding="utf-8")
+        return report
+
+    monkeypatch.setattr(audit_module, "audit_final_release", audit_then_mutate)
+
+    with pytest.raises(
+        audit_module.ReleaseAuditInputError,
+        match="changed between its cryptographic reads around audit",
+    ):
+        seal_release_snapshot(root, destination, required_runs=1, required_cases=2)
+
+    assert not destination.exists()
+    assert not list(private_parent.glob(".*.sealing-*"))
+
+
+def test_seal_reverifies_after_permissions_are_locked(tmp_path, monkeypatch):
+    root = _make_release(tmp_path / "release")
+    private_parent = tmp_path / "private"
+    private_parent.mkdir(mode=0o700)
+    destination = private_parent / "sealed"
+    real_lock = audit_module._make_snapshot_read_only
+
+    def lock_then_mutate(staging):
+        real_lock(staging)
+        environment = Path(staging) / "environment.json"
+        os.chmod(environment, 0o600)
+        environment.write_text(environment.read_text() + "\n", encoding="utf-8")
+        os.chmod(environment, 0o400)
+
+    monkeypatch.setattr(audit_module, "_make_snapshot_read_only", lock_then_mutate)
+
+    with pytest.raises(
+        audit_module.ReleaseAuditInputError,
+        match="changed after permissions were sealed",
+    ):
+        seal_release_snapshot(root, destination, required_runs=1, required_cases=2)
+
+    assert not destination.exists()
+    assert not list(private_parent.glob(".*.sealing-*"))
+
+
+def test_atomic_seal_publication_never_replaces_racing_destination(
+    tmp_path, monkeypatch
+):
+    root = _make_release(tmp_path / "release")
+    private_parent = tmp_path / "private"
+    private_parent.mkdir(mode=0o700)
+    destination = private_parent / "sealed"
+    real_publish = audit_module._atomic_publish_noreplace
+
+    def collide_then_publish(staging, target):
+        target.mkdir()
+        (target / "sentinel").write_text("winner\n")
+        real_publish(staging, target)
+
+    monkeypatch.setattr(audit_module, "_atomic_publish_noreplace", collide_then_publish)
+
+    with pytest.raises(OSError):
+        seal_release_snapshot(root, destination, required_runs=1, required_cases=2)
+
+    assert (destination / "sentinel").read_text() == "winner\n"
+    assert not list(private_parent.glob(".*.sealing-*"))
+
+
+def test_sealed_snapshot_is_read_only_and_audits_the_manifested_bytes(tmp_path):
+    root = _make_release(tmp_path / "release")
+    private_parent = tmp_path / "private"
+    private_parent.mkdir(mode=0o700)
+    destination = private_parent / "sealed"
+
+    sealed = seal_release_snapshot(root, destination, required_runs=1, required_cases=2)
+
+    assert sealed.release_root == destination
+    assert sealed.report.ok
+    assert verify_sha256_manifest(destination) == []
+    assert stat.S_IMODE(os.lstat(destination).st_mode) == 0o500
+    assert stat.S_IMODE(os.lstat(destination / "environment.json").st_mode) == 0o400
+    assert not (root / "SHA256SUMS").exists()

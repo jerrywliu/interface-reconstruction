@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import copy
 import csv
+import ctypes
+import errno
 import gzip
 import hashlib
 import json
@@ -13,16 +15,21 @@ import math
 import os
 import re
 import shlex
+import shutil
+import stat
 import statistics
 import subprocess
+import sys
 import tarfile
 import tempfile
 import zlib
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from decimal import Decimal, DecimalException
 from pathlib import Path, PurePosixPath
 from typing import Iterable, Iterator, Mapping, Sequence
+
+import yaml
 
 
 FINAL_RUN_COUNT = 970
@@ -42,6 +49,11 @@ TAR_RECORD_SIZE = 10_240
 MAX_TAR_METADATA_BYTES_PER_MEMBER = 4_096
 MAX_TAR_GLOBAL_METADATA_BYTES = 65_536
 GZIP_VALIDATION_CHUNK_SIZE = 65_536
+TRUSTED_GIT_CANDIDATES = (
+    Path("/usr/bin/git"),
+    Path("/usr/local/bin/git"),
+    Path("/opt/homebrew/bin/git"),
+)
 TAR_EXTENSION_TYPES = frozenset(
     {
         tarfile.GNUTYPE_LONGNAME,
@@ -63,6 +75,28 @@ PRODUCTION_DRIVER_MODULES = {
     "ellipses": "experiments.static.ellipses",
     "squares": "experiments.static.squares",
     "zalesak": "experiments.static.zalesak",
+}
+
+BENCHMARK_COUNT_PARAMETERS = {
+    "lines": "num_lines",
+    "circles": "num_circles",
+    "ellipses": "num_ellipses",
+    "squares": "num_squares",
+    "zalesak": "num_cases",
+}
+BENCHMARK_RANDOM_SEEDS = {
+    "lines": 42,
+    "circles": 41,
+    "ellipses": 42,
+    "squares": 42,
+    "zalesak": 43,
+}
+BENCHMARK_GEOMETRY_TYPES = {
+    "lines": "line",
+    "circles": "circle",
+    "ellipses": "ellipse",
+    "squares": "square",
+    "zalesak": "zalesak",
 }
 
 # Full-file fingerprints from the reviewed production commit. Binding the entire
@@ -339,16 +373,22 @@ class AuditReport:
         return self.total_errors - len(self.errors)
 
 
+@dataclass(frozen=True)
+class SealedRelease:
+    release_root: Path
+    manifest_path: Path
+    report: AuditReport
+    copied_bytes: int
+    clone_files: int
+    copied_files: int
+
+
 def _reject_json_constant(value: str) -> None:
     raise ValueError(f"nonfinite JSON constant {value!r}")
 
 
-def _strict_json_float(value: str) -> float:
-    number = _bounded_decimal(value, "JSON number")
-    converted = float(number)
-    if not math.isfinite(converted):
-        raise ValueError(f"JSON number is outside the finite float range: {value!r}")
-    return converted
+def _strict_json_float(value: str) -> Decimal:
+    return _bounded_decimal(value, "JSON number")
 
 
 def _strict_json_int(value: str) -> int:
@@ -492,12 +532,67 @@ def _safe_release_path(root: Path, raw_path: object, label: str) -> Path:
         raise ReleaseAuditInputError(f"{label} is not release-relative: {value!r}")
     path = root.joinpath(*pure.parts)
     try:
-        path.resolve().relative_to(root.resolve())
+        path.relative_to(root)
     except (OSError, ValueError) as exc:
         raise ReleaseAuditInputError(
             f"{label} escapes the release root: {value!r}"
         ) from exc
     return path
+
+
+def _lexical_absolute(path: Path | str) -> Path:
+    return Path(os.path.abspath(os.fspath(path)))
+
+
+def _reject_release_symlinks(root: Path, report: AuditReport) -> bool:
+    """Reject links and special nodes before any release content is trusted."""
+    try:
+        root_stat = os.lstat(root)
+    except OSError as exc:
+        report.add_error(f"could not inspect release root {root}: {exc}")
+        return False
+    if stat.S_ISLNK(root_stat.st_mode):
+        report.add_error(f"release root is a symbolic link: {root}")
+        return False
+    if not stat.S_ISDIR(root_stat.st_mode):
+        report.add_error(f"release root is not a directory: {root}")
+        return False
+
+    valid = True
+    for directory, directory_names, file_names in os.walk(root, followlinks=False):
+        directory_path = Path(directory)
+        for name in list(directory_names):
+            path = directory_path / name
+            try:
+                node_stat = os.lstat(path)
+            except OSError as exc:
+                report.add_error(f"could not inspect release path {path}: {exc}")
+                directory_names.remove(name)
+                valid = False
+                continue
+            if stat.S_ISLNK(node_stat.st_mode):
+                report.add_error(f"release contains a symbolic link: {path}")
+                directory_names.remove(name)
+                valid = False
+            elif not stat.S_ISDIR(node_stat.st_mode):
+                report.add_error(f"release contains a non-directory node: {path}")
+                directory_names.remove(name)
+                valid = False
+        for name in file_names:
+            path = directory_path / name
+            try:
+                node_stat = os.lstat(path)
+            except OSError as exc:
+                report.add_error(f"could not inspect release path {path}: {exc}")
+                valid = False
+                continue
+            if stat.S_ISLNK(node_stat.st_mode):
+                report.add_error(f"release contains a symbolic link: {path}")
+                valid = False
+            elif not stat.S_ISREG(node_stat.st_mode):
+                report.add_error(f"release contains a non-regular file: {path}")
+                valid = False
+    return valid
 
 
 def _require_headers(
@@ -882,6 +977,187 @@ def _check_child_manifest_command(
             )
 
 
+def _values_match(actual: object, expected: object, *, numeric: bool = False) -> bool:
+    if numeric:
+        try:
+            return _canonical_number(actual) == _canonical_number(expected)
+        except ReleaseAuditInputError:
+            return False
+    return type(actual) is type(expected) and actual == expected
+
+
+def _declared_child_config_path(benchmark: Mapping[str, object]) -> str:
+    raw = benchmark.get("config")
+    if not isinstance(raw, str):
+        raise ReleaseAuditInputError("benchmark config path is unavailable")
+    pure = PurePosixPath(raw)
+    if (
+        pure.is_absolute()
+        or ".." in pure.parts
+        or len(pure.parts) != 3
+        or pure.parts[:2] != ("config", "static")
+        or pure.suffix != ".yaml"
+    ):
+        raise ReleaseAuditInputError(f"benchmark config path is unsafe: {raw!r}")
+    return PurePosixPath(*pure.parts[1:]).with_suffix("").as_posix()
+
+
+def _check_parameter_value(
+    parameters: Mapping[str, object],
+    field_name: str,
+    expected: object,
+    label: str,
+    report: AuditReport,
+    *,
+    numeric: bool = False,
+) -> None:
+    actual = parameters.get(field_name)
+    if not _values_match(actual, expected, numeric=numeric):
+        report.add_error(
+            f"{label} parameter {field_name} differs from resolved production "
+            f"configuration: {actual!r} != {expected!r}"
+        )
+
+
+def _check_exact_command_option(
+    tokens: Sequence[str],
+    option: str,
+    expected: object,
+    label: str,
+    report: AuditReport,
+    *,
+    numeric: bool = False,
+) -> None:
+    try:
+        values = _option_values(tokens, option)
+    except ReleaseAuditInputError as exc:
+        report.add_error(f"{label} {option} evidence is invalid: {exc}")
+        return
+    if len(values) != 1 or not _values_match(values[0], str(expected), numeric=numeric):
+        report.add_error(
+            f"{label} command does not bind {option} to the resolved run value: "
+            f"{values!r} != {[str(expected)]!r}"
+        )
+
+
+def _check_child_manifest_contract(
+    manifest: Mapping[str, object],
+    key: RunKey,
+    config: Mapping[str, object],
+    save_name: str,
+    inheritance: RescueProfileInheritance,
+    label: str,
+    report: AuditReport,
+) -> None:
+    parameters = manifest.get("parameters")
+    benchmarks = config.get("benchmarks")
+    grid = config.get("benchmark_grid")
+    if not isinstance(parameters, Mapping):
+        report.add_error(f"{label} parameters are unavailable")
+        return
+    if not isinstance(benchmarks, Mapping) or not isinstance(grid, Mapping):
+        report.add_error(f"{label} cannot be bound to an invalid resolved config")
+        return
+    benchmark = benchmarks.get(key.experiment)
+    if not isinstance(benchmark, Mapping):
+        report.add_error(f"{label} has no resolved benchmark configuration")
+        return
+    try:
+        config_value = _declared_child_config_path(benchmark)
+        trials = _parse_int(
+            grid.get("trials_per_setting"), "benchmark_grid.trials_per_setting"
+        )
+        grid_seed = _parse_int(grid.get("seed"), "benchmark_grid.seed")
+    except ReleaseAuditInputError as exc:
+        report.add_error(f"{label} cannot resolve child parameters: {exc}")
+        return
+
+    expected_mesh = {"perturbed Cartesian quadrilaterals": "perturbed_quads"}.get(
+        grid.get("mesh_type")
+    )
+    if expected_mesh is None:
+        report.add_error(
+            f"{label} resolved mesh_type is not the frozen production mesh: "
+            f"{grid.get('mesh_type')!r}"
+        )
+        return
+    expected_fix_boundary = 1 if grid.get("fix_boundary_nodes") is True else 0
+    common_values = {
+        "config": (config_value, False),
+        "resolution": (key.resolution, True),
+        "perturb_wiggle": (key.wiggle, True),
+        "perturb_seed": (grid_seed, True),
+        "mesh_type": (expected_mesh, False),
+        "perturb_fix_boundary": (expected_fix_boundary, True),
+        "perturb_type": (None, False),
+        "perturb_max_tries": (None, False),
+        "case_indices": (None, False),
+        "do_c0": (False, False),
+        "random_seed": (BENCHMARK_RANDOM_SEEDS[key.experiment], True),
+        BENCHMARK_COUNT_PARAMETERS[key.experiment]: (trials, True),
+    }
+    for field_name, (expected, numeric) in common_values.items():
+        _check_parameter_value(
+            parameters, field_name, expected, label, report, numeric=numeric
+        )
+    actual_algo = str(parameters.get("facet_algo", "")).lower()
+    if actual_algo != key.algo:
+        report.add_error(
+            f"{label} parameter facet_algo differs from run key: "
+            f"{actual_algo!r} != {key.algo!r}"
+        )
+
+    geometry_parameters: dict[str, tuple[object, bool]] = {}
+    if key.experiment == "circles":
+        geometry_parameters["radius"] = (benchmark.get("radius"), True)
+    elif key.experiment == "ellipses":
+        geometry_parameters["major_axis"] = (30, True)
+    elif key.experiment == "zalesak":
+        geometry_parameters.update(
+            {
+                "radius": (benchmark.get("radius"), True),
+                "slot_width": (benchmark.get("slot_width"), True),
+                "slot_top_rel": (
+                    benchmark.get("slot_top_relative_to_center"),
+                    True,
+                ),
+                "arc_failure_fallback": ("local_linear", False),
+            }
+        )
+    for field_name, (expected, numeric) in geometry_parameters.items():
+        if expected is None:
+            report.add_error(
+                f"{label} resolved geometry parameter {field_name} is absent"
+            )
+            continue
+        _check_parameter_value(
+            parameters, field_name, expected, label, report, numeric=numeric
+        )
+
+    try:
+        tokens = _manifest_command_tokens(
+            manifest,
+            allow_legacy_string=inheritance.legacy_command_strings_allowed,
+        )
+    except ReleaseAuditInputError:
+        return
+    command_contract = {
+        "--config": (config_value, False),
+        "--resolution": (key.resolution, True),
+        "--facet_algo": (parameters.get("facet_algo"), False),
+        "--save_name": (save_name, False),
+        "--mesh_type": (expected_mesh, False),
+        "--perturb_wiggle": (key.wiggle, True),
+        "--perturb_seed": (grid_seed, True),
+        "--perturb_fix_boundary": (expected_fix_boundary, True),
+        f"--{BENCHMARK_COUNT_PARAMETERS[key.experiment]}": (trials, True),
+    }
+    for option, (expected, numeric) in command_contract.items():
+        _check_exact_command_option(
+            tokens, option, expected, label, report, numeric=numeric
+        )
+
+
 def _iter_jsonl(path: Path, report: AuditReport) -> Iterator[tuple[int, dict]]:
     if not path.is_file():
         report.add_error(f"missing required JSONL file: {path}")
@@ -1008,17 +1284,57 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _trusted_git_executable() -> Path:
+    for candidate in TRUSTED_GIT_CANDIDATES:
+        try:
+            node = os.lstat(candidate)
+        except OSError:
+            continue
+        if stat.S_ISLNK(node.st_mode) or not stat.S_ISREG(node.st_mode):
+            continue
+        if hasattr(os, "getuid") and node.st_uid != 0:
+            continue
+        if node.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            continue
+        if not os.access(candidate, os.X_OK):
+            continue
+        return candidate
+    raise ReleaseAuditInputError(
+        "no absolute, regular, non-group/world-writable Git executable was found "
+        f"in the fixed trust set: {[str(path) for path in TRUSTED_GIT_CANDIDATES]!r}"
+    )
+
+
+def _scrubbed_git_environment() -> dict[str, str]:
+    return {
+        "LANG": "C",
+        "LC_ALL": "C",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_COUNT": "0",
+        "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_OPTIONAL_LOCKS": "0",
+        "GIT_TERMINAL_PROMPT": "0",
+    }
+
+
 def _run_git(
     repository: Path,
     arguments: Sequence[str],
     *,
     input_data: bytes | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
-    environment = os.environ.copy()
-    environment["GIT_NO_REPLACE_OBJECTS"] = "1"
+    executable = _trusted_git_executable()
+    environment = _scrubbed_git_environment()
     try:
         return subprocess.run(
-            ["git", "--no-replace-objects", "-C", str(repository), *arguments],
+            [
+                str(executable),
+                "--no-replace-objects",
+                "-C",
+                str(repository),
+                *arguments,
+            ],
             input=input_data,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -1068,9 +1384,23 @@ def _find_git_repository(root: Path, target_commit: str) -> Path:
 
 
 def _git_tree_blobs(repository: Path, target_commit: str) -> dict[str, GitBlob]:
+    commit = _run_git(repository, ("cat-file", "commit", target_commit))
+    if commit.returncode != 0 or _git_sha1("commit", commit.stdout) != target_commit:
+        raise ReleaseAuditInputError(
+            "could not independently verify the exact target commit object"
+        )
+    first_line = commit.stdout.split(b"\n", 1)[0]
+    if not re.fullmatch(rb"tree [0-9a-f]{40}", first_line):
+        raise ReleaseAuditInputError("target commit has no canonical tree linkage")
+    tree_id = first_line[5:].decode("ascii")
+    tree_object = _run_git(repository, ("cat-file", "tree", tree_id))
+    if tree_object.returncode != 0 or _git_sha1("tree", tree_object.stdout) != tree_id:
+        raise ReleaseAuditInputError(
+            "target commit's root tree object failed independent hash verification"
+        )
     result = _run_git(
         repository,
-        ("ls-tree", "-r", "-z", "--full-tree", target_commit),
+        ("ls-tree", "-r", "-z", "--full-tree", tree_id),
     )
     if result.returncode != 0:
         detail = result.stderr.decode("utf-8", errors="replace").strip()
@@ -1505,6 +1835,84 @@ def _report_path_set_difference(
     report.add_error(f"{label}: {sample}{suffix}")
 
 
+def _check_archived_benchmark_configs(
+    config: Mapping[str, object],
+    snapshot_members: Mapping[str, bytes],
+    report: AuditReport,
+) -> None:
+    benchmarks = config.get("benchmarks")
+    grid = config.get("benchmark_grid")
+    numerics = config.get("numerics")
+    if not all(isinstance(value, Mapping) for value in (benchmarks, grid, numerics)):
+        report.add_error(
+            "resolved benchmark_grid/benchmarks/numerics cannot bind archived configs"
+        )
+        return
+    assert isinstance(benchmarks, Mapping)
+    assert isinstance(grid, Mapping)
+    assert isinstance(numerics, Mapping)
+    if grid.get("perturbation_type") != "random":
+        report.add_error("resolved perturbation_type is not the production 'random'")
+    if grid.get("fix_boundary_nodes") is not True:
+        report.add_error("resolved fix_boundary_nodes is not true")
+
+    for experiment, raw_benchmark in sorted(benchmarks.items()):
+        label = f"benchmark {experiment} archived config"
+        if not isinstance(raw_benchmark, Mapping):
+            report.add_error(f"{label} declaration is not an object")
+            continue
+        relative = raw_benchmark.get("config")
+        if not isinstance(relative, str):
+            report.add_error(f"{label} path is unavailable")
+            continue
+        try:
+            _declared_child_config_path(raw_benchmark)
+        except ReleaseAuditInputError as exc:
+            report.add_error(f"{label}: {exc}")
+            continue
+        data = snapshot_members.get(relative)
+        if data is None:
+            report.add_error(f"{label} is absent from the source snapshot: {relative}")
+            continue
+        try:
+            parsed = yaml.safe_load(data.decode("utf-8"))
+        except (UnicodeError, yaml.YAMLError) as exc:
+            report.add_error(f"{label} cannot be parsed: {exc}")
+            continue
+        if not isinstance(parsed, Mapping):
+            report.add_error(f"{label} root is not an object")
+            continue
+        mesh = parsed.get("MESH")
+        geoms = parsed.get("GEOMS")
+        if not isinstance(mesh, Mapping) or not isinstance(geoms, Mapping):
+            report.add_error(f"{label} lacks MESH or GEOMS settings")
+            continue
+        perturb = mesh.get("PERTURB")
+        if not isinstance(perturb, Mapping):
+            report.add_error(f"{label} lacks MESH.PERTURB settings")
+            continue
+        for actual, expected, field_name in (
+            (mesh.get("GRID_SIZE"), grid.get("grid_size"), "MESH.GRID_SIZE"),
+            (perturb.get("SEED"), grid.get("seed"), "MESH.PERTURB.SEED"),
+            (
+                geoms.get("THRESHOLD"),
+                numerics.get("mesh_fraction_threshold"),
+                "GEOMS.THRESHOLD",
+            ),
+        ):
+            if not _values_match(actual, expected, numeric=True):
+                report.add_error(
+                    f"{label} {field_name} differs from resolved configuration: "
+                    f"{actual!r} != {expected!r}"
+                )
+        if perturb.get("FIX_BOUNDARY") is not grid.get("fix_boundary_nodes"):
+            report.add_error(
+                f"{label} MESH.PERTURB.FIX_BOUNDARY differs from resolved configuration"
+            )
+        if geoms.get("DO_C0") is not False:
+            report.add_error(f"{label} GEOMS.DO_C0 is not false")
+
+
 def _check_source_provenance(
     root: Path,
     config: dict,
@@ -1634,6 +2042,8 @@ def _check_source_provenance(
                         "resolved config differs from the snapshotted config beyond "
                         "status and source.target_commit"
                     )
+
+    _check_archived_benchmark_configs(config, snapshot_members, report)
 
     if environment:
         fingerprints = environment.get("input_fingerprints")
@@ -1921,6 +2331,7 @@ def _check_inventory(
 
 def _check_consolidated_run_manifests(
     root: Path,
+    config: Mapping[str, object],
     expected_runs: set[RunKey],
     inventory: Mapping[RunKey, Mapping[str, str]],
     target_commit: str,
@@ -1999,6 +2410,15 @@ def _check_consolidated_run_manifests(
             "consolidated child manifest",
             report,
         )
+        _check_child_manifest_contract(
+            manifest,
+            key,
+            config,
+            save_name,
+            inheritance,
+            "consolidated child manifest",
+            report,
+        )
         try:
             nested_key = RunKey(
                 key.experiment,
@@ -2023,6 +2443,257 @@ def _case_key(row: Mapping[str, object], source: str) -> tuple[RunKey, int]:
     if row.get("case_index") in (None, ""):
         raise ReleaseAuditInputError(f"{source} has no case_index")
     return key, _parse_int(row["case_index"], f"{source} case_index")
+
+
+def _require_numeric_close(
+    actual: object,
+    expected: object,
+    label: str,
+    report: AuditReport,
+    *,
+    tolerance: float = 1e-12,
+) -> None:
+    try:
+        actual_number = float(_bounded_decimal(actual, label))
+        expected_number = float(_bounded_decimal(expected, f"{label} expected"))
+    except (ReleaseAuditInputError, ValueError, OverflowError) as exc:
+        report.add_error(str(exc))
+        return
+    if not math.isclose(actual_number, expected_number, rel_tol=0.0, abs_tol=tolerance):
+        report.add_error(
+            f"{label} differs from the resolved benchmark geometry: "
+            f"{actual!r} != {expected!r}"
+        )
+
+
+def _point_coordinates(
+    value: object, label: str, report: AuditReport
+) -> tuple[float, float] | None:
+    if not isinstance(value, list) or len(value) != 2:
+        report.add_error(f"{label} is not a two-coordinate point")
+        return None
+    coordinates: list[float] = []
+    for coordinate_index, coordinate in enumerate(value):
+        try:
+            number = float(_bounded_decimal(coordinate, f"{label}[{coordinate_index}]"))
+        except (ReleaseAuditInputError, ValueError, OverflowError) as exc:
+            report.add_error(str(exc))
+            return None
+        coordinates.append(number)
+    return coordinates[0], coordinates[1]
+
+
+def _check_point(value: object, label: str, report: AuditReport) -> None:
+    _point_coordinates(value, label, report)
+
+
+def _check_point_in_unit_center_box(
+    value: object, label: str, report: AuditReport
+) -> tuple[float, float] | None:
+    point = _point_coordinates(value, label, report)
+    if point is not None and not all(
+        50.0 <= coordinate <= 51.0 for coordinate in point
+    ):
+        report.add_error(f"{label} is outside the frozen [50, 51]^2 sampling box")
+    return point
+
+
+def _require_point_close(
+    actual: object,
+    expected: tuple[float, float],
+    label: str,
+    report: AuditReport,
+    *,
+    tolerance: float = 1e-10,
+    relative_tolerance: float = 1e-12,
+) -> None:
+    point = _point_coordinates(actual, label, report)
+    if point is None:
+        return
+    for coordinate_index, (actual_coordinate, expected_coordinate) in enumerate(
+        zip(point, expected)
+    ):
+        if not math.isclose(
+            actual_coordinate,
+            expected_coordinate,
+            rel_tol=relative_tolerance,
+            abs_tol=tolerance,
+        ):
+            report.add_error(
+                f"{label}[{coordinate_index}] differs from the resolved benchmark "
+                f"geometry: {actual_coordinate!r} != {expected_coordinate!r}"
+            )
+
+
+def _rotated_point(
+    point: tuple[float, float], center: tuple[float, float], theta: float
+) -> tuple[float, float]:
+    x = point[0] - center[0]
+    y = point[1] - center[1]
+    return (
+        x * math.cos(theta) - y * math.sin(theta) + center[0],
+        x * math.sin(theta) + y * math.cos(theta) + center[1],
+    )
+
+
+def _check_case_geometry_contract(
+    row: Mapping[str, object],
+    key: RunKey,
+    case_index: int,
+    trials: int,
+    config: Mapping[str, object],
+    label: str,
+    report: AuditReport,
+) -> None:
+    benchmarks = config.get("benchmarks")
+    if not isinstance(benchmarks, Mapping):
+        report.add_error(f"{label} cannot resolve benchmark geometry")
+        return
+    benchmark = benchmarks.get(key.experiment)
+    if not isinstance(benchmark, Mapping):
+        report.add_error(f"{label} has no benchmark geometry declaration")
+        return
+    expected_type = BENCHMARK_GEOMETRY_TYPES.get(key.experiment)
+    if row.get("geometry_type") != expected_type:
+        report.add_error(
+            f"{label} geometry_type differs from benchmark: "
+            f"{row.get('geometry_type')!r} != {expected_type!r}"
+        )
+
+    if key.experiment == "lines":
+        expected_angle = case_index * 2.0 * math.pi / trials
+        _require_numeric_close(
+            row.get("angle"), expected_angle, f"{label} angle", report
+        )
+        left = _check_point_in_unit_center_box(
+            row.get("p_left"), f"{label} p_left", report
+        )
+        if left is not None:
+            expected_right = (
+                left[0] + 0.2,
+                left[1] + math.tan(expected_angle) * 0.2,
+            )
+            _require_point_close(
+                row.get("p_right"), expected_right, f"{label} p_right", report
+            )
+    elif key.experiment == "circles":
+        _require_numeric_close(
+            row.get("radius"), benchmark.get("radius"), f"{label} radius", report
+        )
+        _check_point_in_unit_center_box(row.get("center"), f"{label} center", report)
+    elif key.experiment == "ellipses":
+        denominator = max(trials - 1, 1)
+        aspect_ratio = 1.5 + 1.5 * case_index / denominator
+        _require_numeric_close(
+            row.get("aspect_ratio"), aspect_ratio, f"{label} aspect_ratio", report
+        )
+        _require_numeric_close(row.get("major_axis"), 30, f"{label} major_axis", report)
+        _require_numeric_close(
+            row.get("minor_axis"), 30 / aspect_ratio, f"{label} minor_axis", report
+        )
+        _check_point_in_unit_center_box(row.get("center"), f"{label} center", report)
+    elif key.experiment == "squares":
+        denominator = max(trials - 1, 1)
+        side_length = 10.0 + 20.0 * case_index / denominator
+        _require_numeric_close(
+            row.get("side_length"), side_length, f"{label} side_length", report
+        )
+        center = _check_point_in_unit_center_box(
+            row.get("center"), f"{label} center", report
+        )
+        vertices = row.get("vertices")
+        if not isinstance(vertices, list) or len(vertices) != 4:
+            report.add_error(f"{label} does not contain four square vertices")
+        else:
+            for vertex_index, vertex in enumerate(vertices):
+                _check_point(vertex, f"{label} vertices[{vertex_index}]", report)
+    elif key.experiment == "zalesak":
+        for field_name, config_name in (
+            ("radius", "radius"),
+            ("slot_width", "slot_width"),
+            ("slot_top_rel", "slot_top_relative_to_center"),
+        ):
+            _require_numeric_close(
+                row.get(field_name),
+                benchmark.get(config_name),
+                f"{label} {field_name}",
+                report,
+            )
+        center = _check_point_in_unit_center_box(
+            row.get("center"), f"{label} center", report
+        )
+        vertices = row.get("slot_vertices")
+        if not isinstance(vertices, list) or len(vertices) != 4:
+            report.add_error(f"{label} does not contain four slot vertices")
+        else:
+            for vertex_index, vertex in enumerate(vertices):
+                _check_point(vertex, f"{label} slot_vertices[{vertex_index}]", report)
+
+    if key.experiment in {"ellipses", "squares", "zalesak"}:
+        try:
+            theta = float(_bounded_decimal(row.get("theta"), f"{label} theta"))
+        except (ReleaseAuditInputError, ValueError, OverflowError) as exc:
+            report.add_error(str(exc))
+        else:
+            if not 0.0 <= theta < math.pi / 2:
+                report.add_error(f"{label} theta is outside [0, pi/2): {theta}")
+            elif (
+                key.experiment == "squares"
+                and center is not None
+                and isinstance(vertices, list)
+                and len(vertices) == 4
+            ):
+                half_side = side_length / 2.0
+                unrotated = (
+                    (center[0] - half_side, center[1] - half_side),
+                    (center[0] + half_side, center[1] - half_side),
+                    (center[0] + half_side, center[1] + half_side),
+                    (center[0] - half_side, center[1] + half_side),
+                )
+                for vertex_index, (vertex, expected_vertex) in enumerate(
+                    zip(vertices, unrotated)
+                ):
+                    _require_point_close(
+                        vertex,
+                        _rotated_point(expected_vertex, center, theta),
+                        f"{label} vertices[{vertex_index}]",
+                        report,
+                    )
+            elif (
+                key.experiment == "zalesak"
+                and center is not None
+                and isinstance(vertices, list)
+                and len(vertices) == 4
+            ):
+                try:
+                    radius = float(_bounded_decimal(benchmark.get("radius"), "radius"))
+                    slot_width = float(
+                        _bounded_decimal(benchmark.get("slot_width"), "slot_width")
+                    )
+                    slot_top = float(
+                        _bounded_decimal(
+                            benchmark.get("slot_top_relative_to_center"), "slot_top"
+                        )
+                    )
+                except (ReleaseAuditInputError, ValueError, OverflowError) as exc:
+                    report.add_error(str(exc))
+                    return
+                half_width = slot_width / 2.0
+                unrotated = (
+                    (center[0] - half_width, center[1] - radius - 1.0e-6),
+                    (center[0] + half_width, center[1] - radius - 1.0e-6),
+                    (center[0] + half_width, center[1] + slot_top),
+                    (center[0] - half_width, center[1] + slot_top),
+                )
+                for vertex_index, (vertex, expected_vertex) in enumerate(
+                    zip(vertices, unrotated)
+                ):
+                    _require_point_close(
+                        vertex,
+                        _rotated_point(expected_vertex, center, theta),
+                        f"{label} slot_vertices[{vertex_index}]",
+                        report,
+                    )
 
 
 def _check_case_metrics(
@@ -2116,6 +2787,7 @@ def _check_case_metrics(
 
 def _check_case_geometry(
     root: Path,
+    config: Mapping[str, object],
     expected_runs: set[RunKey],
     trials: int,
     target_commit: str,
@@ -2127,6 +2799,7 @@ def _check_case_geometry(
     path = root / "diagnostics" / "case_geometry.jsonl"
     seen: set[tuple[RunKey, int]] = set()
     geometry: dict[tuple[RunKey, int], dict] = {}
+    case_references: dict[tuple[str, int], object] = {}
     row_count = 0
     for line_number, row in _iter_jsonl(path, report):
         row_count += 1
@@ -2150,6 +2823,29 @@ def _check_case_geometry(
             )
         if not row.get("geometry_type"):
             report.add_error(f"{label} has no geometry_type")
+        _check_case_geometry_contract(
+            row, key, case_index, trials, config, label, report
+        )
+        geometry_payload = {
+            field_name: value
+            for field_name, value in row.items()
+            if field_name not in RUN_CONTEXT_FIELDS
+        }
+        try:
+            normalized_payload = _normalize_json_reconciliation_value(
+                geometry_payload, f"{label} geometry payload"
+            )
+        except ReleaseAuditInputError as exc:
+            report.add_error(str(exc))
+        else:
+            reference_key = (key.experiment, case_index)
+            reference = case_references.setdefault(reference_key, normalized_payload)
+            difference = _first_json_difference(normalized_payload, reference)
+            if difference:
+                report.add_error(
+                    f"case geometry is inconsistent across settings for "
+                    f"{key.experiment}/case={case_index} at {difference}"
+                )
         _check_context_source(row, target_commit, target_branch, label, report)
         _check_production_context(
             row,
@@ -2170,6 +2866,7 @@ def _check_case_geometry(
             f"missing case_geometry key: {key.display()}/case={case_index}"
         )
     report.summaries["case_geometry_rows"] = row_count
+    report.summaries["case_geometry_reference_cases"] = len(case_references)
     return geometry
 
 
@@ -2252,6 +2949,45 @@ def _validate_cell_diagnostic_row(
         )
         return None
     return case_index, merge_id, construction_path
+
+
+def _line_facet_signature(
+    raw_geometry: object, label: str, report: AuditReport
+) -> tuple[tuple[str, str], tuple[str, str]] | None:
+    if isinstance(raw_geometry, str):
+        try:
+            geometry = _strict_json_loads(raw_geometry, label)
+        except ReleaseAuditInputError as exc:
+            report.add_error(str(exc))
+            return None
+    else:
+        geometry = raw_geometry
+    if not isinstance(geometry, Mapping):
+        report.add_error(f"{label} facet geometry is not an object")
+        return None
+    geometry_class = geometry.get("class", geometry.get("kind"))
+    geometry_name = geometry.get("name", geometry.get("source_name"))
+    if geometry_class not in {"linear", "line"} or geometry_name != "LVIRA":
+        report.add_error(
+            f"{label} fallback facet identity is not linear/LVIRA: "
+            f"{geometry_class!r}/{geometry_name!r}"
+        )
+        return None
+    points: list[tuple[str, str]] = []
+    for field_name in ("p_left", "p_right"):
+        point = geometry.get(field_name)
+        if not isinstance(point, list) or len(point) != 2:
+            report.add_error(f"{label} {field_name} is not a two-coordinate point")
+            return None
+        try:
+            points.append((_canonical_number(point[0]), _canonical_number(point[1])))
+        except ReleaseAuditInputError as exc:
+            report.add_error(str(exc))
+            return None
+    if points[0] == points[1]:
+        report.add_error(f"{label} fallback line has coincident endpoints")
+        return None
+    return tuple(sorted(points))  # type: ignore[return-value]
 
 
 def _count_csv_rows(
@@ -3137,7 +3873,7 @@ def _check_raw_cell_fallback_provenance(
     trials: int,
     expected_policy: str,
     report: AuditReport,
-) -> tuple[int, int]:
+) -> tuple[int, int, int]:
     metrics = bundle / "metrics"
     cell_path = metrics / "cell_metrics.csv"
     _, cell_rows = _read_csv_rows(
@@ -3148,7 +3884,9 @@ def _check_raw_cell_fallback_provenance(
             "cell_x",
             "cell_y",
             "merge_id",
+            "merge_component_size",
             "final_facet_class",
+            "final_facet_name",
             "construction_path",
             "fallback_policy",
             "facet_geometry_json",
@@ -3156,6 +3894,11 @@ def _check_raw_cell_fallback_provenance(
         report,
     )
     component_paths: dict[tuple[int, int], set[str]] = defaultdict(set)
+    component_cells: dict[tuple[int, int], set[tuple[int, int]]] = defaultdict(set)
+    component_sizes: dict[tuple[int, int], set[int]] = defaultdict(set)
+    component_facets: dict[
+        tuple[int, int], set[tuple[tuple[str, str], tuple[str, str]]]
+    ] = defaultdict(set)
     fallback_components: set[tuple[int, int]] = set()
     for row_number, row in enumerate(cell_rows, start=2):
         label = f"{cell_path}:{row_number}"
@@ -3167,13 +3910,116 @@ def _check_raw_cell_fallback_provenance(
             report.add_error(f"{label} references unexpected case {case_index}")
         component_key = (case_index, merge_id)
         component_paths[component_key].add(construction_path)
+        try:
+            cell = (
+                _parse_canonical_int(row.get("cell_x"), f"{label} cell_x"),
+                _parse_canonical_int(row.get("cell_y"), f"{label} cell_y"),
+            )
+            component_size = _parse_canonical_int(
+                row.get("merge_component_size"), f"{label} merge_component_size"
+            )
+        except ReleaseAuditInputError as exc:
+            report.add_error(str(exc))
+            continue
+        component_cells[component_key].add(cell)
+        component_sizes[component_key].add(component_size)
         if construction_path == "plic_fallback":
             fallback_components.add(component_key)
+            if row.get("final_facet_class") != "linear":
+                report.add_error(f"{label} fallback final_facet_class is not 'linear'")
+            if row.get("final_facet_name") != expected_policy:
+                report.add_error(
+                    f"{label} fallback final_facet_name differs from production: "
+                    f"{row.get('final_facet_name')!r} != {expected_policy!r}"
+                )
+            signature = _line_facet_signature(
+                row.get("facet_geometry_json"), f"{label} facet_geometry_json", report
+            )
+            if signature is not None:
+                component_facets[component_key].add(signature)
+
+    merge_path = metrics / "merge_events.csv"
+    _, merge_rows = _read_csv_rows(
+        merge_path,
+        {
+            "case_index",
+            "event_order",
+            "merge_id",
+            "member_cells_json",
+            "stage",
+            "event_kind",
+            "fallback_policy",
+            "fallback_reason",
+            "previous_facet_class",
+            "previous_facet_name",
+            "facet_class",
+            "facet_name",
+        },
+        report,
+    )
+    merge_fallback_events: dict[tuple[int, int], set[tuple[int, int]]] = {}
+    for row_number, row in enumerate(merge_rows, start=2):
+        if row.get("event_kind") != "plic_fallback":
+            continue
+        label = f"{merge_path}:{row_number}"
+        try:
+            case_index = _parse_canonical_int(
+                row.get("case_index"), f"{label} case_index"
+            )
+            merge_id = _parse_canonical_int(row.get("merge_id"), f"{label} merge_id")
+            member_value = _strict_json_loads(
+                str(row.get("member_cells_json", "")),
+                f"{label} member_cells_json",
+            )
+        except ReleaseAuditInputError as exc:
+            report.add_error(str(exc))
+            continue
+        event_key = (case_index, merge_id)
+        if event_key in merge_fallback_events:
+            report.add_error(
+                f"duplicate plic_fallback merge event for {key.display()}/"
+                f"case={case_index}/merge_id={merge_id}"
+            )
+            continue
+        members: set[tuple[int, int]] = set()
+        if not isinstance(member_value, list) or not member_value:
+            report.add_error(f"{label} member_cells_json is not a non-empty array")
+        else:
+            for member_index, member in enumerate(member_value):
+                if not isinstance(member, list) or len(member) != 2:
+                    report.add_error(
+                        f"{label} member_cells_json[{member_index}] is not a cell pair"
+                    )
+                    continue
+                try:
+                    cell = (
+                        _parse_int(member[0], f"{label} member cell x"),
+                        _parse_int(member[1], f"{label} member cell y"),
+                    )
+                except ReleaseAuditInputError as exc:
+                    report.add_error(str(exc))
+                    continue
+                if cell in members:
+                    report.add_error(f"{label} contains duplicate member cell {cell}")
+                members.add(cell)
+        merge_fallback_events[event_key] = members
+        identity = (
+            row.get("fallback_policy"),
+            row.get("facet_class"),
+            row.get("facet_name"),
+        )
+        if identity != (expected_policy, "linear", expected_policy):
+            report.add_error(
+                f"{label} fallback merge-event identity differs from production: "
+                f"{identity!r} != {(expected_policy, 'linear', expected_policy)!r}"
+            )
+        if not row.get("fallback_reason"):
+            report.add_error(f"{label} has no fallback_reason")
 
     fallback_path = metrics / "unresolved_plic_fallbacks.csv"
     _, fallback_rows = _read_csv_rows(
         fallback_path,
-        {"case_index", "merge_id", "policy"},
+        {"case_index", "merge_id", "policy", "setting", "facet_name", "num_vertices"},
         report,
     )
     fallback_events: set[tuple[int, int]] = set()
@@ -3205,6 +4051,25 @@ def _check_raw_cell_fallback_provenance(
                 f"{label} fallback event policy differs from production: "
                 f"{policy!r} != {expected_policy!r}"
             )
+        if str(row.get("setting", "")).lower() != key.algo:
+            report.add_error(
+                f"{label} fallback setting does not match run algorithm: "
+                f"{row.get('setting')!r} != {key.algo!r}"
+            )
+        if row.get("facet_name") != expected_policy:
+            report.add_error(
+                f"{label} fallback facet_name differs from production: "
+                f"{row.get('facet_name')!r} != {expected_policy!r}"
+            )
+        try:
+            num_vertices = _parse_canonical_int(
+                row.get("num_vertices"), f"{label} num_vertices"
+            )
+        except ReleaseAuditInputError as exc:
+            report.add_error(str(exc))
+        else:
+            if num_vertices < 3:
+                report.add_error(f"{label} fallback polygon has fewer than 3 vertices")
 
     for case_index, merge_id in sorted(fallback_components):
         paths = component_paths[(case_index, merge_id)]
@@ -3213,6 +4078,20 @@ def _check_raw_cell_fallback_provenance(
                 "fallback component has inconsistent construction paths for "
                 f"{key.display()}/case={case_index}/merge_id={merge_id}: "
                 f"{sorted(paths)!r}"
+            )
+        members = component_cells[(case_index, merge_id)]
+        sizes = component_sizes[(case_index, merge_id)]
+        if sizes != {len(members)}:
+            report.add_error(
+                f"fallback component size disagrees with member cells for "
+                f"{key.display()}/case={case_index}/merge_id={merge_id}: "
+                f"{sorted(sizes)!r} != {[len(members)]!r}"
+            )
+        facets = component_facets[(case_index, merge_id)]
+        if len(facets) != 1:
+            report.add_error(
+                f"fallback component does not have one exact LVIRA facet geometry for "
+                f"{key.display()}/case={case_index}/merge_id={merge_id}"
             )
     for case_index, merge_id in sorted(fallback_components - fallback_events):
         report.add_error(
@@ -3224,13 +4103,80 @@ def _check_raw_cell_fallback_provenance(
             "unresolved fallback event has no plic_fallback cell component for "
             f"{key.display()}/case={case_index}/merge_id={merge_id}"
         )
-    return len(cell_rows), len(fallback_rows)
+    for case_index, merge_id in sorted(
+        fallback_components - set(merge_fallback_events)
+    ):
+        report.add_error(
+            "plic_fallback component has no plic_fallback merge event for "
+            f"{key.display()}/case={case_index}/merge_id={merge_id}"
+        )
+    for case_index, merge_id in sorted(
+        set(merge_fallback_events) - fallback_components
+    ):
+        report.add_error(
+            "plic_fallback merge event has no plic_fallback cell component for "
+            f"{key.display()}/case={case_index}/merge_id={merge_id}"
+        )
+    for event_key in sorted(fallback_components & set(merge_fallback_events)):
+        if merge_fallback_events[event_key] != component_cells[event_key]:
+            report.add_error(
+                f"plic_fallback merge-event member cells disagree with cell provenance "
+                f"for {key.display()}/case={event_key[0]}/merge_id={event_key[1]}: "
+                f"{sorted(merge_fallback_events[event_key])!r} != "
+                f"{sorted(component_cells[event_key])!r}"
+            )
+
+    expected_metadata_facets: dict[
+        int, Counter[tuple[tuple[str, str], tuple[str, str]]]
+    ] = defaultdict(Counter)
+    for (case_index, merge_id), facets in component_facets.items():
+        if (case_index, merge_id) in fallback_components and len(facets) == 1:
+            expected_metadata_facets[case_index][next(iter(facets))] += 1
+    for case_index, expected_facets in sorted(expected_metadata_facets.items()):
+        metadata_path = (
+            bundle
+            / "vtk"
+            / "reconstructed"
+            / "facets"
+            / f"{case_index}.facet_metadata.json"
+        )
+        metadata = _load_json(metadata_path, report)
+        if metadata is None:
+            continue
+        primitives = metadata.get("primitives")
+        if not isinstance(primitives, list):
+            report.add_error(f"{metadata_path} primitives is not an array")
+            continue
+        actual_facets: Counter[tuple[tuple[str, str], tuple[str, str]]] = Counter()
+        for primitive_index, primitive in enumerate(primitives):
+            if not isinstance(primitive, Mapping):
+                continue
+            if (
+                primitive.get("kind") != "line"
+                or primitive.get("source_name") != expected_policy
+            ):
+                continue
+            signature = _line_facet_signature(
+                primitive,
+                f"{metadata_path} primitive {primitive_index}",
+                report,
+            )
+            if signature is not None:
+                actual_facets[signature] += 1
+        for signature, expected_count in expected_facets.items():
+            if actual_facets[signature] < expected_count:
+                report.add_error(
+                    f"saved facet metadata lacks fallback LVIRA geometry for "
+                    f"{key.display()}/case={case_index}: {signature!r}"
+                )
+    return len(cell_rows), len(merge_rows), len(fallback_rows)
 
 
 def _check_raw_bundle(
     root: Path,
     bundle: Path,
     key: RunKey,
+    config: Mapping[str, object],
     inventory_row: Mapping[str, str],
     trials: int,
     target_commit: str,
@@ -3288,6 +4234,15 @@ def _check_raw_bundle(
             "raw child manifest",
             report,
         )
+        _check_child_manifest_contract(
+            manifest,
+            key,
+            config,
+            str(inventory_row.get("save_name", "")),
+            inheritance,
+            "raw child manifest",
+            report,
+        )
         artifacts = manifest.get("artifacts")
         if not isinstance(artifacts, dict):
             report.add_error(f"raw run manifest artifacts missing: {key.display()}")
@@ -3305,23 +4260,20 @@ def _check_raw_bundle(
     raw_case_count, raw_geometry_count, geometry_rows = _check_raw_case_rows(
         bundle, key, trials, report
     )
-    raw_cell_count, raw_fallback_count = _check_raw_cell_fallback_provenance(
-        bundle,
-        key,
-        trials,
-        production_context.get("plic_fallback", ""),
-        report,
+    raw_cell_count, raw_merge_count, raw_fallback_count = (
+        _check_raw_cell_fallback_provenance(
+            bundle,
+            key,
+            trials,
+            production_context.get("plic_fallback", ""),
+            report,
+        )
     )
     actual_counts = {
         "case_metrics_rows": raw_case_count,
         "case_geometry_rows": raw_geometry_count,
         "cell_metrics_rows": raw_cell_count,
-        "merge_events_rows": _count_csv_rows(
-            bundle / "metrics" / "merge_events.csv",
-            ("case_index", "event_order", "event_kind"),
-            report,
-            valid_cases=set(range(trials)),
-        ),
+        "merge_events_rows": raw_merge_count,
         "unresolved_plic_fallbacks_rows": raw_fallback_count,
     }
     for field_name, actual in actual_counts.items():
@@ -3380,6 +4332,7 @@ def _check_raw_bundle(
 
 def _check_raw_bundles(
     root: Path,
+    config: Mapping[str, object],
     expected_runs: set[RunKey],
     inventory: Mapping[RunKey, Mapping[str, str]],
     trials: int,
@@ -3434,6 +4387,7 @@ def _check_raw_bundles(
             root,
             bundle,
             key,
+            config,
             inventory_row,
             trials,
             target_commit,
@@ -3568,10 +4522,9 @@ def audit_final_release(
     required_cases: int = FINAL_CASE_COUNT,
 ) -> AuditReport:
     """Audit a release without modifying it and return every detected failure."""
-    root = Path(release_root).resolve()
+    root = _lexical_absolute(release_root)
     report = AuditReport(root)
-    if not root.is_dir():
-        report.add_error(f"release root is not a directory: {root}")
+    if not _reject_release_symlinks(root, report):
         return report
     for relative in REQUIRED_RELEASE_FILES:
         if not (root / relative).is_file():
@@ -3629,6 +4582,7 @@ def audit_final_release(
     )
     consolidated_manifests = _check_consolidated_run_manifests(
         root,
+        config,
         expected_runs,
         inventory,
         target_commit,
@@ -3649,6 +4603,7 @@ def audit_final_release(
     )
     consolidated_geometry = _check_case_geometry(
         root,
+        config,
         expected_runs,
         trials,
         target_commit,
@@ -3660,6 +4615,7 @@ def audit_final_release(
     _check_consolidated_table_counts(root, inventory, production_context, report)
     raw_manifests, raw_geometry = _check_raw_bundles(
         root,
+        config,
         expected_runs,
         inventory,
         trials,
@@ -3724,38 +4680,294 @@ def _release_files(root: Path, excluded: set[Path]) -> list[tuple[str, Path]]:
     return files
 
 
+def _private_seal_parent(destination: Path) -> Path:
+    parent = destination.parent
+    try:
+        parent_stat = os.lstat(parent)
+    except OSError as exc:
+        raise ReleaseAuditInputError(
+            f"sealed-release parent cannot be inspected: {parent}: {exc}"
+        ) from exc
+    if stat.S_ISLNK(parent_stat.st_mode) or not stat.S_ISDIR(parent_stat.st_mode):
+        raise ReleaseAuditInputError(
+            f"sealed-release parent must be a real directory: {parent}"
+        )
+    if hasattr(os, "getuid") and parent_stat.st_uid != os.getuid():
+        raise ReleaseAuditInputError(
+            f"sealed-release parent is not owned by the current user: {parent}"
+        )
+    if stat.S_IMODE(parent_stat.st_mode) & 0o077:
+        raise ReleaseAuditInputError(
+            f"sealed-release parent must be private (mode 0700 or stricter): {parent}"
+        )
+    if destination.exists() or destination.is_symlink():
+        raise ReleaseAuditInputError(
+            f"sealed-release destination already exists: {destination}"
+        )
+    return parent
+
+
+def _darwin_clonefile(source: Path, destination: Path) -> bool:
+    if sys.platform != "darwin":
+        return False
+    libc = ctypes.CDLL(None, use_errno=True)
+    clonefile = getattr(libc, "clonefile", None)
+    if clonefile is None:
+        return False
+    clonefile.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int]
+    clonefile.restype = ctypes.c_int
+    result = clonefile(os.fsencode(source), os.fsencode(destination), 0)
+    if result == 0:
+        return True
+    error = ctypes.get_errno()
+    if error in {
+        errno.ENOTSUP,
+        errno.EXDEV,
+        errno.EINVAL,
+        errno.ENOSYS,
+        errno.EPERM,
+    }:
+        return False
+    raise OSError(error, os.strerror(error), str(source))
+
+
+def _clone_or_copy_file(source: Path, destination: Path) -> bool:
+    source_stat = os.lstat(source)
+    if not stat.S_ISREG(source_stat.st_mode):
+        raise ReleaseAuditInputError(f"seal source is not a regular file: {source}")
+    cloned = _darwin_clonefile(source, destination)
+    if not cloned:
+        shutil.copyfile(source, destination, follow_symlinks=False)
+    destination_stat = os.lstat(destination)
+    if not stat.S_ISREG(destination_stat.st_mode):
+        raise ReleaseAuditInputError(
+            f"sealed snapshot copy is not a regular file: {destination}"
+        )
+    os.chmod(destination, stat.S_IMODE(source_stat.st_mode) & 0o777)
+    return cloned
+
+
+def _copy_release_tree(source: Path, destination: Path) -> tuple[int, int, int]:
+    source_report = AuditReport(source)
+    if not _reject_release_symlinks(source, source_report):
+        raise ReleaseAuditInputError("; ".join(source_report.errors))
+    destination.mkdir(mode=0o700)
+    clone_files = 0
+    copied_files = 0
+    copied_bytes = 0
+    for directory, directory_names, file_names in os.walk(source, followlinks=False):
+        source_directory = Path(directory)
+        relative_directory = source_directory.relative_to(source)
+        target_directory = destination / relative_directory
+        for name in sorted(directory_names):
+            (target_directory / name).mkdir(mode=0o700)
+        for name in sorted(file_names):
+            source_path = source_directory / name
+            target_path = target_directory / name
+            source_stat = os.lstat(source_path)
+            copied_bytes += source_stat.st_size
+            if _clone_or_copy_file(source_path, target_path):
+                clone_files += 1
+            else:
+                copied_files += 1
+    return copied_bytes, clone_files, copied_files
+
+
+def _release_digest_map(
+    root: Path, manifest_path: Path
+) -> tuple[list[tuple[str, str]], dict[str, tuple[int, int, int]]]:
+    records: list[tuple[str, str]] = []
+    identities: dict[str, tuple[int, int, int]] = {}
+    for relative, path in _release_files(root, {manifest_path}):
+        before = os.lstat(path)
+        digest = _sha256(path)
+        after = os.lstat(path)
+        before_identity = (before.st_size, before.st_mtime_ns, before.st_ino)
+        after_identity = (after.st_size, after.st_mtime_ns, after.st_ino)
+        if before_identity != after_identity:
+            raise ReleaseAuditInputError(
+                f"sealed snapshot file changed while hashing: {relative}"
+            )
+        records.append((relative, digest))
+        identities[relative] = after_identity
+    return records, identities
+
+
+def _write_manifest_exclusive(
+    manifest_path: Path, records: Sequence[tuple[str, str]]
+) -> None:
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(
+        manifest_path,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+        0o400,
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            for relative, digest in records:
+                stream.write(f"{digest}  {relative}\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+    except Exception:
+        manifest_path.unlink(missing_ok=True)
+        raise
+
+
+def _make_snapshot_read_only(root: Path) -> None:
+    directories: list[Path] = []
+    for directory, _, file_names in os.walk(root, followlinks=False):
+        directory_path = Path(directory)
+        directories.append(directory_path)
+        for name in file_names:
+            os.chmod(directory_path / name, 0o400)
+    for directory in sorted(
+        directories, key=lambda path: len(path.parts), reverse=True
+    ):
+        os.chmod(directory, 0o500)
+
+
+def _atomic_publish_noreplace(staging: Path, destination: Path) -> None:
+    libc = ctypes.CDLL(None, use_errno=True)
+    if sys.platform == "darwin":
+        rename_exclusive = getattr(libc, "renamex_np", None)
+        if rename_exclusive is None:
+            raise ReleaseAuditInputError("renamex_np is unavailable for atomic sealing")
+        rename_exclusive.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+        rename_exclusive.restype = ctypes.c_int
+        result = rename_exclusive(
+            os.fsencode(staging), os.fsencode(destination), 0x00000004
+        )
+    elif sys.platform.startswith("linux"):
+        rename_exclusive = getattr(libc, "renameat2", None)
+        if rename_exclusive is None:
+            raise ReleaseAuditInputError("renameat2 is unavailable for atomic sealing")
+        rename_exclusive.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        ]
+        rename_exclusive.restype = ctypes.c_int
+        result = rename_exclusive(
+            -100, os.fsencode(staging), -100, os.fsencode(destination), 1
+        )
+    else:
+        raise ReleaseAuditInputError(
+            f"atomic no-replace directory publication is unsupported on {sys.platform}"
+        )
+    if result != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error), str(destination))
+
+
+def seal_release_snapshot(
+    release_root: Path,
+    sealed_release_output: Path,
+    manifest_relative_path: Path | str = DEFAULT_SHA256_MANIFEST,
+    *,
+    required_runs: int = FINAL_RUN_COUNT,
+    required_cases: int = FINAL_CASE_COUNT,
+) -> SealedRelease:
+    """Copy, audit, hash, and atomically publish one private read-only snapshot."""
+    source = _lexical_absolute(release_root)
+    destination = _lexical_absolute(sealed_release_output)
+    if destination == source or source in destination.parents:
+        raise ReleaseAuditInputError(
+            "sealed-release destination must not be the source or lie inside it"
+        )
+    parent = _private_seal_parent(destination)
+    staging = Path(tempfile.mkdtemp(prefix=f".{destination.name}.sealing-", dir=parent))
+    os.chmod(staging, 0o700)
+    published = False
+    try:
+        staging.rmdir()
+        copied_bytes, clone_files, copied_files = _copy_release_tree(source, staging)
+        manifest_path = _manifest_path(staging, manifest_relative_path)
+        if manifest_path.exists() or manifest_path.is_symlink():
+            raise ReleaseAuditInputError(
+                f"source release already contains the target ledger: "
+                f"{manifest_relative_path}"
+            )
+
+        before_records, before_identities = _release_digest_map(staging, manifest_path)
+        report = audit_final_release(
+            staging, required_runs=required_runs, required_cases=required_cases
+        )
+        if not report.ok:
+            raise ReleaseAuditInputError(
+                f"private snapshot audit failed with {report.total_errors} errors: "
+                + "; ".join(report.errors[:10])
+            )
+        after_records, after_identities = _release_digest_map(staging, manifest_path)
+        if before_records != after_records or before_identities != after_identities:
+            raise ReleaseAuditInputError(
+                "private snapshot changed between its cryptographic reads around audit"
+            )
+        _write_manifest_exclusive(manifest_path, after_records)
+        verification_errors = verify_sha256_manifest(staging, manifest_relative_path)
+        if verification_errors:
+            raise ReleaseAuditInputError(
+                "sealed snapshot ledger verification failed: "
+                + "; ".join(verification_errors[:10])
+            )
+        _make_snapshot_read_only(staging)
+        verification_errors = verify_sha256_manifest(staging, manifest_relative_path)
+        if verification_errors:
+            raise ReleaseAuditInputError(
+                "sealed snapshot changed after permissions were sealed: "
+                + "; ".join(verification_errors[:10])
+            )
+        _atomic_publish_noreplace(staging, destination)
+        published = True
+        published_manifest = _manifest_path(destination, manifest_relative_path)
+        return SealedRelease(
+            destination,
+            published_manifest,
+            report,
+            copied_bytes,
+            clone_files,
+            copied_files,
+        )
+    finally:
+        if not published and staging.exists():
+            for directory, directory_names, file_names in os.walk(
+                staging, topdown=False, followlinks=False
+            ):
+                directory_path = Path(directory)
+                os.chmod(directory_path, 0o700)
+                for name in file_names:
+                    path = directory_path / name
+                    if not path.is_symlink():
+                        os.chmod(path, 0o600)
+                for name in directory_names:
+                    path = directory_path / name
+                    if not path.is_symlink():
+                        os.chmod(path, 0o700)
+            shutil.rmtree(staging)
+
+
 def generate_sha256_manifest(
     release_root: Path,
     manifest_relative_path: Path | str = DEFAULT_SHA256_MANIFEST,
+    *,
+    sealed_release_output: Path | None = None,
+    required_runs: int = FINAL_RUN_COUNT,
+    required_cases: int = FINAL_CASE_COUNT,
 ) -> Path:
-    """Atomically write a sorted SHA-256 manifest for every other release file."""
-    root = Path(release_root).resolve()
-    if not root.is_dir():
-        raise ReleaseAuditInputError(f"release root is not a directory: {root}")
-    manifest_path = _manifest_path(root, manifest_relative_path)
-    files = _release_files(root, {manifest_path})
-    manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            dir=manifest_path.parent,
-            prefix=f".{manifest_path.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as stream:
-            temporary = Path(stream.name)
-            for relative, path in files:
-                stream.write(f"{_sha256(path)}  {relative}\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        temporary.replace(manifest_path)
-    except Exception:
-        if temporary is not None:
-            temporary.unlink(missing_ok=True)
-        raise
-    return manifest_path
+    """Seal a private snapshot; direct writes into a live release are forbidden."""
+    if sealed_release_output is None:
+        raise ReleaseAuditInputError(
+            "live manifest generation is forbidden; provide sealed_release_output"
+        )
+    sealed = seal_release_snapshot(
+        release_root,
+        sealed_release_output,
+        manifest_relative_path,
+        required_runs=required_runs,
+        required_cases=required_cases,
+    )
+    return sealed.manifest_path
 
 
 def verify_sha256_manifest(
@@ -3763,8 +4975,11 @@ def verify_sha256_manifest(
     manifest_relative_path: Path | str = DEFAULT_SHA256_MANIFEST,
 ) -> list[str]:
     """Return manifest verification failures, including incomplete file coverage."""
-    root = Path(release_root).resolve()
+    root = _lexical_absolute(release_root)
     errors: list[str] = []
+    structure_report = AuditReport(root)
+    if not _reject_release_symlinks(root, structure_report):
+        return structure_report.errors
     try:
         manifest_path = _manifest_path(root, manifest_relative_path)
     except ReleaseAuditInputError as exc:
@@ -3848,7 +5063,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--write-sha256-manifest",
         action="store_true",
-        help="write a sorted manifest after the scientific release audit passes",
+        help="seal a private snapshot and publish it with a sorted SHA-256 ledger",
+    )
+    parser.add_argument(
+        "--sealed-release-output",
+        type=Path,
+        help=(
+            "new destination for --write-sha256-manifest; its existing parent must "
+            "be private and the destination must not exist"
+        ),
     )
     parser.add_argument(
         "--verify-sha256-manifest",
@@ -3865,14 +5088,37 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
-    report = audit_final_release(args.release_root)
-    if report.ok and args.write_sha256_manifest:
+    if args.write_sha256_manifest:
+        if args.sealed_release_output is None:
+            report = AuditReport(_lexical_absolute(args.release_root))
+            report.add_error("--write-sha256-manifest requires --sealed-release-output")
+            _print_report(report)
+            return 1
         try:
-            path = generate_sha256_manifest(report.release_root, args.sha256_manifest)
+            sealed = seal_release_snapshot(
+                args.release_root,
+                args.sealed_release_output,
+                args.sha256_manifest,
+            )
         except (OSError, ReleaseAuditInputError) as exc:
+            report = AuditReport(_lexical_absolute(args.release_root))
             report.add_error(f"could not write SHA-256 manifest: {exc}")
         else:
-            print(f"Wrote SHA-256 manifest: {path}")
+            report = sealed.report
+            report.release_root = sealed.release_root
+            report.summaries["sealed_bytes"] = sealed.copied_bytes
+            report.summaries["sealed_clone_files"] = sealed.clone_files
+            report.summaries["sealed_copied_files"] = sealed.copied_files
+            print(f"Published sealed release: {sealed.release_root}")
+            print(f"Wrote SHA-256 manifest: {sealed.manifest_path}")
+    else:
+        if args.sealed_release_output is not None:
+            report = AuditReport(_lexical_absolute(args.release_root))
+            report.add_error(
+                "--sealed-release-output is only valid with --write-sha256-manifest"
+            )
+        else:
+            report = audit_final_release(args.release_root)
     if report.ok and args.verify_sha256_manifest:
         for error in verify_sha256_manifest(report.release_root, args.sha256_manifest):
             report.add_error(error)
