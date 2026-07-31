@@ -10,7 +10,9 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -201,6 +203,136 @@ class PackagePlan:
     audit_summary: Mapping[str, int | str]
     raw_data_deposit: RawDataDeposit
     review_bundle: Path | None
+
+
+@dataclass(frozen=True)
+class _OwnedPath:
+    path: Path
+    device: int
+    inode: int
+
+    @classmethod
+    def capture(cls, path: Path) -> "_OwnedPath":
+        path = Path(path)
+        metadata = os.lstat(path)
+        return cls(path=path, device=metadata.st_dev, inode=metadata.st_ino)
+
+    def moved_to(self, path: Path) -> "_OwnedPath":
+        return _OwnedPath(path=Path(path), device=self.device, inode=self.inode)
+
+    def remove(self) -> bool:
+        """Remove the path only while it still names this invocation's inode."""
+        try:
+            metadata = os.lstat(self.path)
+        except FileNotFoundError:
+            return False
+        if metadata.st_dev != self.device or metadata.st_ino != self.inode:
+            return False
+        if stat.S_ISDIR(metadata.st_mode):
+            shutil.rmtree(self.path)
+        else:
+            self.path.unlink()
+        return True
+
+
+@dataclass
+class _DestinationLock:
+    target: Path
+    path: Path
+    file_descriptor: int
+    device: int
+    inode: int
+
+    def is_owned(self) -> bool:
+        try:
+            path_metadata = os.lstat(self.path)
+            descriptor_metadata = os.fstat(self.file_descriptor)
+        except (FileNotFoundError, OSError):
+            return False
+        return (
+            path_metadata.st_dev == self.device
+            and path_metadata.st_ino == self.inode
+            and descriptor_metadata.st_dev == self.device
+            and descriptor_metadata.st_ino == self.inode
+        )
+
+    def release(self) -> None:
+        try:
+            if self.is_owned():
+                self.path.unlink()
+        finally:
+            os.close(self.file_descriptor)
+
+
+class _DestinationReservations:
+    """Exclusive sidecar locks for every final publication destination."""
+
+    def __init__(self, locks: Sequence[_DestinationLock]) -> None:
+        self._locks = tuple(locks)
+
+    @classmethod
+    def acquire(cls, targets: Sequence[Path]) -> "_DestinationReservations":
+        owner = secrets.token_hex(16)
+        locks: list[_DestinationLock] = []
+        try:
+            for target in sorted({Path(path) for path in targets}, key=str):
+                lock_path = target.with_name(f".{target.name}.package_submission.lock")
+                flags = os.O_RDWR | os.O_CREAT | os.O_EXCL
+                flags |= getattr(os, "O_CLOEXEC", 0)
+                try:
+                    descriptor = os.open(lock_path, flags, 0o600)
+                except FileExistsError as exc:
+                    raise SubmissionPackagingError(
+                        "submission destination is reserved by another packaging "
+                        f"invocation: {target}; inspect stale lock {lock_path}"
+                    ) from exc
+                metadata = os.fstat(descriptor)
+                lock = _DestinationLock(
+                    target=target,
+                    path=lock_path,
+                    file_descriptor=descriptor,
+                    device=metadata.st_dev,
+                    inode=metadata.st_ino,
+                )
+                locks.append(lock)
+                payload = (
+                    json.dumps(
+                        {
+                            "owner": owner,
+                            "pid": os.getpid(),
+                            "target": str(target),
+                        },
+                        sort_keys=True,
+                    )
+                    + "\n"
+                ).encode("utf-8")
+                remaining = memoryview(payload)
+                while remaining:
+                    written = os.write(descriptor, remaining)
+                    remaining = remaining[written:]
+                os.fsync(descriptor)
+            return cls(locks)
+        except Exception:
+            for lock in reversed(locks):
+                lock.release()
+            raise
+
+    def assert_owned(self) -> None:
+        for lock in self._locks:
+            if not lock.is_owned():
+                raise SubmissionPackagingError(
+                    f"submission destination reservation was lost: {lock.target}"
+                )
+
+    def release(self) -> None:
+        for lock in reversed(self._locks):
+            lock.release()
+
+    def __enter__(self) -> "_DestinationReservations":
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.release()
 
 
 def _sha256(path: Path) -> str:
@@ -400,6 +532,7 @@ def _run_git(worktree_root: Path, arguments: Sequence[str]) -> bytes:
         "GIT_ALTERNATE_OBJECT_DIRECTORIES",
     ):
         environment.pop(variable, None)
+    environment["GIT_OPTIONAL_LOCKS"] = "0"
     try:
         completed = subprocess.run(
             ["git", "--no-replace-objects", "-C", str(worktree_root), *arguments],
@@ -605,6 +738,8 @@ def discover_paper_source_paths(
     excluded: list[str] = []
     for relative in sorted(state.tracked_paths):
         pure = PurePosixPath(relative)
+        if any(part in EXCLUDED_DIRECTORY_NAMES for part in pure.parts[:-1]):
+            continue
         if _paper_source_is_allowed(pure):
             included.append(relative)
         else:
@@ -1596,12 +1731,19 @@ def _normalize_directories(root: Path) -> None:
     os.utime(root, (0, 0), follow_symlinks=False)
 
 
-def _write_deterministic_tar_gz(root: Path, archive_path: Path) -> None:
-    temporary = archive_path.with_name(f".{archive_path.name}.tmp")
-    if temporary.exists():
-        temporary.unlink()
+def _write_deterministic_tar_gz(root: Path, archive_path: Path) -> _OwnedPath:
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{archive_path.name}.tmp-",
+        dir=archive_path.parent,
+    )
+    temporary = Path(temporary_name)
+    temporary_owner = _OwnedPath.capture(temporary)
+    published_owner: _OwnedPath | None = None
     try:
-        with temporary.open("wb") as raw_stream:
+        os.fchmod(descriptor, 0o644)
+        raw_stream = os.fdopen(descriptor, "wb")
+        descriptor = -1
+        with raw_stream:
             with gzip.GzipFile(
                 filename="", mode="wb", fileobj=raw_stream, mtime=0
             ) as gzip_stream:
@@ -1639,9 +1781,24 @@ def _write_deterministic_tar_gz(root: Path, archive_path: Path) -> None:
                                 archive.addfile(info, stream)
             raw_stream.flush()
             os.fsync(raw_stream.fileno())
-        temporary.replace(archive_path)
+        try:
+            os.link(temporary, archive_path)
+        except FileExistsError as exc:
+            raise SubmissionPackagingError(
+                f"output archive already exists: {archive_path}"
+            ) from exc
+        published_owner = temporary_owner.moved_to(archive_path)
+        if not temporary_owner.remove():
+            raise SubmissionPackagingError(
+                f"lost ownership of archive temporary: {temporary}"
+            )
+        return published_owner
     except Exception:
-        temporary.unlink(missing_ok=True)
+        if descriptor >= 0:
+            os.close(descriptor)
+        if published_owner is not None:
+            published_owner.remove()
+        temporary_owner.remove()
         raise
 
 
@@ -1724,98 +1881,122 @@ def build_submission_package(
         )
     output_dir = plan.output_dir
     archive_path = output_dir.with_suffix(output_dir.suffix + ".tar.gz")
-    if output_dir.exists():
-        raise SubmissionPackagingError(f"output directory already exists: {output_dir}")
-    if create_archive and archive_path.exists():
-        raise SubmissionPackagingError(f"output archive already exists: {archive_path}")
     output_dir.parent.mkdir(parents=True, exist_ok=True)
-
-    staging = Path(
-        tempfile.mkdtemp(prefix=f".{output_dir.name}.staging-", dir=output_dir.parent)
-    )
-    try:
-        for item in plan.files:
-            destination = staging.joinpath(*PurePosixPath(item.destination).parts)
-            _copy_content_source(item.source, destination)
-
-        _compile_manuscript_tree(
-            staging / "manuscript" / "source",
-            source_subdir=plan.paper_source_subdir,
-            entrypoint=plan.paper_entrypoint,
-            latexmk_executable=plan.latexmk_executable,
-        )
-        _extract_experiment_map(
-            staging / "code" / "source_snapshot.tar.gz",
-            staging / "docs" / "PAPER_EXPERIMENT_MAP.md",
-        )
-        _write_deposition_record(staging, plan)
-        _write_manuscript_build_record(
-            staging,
-            plan,
-            archive_verification_required=create_archive,
-        )
-        _write_release_audit_record(staging, plan)
-        _write_figure_approval_record(staging, plan)
-        _write_vector_qa_record(staging, plan)
-        _write_package_readme(staging, plan)
-
-        entries = tuple(
-            [_inventory_entry(staging, item, plan) for item in plan.files]
-            + [
-                _generated_inventory_entry(
-                    staging,
-                    "docs/PAPER_EXPERIMENT_MAP.md",
-                    "paper_experiment_map",
-                ),
-                _generated_inventory_entry(
-                    staging,
-                    "provenance/RAW_DATA_DEPOSITION.md",
-                    "raw_data_deposition",
-                ),
-                _generated_inventory_entry(
-                    staging,
-                    "provenance/manuscript_build.json",
-                    "manuscript_build_record",
-                ),
-                _generated_inventory_entry(
-                    staging,
-                    "provenance/release/audit_report.json",
-                    "release_audit_record",
-                ),
-                _generated_inventory_entry(
-                    staging,
-                    "provenance/approved_figures.csv",
-                    "figure_approval_record",
-                ),
-                _generated_inventory_entry(
-                    staging,
-                    "provenance/vector_pdf_qa.json",
-                    "vector_pdf_qa",
-                ),
-                _generated_inventory_entry(staging, "README.md", "package_readme"),
-            ]
-        )
-        _write_inventory(staging, plan, entries)
-        _write_package_checksums(staging)
-        checksum_errors = verify_package_checksums(staging)
-        if checksum_errors:
+    reservation_targets = [output_dir]
+    if create_archive:
+        reservation_targets.append(archive_path)
+    with _DestinationReservations.acquire(reservation_targets) as reservations:
+        if os.path.lexists(output_dir):
             raise SubmissionPackagingError(
-                "staged package checksum verification failed: "
-                + "; ".join(checksum_errors[:5])
+                f"output directory already exists: {output_dir}"
             )
-        _normalize_directories(staging)
-        staging.replace(output_dir)
-        if create_archive:
-            _write_deterministic_tar_gz(output_dir, archive_path)
-            _verify_extracted_archive(archive_path, plan)
-        return output_dir, archive_path if create_archive else None
-    except Exception:
-        if staging.exists():
-            shutil.rmtree(staging)
-        if output_dir.exists():
-            shutil.rmtree(output_dir)
-        archive_path.unlink(missing_ok=True)
-        raise
+        if create_archive and os.path.lexists(archive_path):
+            raise SubmissionPackagingError(
+                f"output archive already exists: {archive_path}"
+            )
+
+        staging = Path(
+            tempfile.mkdtemp(
+                prefix=f".{output_dir.name}.staging-", dir=output_dir.parent
+            )
+        )
+        staging_owner: _OwnedPath | None = _OwnedPath.capture(staging)
+        published_output: _OwnedPath | None = None
+        published_archive: _OwnedPath | None = None
+        try:
+            for item in plan.files:
+                destination = staging.joinpath(*PurePosixPath(item.destination).parts)
+                _copy_content_source(item.source, destination)
+
+            _compile_manuscript_tree(
+                staging / "manuscript" / "source",
+                source_subdir=plan.paper_source_subdir,
+                entrypoint=plan.paper_entrypoint,
+                latexmk_executable=plan.latexmk_executable,
+            )
+            _extract_experiment_map(
+                staging / "code" / "source_snapshot.tar.gz",
+                staging / "docs" / "PAPER_EXPERIMENT_MAP.md",
+            )
+            _write_deposition_record(staging, plan)
+            _write_manuscript_build_record(
+                staging,
+                plan,
+                archive_verification_required=create_archive,
+            )
+            _write_release_audit_record(staging, plan)
+            _write_figure_approval_record(staging, plan)
+            _write_vector_qa_record(staging, plan)
+            _write_package_readme(staging, plan)
+
+            entries = tuple(
+                [_inventory_entry(staging, item, plan) for item in plan.files]
+                + [
+                    _generated_inventory_entry(
+                        staging,
+                        "docs/PAPER_EXPERIMENT_MAP.md",
+                        "paper_experiment_map",
+                    ),
+                    _generated_inventory_entry(
+                        staging,
+                        "provenance/RAW_DATA_DEPOSITION.md",
+                        "raw_data_deposition",
+                    ),
+                    _generated_inventory_entry(
+                        staging,
+                        "provenance/manuscript_build.json",
+                        "manuscript_build_record",
+                    ),
+                    _generated_inventory_entry(
+                        staging,
+                        "provenance/release/audit_report.json",
+                        "release_audit_record",
+                    ),
+                    _generated_inventory_entry(
+                        staging,
+                        "provenance/approved_figures.csv",
+                        "figure_approval_record",
+                    ),
+                    _generated_inventory_entry(
+                        staging,
+                        "provenance/vector_pdf_qa.json",
+                        "vector_pdf_qa",
+                    ),
+                    _generated_inventory_entry(staging, "README.md", "package_readme"),
+                ]
+            )
+            _write_inventory(staging, plan, entries)
+            _write_package_checksums(staging)
+            checksum_errors = verify_package_checksums(staging)
+            if checksum_errors:
+                raise SubmissionPackagingError(
+                    "staged package checksum verification failed: "
+                    + "; ".join(checksum_errors[:5])
+                )
+            _normalize_directories(staging)
+            reservations.assert_owned()
+            if os.path.lexists(output_dir):
+                raise SubmissionPackagingError(
+                    f"output directory appeared during packaging: {output_dir}"
+                )
+            staging.rename(output_dir)
+            published_output = staging_owner.moved_to(output_dir)
+            staging_owner = None
+            if create_archive:
+                reservations.assert_owned()
+                published_archive = _write_deterministic_tar_gz(
+                    output_dir, archive_path
+                )
+                _verify_extracted_archive(archive_path, plan)
+            return output_dir, archive_path if create_archive else None
+        except Exception:
+            if staging_owner is not None:
+                staging_owner.remove()
+            if published_archive is not None:
+                published_archive.remove()
+            if published_output is not None:
+                published_output.remove()
+            raise
 
 
 def _plan_payload(plan: PackagePlan) -> dict:

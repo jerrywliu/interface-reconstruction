@@ -4,9 +4,13 @@ import csv
 import hashlib
 import io
 import json
+import multiprocessing
+import os
 import subprocess
 import sys
 import tarfile
+import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -92,10 +96,19 @@ def _git(root: Path, *arguments: str) -> str:
     ).stdout.strip()
 
 
-def _write_fake_latexmk(path: Path, *, fail_at: int | None = None) -> Path:
+def _write_fake_latexmk(
+    path: Path,
+    *,
+    fail_at: int | None = None,
+    block_at: int | None = None,
+    block_marker: Path | None = None,
+    block_release: Path | None = None,
+) -> Path:
+    if block_at is not None and (block_marker is None or block_release is None):
+        raise ValueError("blocking compiler requires marker and release paths")
     path.write_text(
         "#!/usr/bin/env python3\n"
-        "import os, pathlib, sys\n"
+        "import os, pathlib, sys, time\n"
         "if '-norc' not in sys.argv:\n"
         "    print('missing -norc', file=sys.stderr)\n"
         "    raise SystemExit(10)\n"
@@ -115,9 +128,20 @@ def _write_fake_latexmk(path: Path, *, fail_at: int | None = None) -> Path:
         "count = int(counter.read_text()) + 1 if counter.exists() else 1\n"
         "counter.write_text(str(count))\n"
         f"fail_at = {fail_at!r}\n"
+        f"block_at = {block_at!r}\n"
+        f"block_marker = {str(block_marker) if block_marker else None!r}\n"
+        f"block_release = {str(block_release) if block_release else None!r}\n"
         "if fail_at is not None and count >= fail_at:\n"
         "    print('synthetic compile failure', file=sys.stderr)\n"
         "    raise SystemExit(2)\n"
+        "if block_at is not None and count == block_at:\n"
+        "    pathlib.Path(block_marker).write_text('blocked\\n')\n"
+        "    deadline = time.monotonic() + 30\n"
+        "    while not pathlib.Path(block_release).exists():\n"
+        "        if time.monotonic() >= deadline:\n"
+        "            print('synthetic compile block timed out', file=sys.stderr)\n"
+        "            raise SystemExit(13)\n"
+        "        time.sleep(0.01)\n"
         "outdir = next(a.split('=', 1)[1] for a in sys.argv if a.startswith('-outdir='))\n"
         "entrypoint = pathlib.Path(sys.argv[-1])\n"
         "if not entrypoint.is_file():\n"
@@ -132,6 +156,32 @@ def _write_fake_latexmk(path: Path, *, fail_at: int | None = None) -> Path:
     )
     path.chmod(0o755)
     return path
+
+
+def _build_package_process(plan, create_archive, label, result_queue) -> None:
+    try:
+        package, archive = build_submission_package(plan, create_archive=create_archive)
+    except Exception as exc:
+        result_queue.put((label, "error", type(exc).__name__, str(exc)))
+    else:
+        result_queue.put(
+            (
+                label,
+                "ok",
+                str(package),
+                str(archive) if archive is not None else None,
+            )
+        )
+
+
+def _wait_for_path(path: Path, process, timeout: float = 15.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not path.exists():
+        if not process.is_alive():
+            raise AssertionError(f"process exited before creating {path}")
+        if time.monotonic() >= deadline:
+            raise AssertionError(f"timed out waiting for {path}")
+        time.sleep(0.01)
 
 
 def _make_inputs(tmp_path: Path) -> tuple[Path, Path, Path, str, Path]:
@@ -257,6 +307,37 @@ def test_paper_source_allowlist_excludes_generated_and_binary_files(tmp_path):
 
     assert [path.name for path in included] == ["main.tex", "refs.bib"]
     assert excluded == ("main.aux", "preview.png")
+
+
+def test_committed_excluded_build_directory_is_not_packaged(tmp_path):
+    release, paper, manifest, _, latexmk = _make_inputs(tmp_path)
+    stale = paper / "interface-reconstruction-paper" / "build" / "stale.tex"
+    stale.parent.mkdir()
+    stale.write_text("hostile committed build product\n", encoding="utf-8")
+    _git(paper, "add", stale.relative_to(paper).as_posix())
+    _git(paper, "commit", "-q", "-m", "Commit stale build product")
+    paper_commit = _git(paper, "rev-parse", "HEAD")
+
+    plan = plan_submission_package(
+        release_root=release,
+        paper_worktree_root=paper,
+        paper_commit=paper_commit,
+        approved_figures_manifest=manifest,
+        raw_data_deposition="https://doi.org/10.1234/interface.release",
+        raw_data_manifest_identifier=_manifest_identifier(release),
+        acknowledge_unverified_remote_deposit=True,
+        latexmk_executable=str(latexmk),
+        output_dir=tmp_path / "package",
+        audit_runner=_passing_audit,
+        checksum_verifier=_checksums_pass,
+        pdf_inspector=_vector_pdf,
+    )
+
+    destinations = {item.destination for item in plan.files}
+    assert (
+        "manuscript/source/interface-reconstruction-paper/build/stale.tex"
+        not in destinations
+    )
 
 
 def test_approved_figure_manifest_requires_approval_and_exact_checksum(tmp_path):
@@ -386,6 +467,115 @@ def test_build_stages_compact_payload_and_valid_checksums(tmp_path):
     assert int(Path(plan.latexmk_executable).with_suffix(".count").read_text()) == 3
 
 
+def test_concurrent_build_reservation_prevents_winner_deletion(tmp_path):
+    if "fork" not in multiprocessing.get_all_start_methods():
+        pytest.skip("deterministic collision regression requires fork")
+    output = tmp_path / "deliverable" / "bundle"
+    plan = _plan(tmp_path / "inputs", output)
+    marker = tmp_path / "slow-build.blocked"
+    release = tmp_path / "slow-build.release"
+    _write_fake_latexmk(
+        Path(plan.latexmk_executable),
+        block_at=2,
+        block_marker=marker,
+        block_release=release,
+    )
+    fast_latexmk = _write_fake_latexmk(tmp_path / "fast-latexmk")
+    collision_plan = replace(plan, latexmk_executable=str(fast_latexmk))
+
+    context = multiprocessing.get_context("fork")
+    results = context.Queue()
+    slow = context.Process(
+        target=_build_package_process,
+        args=(plan, True, "owner", results),
+    )
+    collision = context.Process(
+        target=_build_package_process,
+        args=(collision_plan, True, "collision", results),
+    )
+    slow.start()
+    try:
+        _wait_for_path(marker, slow)
+        output_lock = output.with_name(f".{output.name}.package_submission.lock")
+        archive = output.with_suffix(".tar.gz")
+        archive_lock = archive.with_name(f".{archive.name}.package_submission.lock")
+        assert output_lock.is_file()
+        assert archive_lock.is_file()
+
+        collision.start()
+        collision.join(20)
+        assert not collision.is_alive()
+        release.write_text("continue\n", encoding="utf-8")
+        slow.join(30)
+        assert not slow.is_alive()
+    finally:
+        release.write_text("continue\n", encoding="utf-8")
+        for process in (collision, slow):
+            if process.pid is not None and process.is_alive():
+                process.terminate()
+                process.join(5)
+
+    records = {}
+    for _ in range(2):
+        record = results.get(timeout=5)
+        records[record[0]] = record
+    results.close()
+    assert records.keys() == {"owner", "collision"}
+    assert records["owner"][1] == "ok"
+    assert records["collision"][1] == "error"
+    assert "reserved by another packaging invocation" in records["collision"][3]
+    assert (output / "README.md").is_file()
+    assert archive.is_file()
+    assert not output_lock.exists()
+    assert not archive_lock.exists()
+    assert not list(output.parent.glob(f".{output.name}.staging-*"))
+    assert not list(output.parent.glob(f".{archive.name}.tmp-*"))
+
+
+def test_publish_collision_cleanup_preserves_unowned_sentinel(tmp_path):
+    if "fork" not in multiprocessing.get_all_start_methods():
+        pytest.skip("deterministic collision regression requires fork")
+    output = tmp_path / "deliverable" / "bundle"
+    plan = _plan(tmp_path / "inputs", output)
+    marker = tmp_path / "sentinel-build.blocked"
+    release = tmp_path / "sentinel-build.release"
+    _write_fake_latexmk(
+        Path(plan.latexmk_executable),
+        block_at=2,
+        block_marker=marker,
+        block_release=release,
+    )
+
+    context = multiprocessing.get_context("fork")
+    results = context.Queue()
+    builder = context.Process(
+        target=_build_package_process,
+        args=(plan, False, "builder", results),
+    )
+    builder.start()
+    try:
+        _wait_for_path(marker, builder)
+        output.mkdir(parents=True)
+        sentinel = output / "published-by-other-invocation.txt"
+        sentinel.write_text("must survive losing cleanup\n", encoding="utf-8")
+        release.write_text("continue\n", encoding="utf-8")
+        builder.join(30)
+        assert not builder.is_alive()
+    finally:
+        release.write_text("continue\n", encoding="utf-8")
+        if builder.is_alive():
+            builder.terminate()
+            builder.join(5)
+
+    record = results.get(timeout=5)
+    results.close()
+    assert record[0:2] == ("builder", "error")
+    assert "appeared during packaging" in record[3]
+    assert sentinel.read_text(encoding="utf-8") == "must survive losing cleanup\n"
+    assert not list(output.parent.glob(f".{output.name}.staging-*"))
+    assert not list(output.parent.glob(".*.package_submission.lock"))
+
+
 def test_plan_requires_exact_clean_paper_commit(tmp_path):
     release, paper, manifest, paper_commit, latexmk = _make_inputs(tmp_path)
     common = {
@@ -492,6 +682,9 @@ def test_build_fails_closed_when_extracted_manuscript_compile_fails(tmp_path):
 
     assert not output.exists()
     assert not output.with_suffix(".tar.gz").exists()
+    assert not list(output.parent.glob(f".{output.name}.staging-*"))
+    assert not list(output.parent.glob(".*.package_submission.lock"))
+    assert not list(output.parent.glob(".*.tmp-*"))
 
 
 def test_build_rechecks_paper_worktree_after_planning(tmp_path):
@@ -665,6 +858,17 @@ def test_supplied_deposit_manifest_is_checked_and_packaged(tmp_path):
 def test_dry_run_plan_does_not_mutate_release_paper_or_output(tmp_path):
     inputs = tmp_path / "inputs"
     release, paper, manifest, paper_commit, latexmk = _make_inputs(inputs)
+    entrypoint = paper / DEFAULT_PAPER_ENTRYPOINT
+    entrypoint_metadata = entrypoint.stat()
+    os.utime(
+        entrypoint,
+        ns=(
+            entrypoint_metadata.st_atime_ns,
+            entrypoint_metadata.st_mtime_ns + 5_000_000_000,
+        ),
+    )
+    git_index = paper / ".git" / "index"
+    index_before = (git_index.read_bytes(), git_index.stat().st_mtime_ns)
     release_before = _tree_snapshot(release)
     paper_before = _tree_snapshot(paper)
     output = tmp_path / "deliverable" / "bundle"
@@ -686,9 +890,12 @@ def test_dry_run_plan_does_not_mutate_release_paper_or_output(tmp_path):
 
     assert _tree_snapshot(release) == release_before
     assert _tree_snapshot(paper) == paper_before
+    assert (git_index.read_bytes(), git_index.stat().st_mtime_ns) == index_before
+    assert not (paper / ".git" / "index.lock").exists()
     assert not output.exists()
     assert not output.with_suffix(".tar.gz").exists()
     assert not list(output.parent.glob(f".{output.name}.staging-*"))
+    assert not list(output.parent.glob(".*.package_submission.lock"))
 
 
 @pytest.mark.parametrize("member_kind", ("traversal", "symlink", "special"))

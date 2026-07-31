@@ -58,7 +58,9 @@ It enumerates the committed tree with `git ls-tree` and materializes source and
 figure bytes with `git cat-file` using pinned object IDs. Worktree cleanliness is
 still required as an operator gate, but worktree bytes are never packaged. Thus
 `assume-unchanged`, `skip-worktree`, and worktree races cannot substitute different
-manuscript content. Approved figures must be tracked at that commit.
+manuscript content. Approved figures must be tracked at that commit. Tracked files
+under `.git/`, `.hg/`, `.svn/`, `__pycache__/`, `build/`, `dist/`, or `output/`
+are excluded from source discovery even when they exist in the pinned commit.
 
 ## Figure Approval Manifest
 
@@ -135,6 +137,20 @@ Remove `--dry-run` to create both `$PACKAGE/` and a deterministic
 `$PACKAGE.tar.gz`. Existing destinations are never overwritten. Use `--no-archive`
 only when a staged directory without the outer archive is required.
 
+A real build atomically reserves the output directory and, when requested, archive
+destination with exclusive sidecar lock files. A concurrent invocation targeting
+either path fails before staging. Locks are held through extracted-archive
+verification. Archive construction uses a unique sibling temporary and exclusive
+publication, so concurrent builds cannot share or overwrite a temporary. Failure
+cleanup records device/inode ownership and removes only staging, output, or archive
+paths still owned by that invocation; it never removes a colliding invocation's
+published path.
+
+A process killed outside normal exception handling can leave a sidecar lock. Its
+JSON payload records the PID, target, and random owner token. Inspect the named
+process and target before manually removing a stale lock; the packager deliberately
+fails closed rather than guessing that a lock is stale.
+
 For a real archive, manuscript compilation is checked three times: from the exact
 planned source during preflight, from a disposable copy of the staged package, and
 from a disposable copy of the extracted archive. The compile uses `latexmk -norc -pdf`
@@ -150,9 +166,10 @@ install exact source-only search prefixes with system defaults, use isolated
 pass `-norc` so user and global latexmkrc files cannot affect acceptance. System
 TeX packages remain available through the normal distribution defaults.
 
-Dry-run writes only to temporary directories. It does not create the output
-directory, archive, staging sibling, TeX product in the paper checkout, or release
-artifact.
+All Git inspection and blob materialization commands set `GIT_OPTIONAL_LOCKS=0`.
+Dry-run writes only to temporary directories: it does not change paper index bytes
+or mtime, create `.git/index.lock`, or create the output directory, archive,
+reservation, staging sibling, TeX product in the paper checkout, or release artifact.
 
 ## Package Layout
 
