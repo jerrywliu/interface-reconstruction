@@ -3,15 +3,18 @@ import os
 import shutil
 import hashlib
 import csv
+import inspect
 import subprocess
 import sys
 import stat
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
 from PIL import Image
 
 from experiments.static import run_perturbed_sweeps
+import submission.final_figure_orchestrator as orchestrator_module
 from submission.final_figure_orchestrator import (
     ALL_METHOD_FILES,
     C0_RESOLUTIONS,
@@ -25,12 +28,15 @@ from submission.final_figure_orchestrator import (
     RESOLUTION_VALUES,
     RESOLUTION_WIGGLES,
     FinalFigureOrchestrationError,
+    _OrchestrationTestHooks,
     _capture_release_audit_pin,
     _generator_environment,
     _numbers,
     _remove_tree,
     _reserve_publication,
     _snapshot_release_inputs,
+    _snapshot_complete_release,
+    _seal_execution_config,
     _write_command_record,
     finalize_publication,
     resolution_input_paths,
@@ -41,6 +47,7 @@ from submission.final_figure_orchestrator import (
     validate_plic_metadata,
     validate_resolution_manifest,
     validate_staged_metadata,
+    orchestrate_final_figures,
 )
 from submission.final_figure_provenance import atomic_write_json, file_sha256
 from submission.generator_checkout import (
@@ -56,6 +63,7 @@ from submission.accept_figure_candidates import (
     pdf_page_info,
 )
 from submission.trusted_figure_runtime import prepare_trusted_figure_runtime
+from util.config import ConfigAuthorityError, read_yaml
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -218,6 +226,93 @@ def test_materialized_source_reattestation_rejects_late_pyc(tmp_path):
     with pytest.raises(GeneratorCheckoutError, match="missing or unexpected"):
         verify_materialized_source(repo, approved, source, attestation)
     _remove_tree(source)
+
+
+def test_production_orchestration_api_exposes_no_cli_injection_hooks():
+    parameters = set(inspect.signature(orchestrate_final_figures).parameters)
+    assert not parameters.intersection(
+        {
+            "command_runner",
+            "after_acceptance_hook",
+            "after_publish_freeze_hook",
+            "source_materialized_hook",
+            "release_after_open_hook",
+            "_test_hooks",
+        }
+    )
+    assert (
+        "_test_hooks"
+        in inspect.signature(orchestrator_module._orchestrate_final_figures).parameters
+    )
+    assert _OrchestrationTestHooks.__name__.startswith("_")
+
+
+def test_trusted_launcher_ignores_pythonpath_and_user_sitecustomize(tmp_path):
+    attack_root = tmp_path / "python-attack"
+    attack_root.mkdir()
+    marker = tmp_path / "sitecustomize-ran"
+    (attack_root / "sitecustomize.py").write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).write_text('owned')\n",
+        encoding="utf-8",
+    )
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    fake_python = fake_bin / "python3"
+    fake_python.write_text(
+        f"#!/bin/sh\necho fake > {str(marker)!r}\nexit 99\n", encoding="utf-8"
+    )
+    fake_python.chmod(0o755)
+    env = dict(os.environ)
+    env["PATH"] = f"{fake_bin}:{env.get('PATH', '')}"
+    env["PYTHONPATH"] = str(attack_root)
+    env["PYTHONUSERBASE"] = str(attack_root)
+    launcher = REPO_ROOT / "submission" / "run_final_figure_orchestrator"
+    trusted_python = Path(sys.executable).resolve()
+
+    completed = subprocess.run(
+        [str(launcher), "--python", str(trusted_python), "--help"],
+        cwd=REPO_ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "approved-generator-commit" in completed.stdout
+    assert not marker.exists()
+
+
+def test_orchestrator_cli_rejects_unisolated_direct_python_startup():
+    completed = subprocess.run(
+        [sys.executable, "submission/final_figure_orchestrator.py", "--help"],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 2
+    assert (
+        "use the trusted submission/run_final_figure_orchestrator" in completed.stderr
+    )
+
+
+def test_orchestrator_cli_rejects_preloaded_repository_modules():
+    script = REPO_ROOT / "submission" / "final_figure_orchestrator.py"
+    code = (
+        "import runpy,sys,types; "
+        "sys.modules['submission.generator_checkout'] = types.ModuleType('submission.generator_checkout'); "
+        f"runpy.run_path({str(script)!r}, run_name='__main__')"
+    )
+    completed = subprocess.run(
+        [str(Path(sys.executable).resolve()), "-I", "-c", code],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 2
+    assert "preloaded=submission.generator_checkout" in completed.stderr
 
 
 def test_poppler_ignores_fake_caller_path_and_records_exact_tools(
@@ -765,6 +860,27 @@ def _release_snapshot_fixture(tmp_path):
         release / "submission_config.resolved.json",
         {
             "source": {"target_commit": COMMIT},
+            "benchmark_grid": {
+                "seed": 0,
+                "trials_per_setting": 25,
+                "wiggles": [0.0, 0.05, 0.1, 0.2, 0.3],
+                "full_resolutions": [0.32, 0.5, 0.64, 1.0, 1.28, 1.5],
+                "short_resolutions": [0.5, 0.64, 1.0, 1.28, 1.5],
+            },
+            "benchmarks": {
+                experiment: {
+                    "methods": list(methods),
+                    "planned_runs": {
+                        "lines": 150,
+                        "circles": 210,
+                        "ellipses": 210,
+                        "squares": 200,
+                        "zalesak": 200,
+                    }[experiment],
+                }
+                for experiment, methods in orchestrator_module.RELEASE_METHODS.items()
+            },
+            "planned_totals": {"runs": 970, "cases": 24250},
             "production_method": {
                 "unresolved_orientation_fallback": PROFILE["plic_fallback"],
                 "corner_behavior_profile": PROFILE["corner_behavior_profile"],
@@ -772,7 +888,16 @@ def _release_snapshot_fixture(tmp_path):
             },
         },
     )
-    _write_json(release / "sweep_manifest.json", {"status": "completed"})
+    _write_json(
+        release / "sweep_manifest.json",
+        {
+            "status": "completed",
+            "planned_run_count": 970,
+            "successful_run_count": 970,
+            "failure_count": 0,
+            "failures": [],
+        },
+    )
     fields = (
         "experiment",
         "algo",
@@ -843,6 +968,76 @@ def test_release_snapshot_rejects_transient_input_mutation(tmp_path):
             after_open_hook=mutate_after_open,
         )
     assert not (staging / "provenance" / "release_input_snapshot").exists()
+
+
+def test_complete_snapshot_is_the_only_release_audit_root_during_substitution(
+    tmp_path, monkeypatch
+):
+    release = _release_snapshot_fixture(tmp_path)
+    live_pin = _capture_release_audit_pin(release)
+    complete = _snapshot_complete_release(
+        release, tmp_path / "complete-release", live_pin=live_pin
+    )
+    audited_roots = []
+    verified_roots = []
+    real_verify = orchestrator_module.verify_sha256_manifest
+
+    def substitute_live_release(_snapshot_root):
+        audited_roots.append(Path(_snapshot_root))
+        old_release = tmp_path / "substituted-live-release"
+        release.rename(old_release)
+        shutil.copytree(old_release, release)
+        csv_path = release / "perturbed_sweep.csv"
+        csv_path.write_bytes(csv_path.read_bytes() + b"# malicious coherent release\n")
+        files = sorted(
+            path
+            for path in release.rglob("*")
+            if path.is_file() and path.name != "SHA256SUMS"
+        )
+        (release / "SHA256SUMS").write_text(
+            "".join(
+                f"{hashlib.sha256(path.read_bytes()).hexdigest()}  "
+                f"{path.relative_to(release).as_posix()}\n"
+                for path in files
+            ),
+            encoding="utf-8",
+        )
+        return SimpleNamespace(ok=True, errors=[])
+
+    def verify_snapshot(root):
+        verified_roots.append(Path(root))
+        return real_verify(root)
+
+    monkeypatch.setattr(
+        orchestrator_module, "audit_final_release", substitute_live_release
+    )
+    monkeypatch.setattr(orchestrator_module, "verify_sha256_manifest", verify_snapshot)
+    audited = orchestrator_module.validate_final_release_contract(complete.root)
+
+    assert audited_roots == [complete.root]
+    assert verified_roots == [complete.root]
+    assert audited.root == complete.root
+    assert (
+        b"malicious coherent release"
+        not in (complete.root / "perturbed_sweep.csv").read_bytes()
+    )
+    assert (
+        b"malicious coherent release" in (release / "perturbed_sweep.csv").read_bytes()
+    )
+
+
+def test_complete_release_snapshot_has_exact_full_checksum_inventory(tmp_path):
+    release = _release_snapshot_fixture(tmp_path)
+    live_pin = _capture_release_audit_pin(release)
+    complete = _snapshot_complete_release(
+        release, tmp_path / "complete-release", live_pin=live_pin
+    )
+
+    assert complete.file_count == len(
+        orchestrator_module.parse_sha256_manifest(release / "SHA256SUMS")
+    )
+    assert orchestrator_module.verify_sha256_manifest(complete.root) == []
+    assert (complete.root / "SHA256SUMS").read_bytes() == live_pin.sha256sums_bytes
 
 
 def test_release_snapshot_preserves_audited_ledger_and_source_commit(tmp_path):
@@ -942,6 +1137,97 @@ def test_command_provenance_does_not_record_deleted_private_roots(tmp_path):
     assert str(execution) not in text
     assert "<publication-root>/provenance/release_input_snapshot/data.csv" in text
     assert "--out=<private-execution>/generated/figure.pdf" in text
+
+
+def _config_authority_fixture(tmp_path, monkeypatch):
+    config_root = tmp_path / "approved-source" / "config"
+    override = config_root / "static" / "test.yaml"
+    override.parent.mkdir(parents=True)
+    (config_root / "base.yaml").write_text(
+        "value: 1\nnested:\n  base: true\n", encoding="utf-8"
+    )
+    override.write_text("value: 2\nnested:\n  override: true\n", encoding="utf-8")
+    authority = _seal_execution_config(
+        config_root, tmp_path / "private-execution" / "config_authority.json"
+    )
+    monkeypatch.setenv("INTERFACE_CONFIG_ROOT", str(authority.config_root))
+    monkeypatch.setenv("INTERFACE_CONFIG_AUTHORITY", str(authority.manifest_path))
+    monkeypatch.setenv("INTERFACE_CONFIG_AUTHORITY_SHA256", authority.manifest_sha256)
+    return authority, override
+
+
+def test_nested_config_read_consumes_digest_attested_source_bytes(
+    tmp_path, monkeypatch
+):
+    authority, _override = _config_authority_fixture(tmp_path, monkeypatch)
+
+    assert read_yaml("config/static/test.yaml") == {
+        "value": 2,
+        "nested": {"base": True, "override": True},
+    }
+    orchestrator_module._verify_execution_config(authority)
+
+
+def test_nested_config_read_rejects_source_and_authority_substitution(
+    tmp_path, monkeypatch
+):
+    authority, override = _config_authority_fixture(tmp_path, monkeypatch)
+    override.write_text("value: 999\n", encoding="utf-8")
+
+    with pytest.raises(ConfigAuthorityError, match="size differs|digest differs"):
+        read_yaml("config/static/test.yaml")
+    with pytest.raises(
+        FinalFigureOrchestrationError, match="execution config bytes mutated"
+    ):
+        orchestrator_module._verify_execution_config(authority)
+
+    override.write_text("value: 2\nnested:\n  override: true\n", encoding="utf-8")
+    authority.manifest_path.chmod(0o600)
+    payload = json.loads(authority.manifest_path.read_text(encoding="utf-8"))
+    payload["files"][0]["sha256"] = "0" * 64
+    _write_json(authority.manifest_path, payload)
+    with pytest.raises(ConfigAuthorityError, match="manifest digest differs"):
+        read_yaml("config/static/test.yaml")
+
+
+def test_nested_config_read_rejects_symlink_swap(tmp_path, monkeypatch):
+    _authority, override = _config_authority_fixture(tmp_path, monkeypatch)
+    original = override.with_name("test-original.yaml")
+    override.rename(original)
+    malicious = override.with_name("malicious.yaml")
+    malicious.write_text("value: 999\n", encoding="utf-8")
+    override.symlink_to(malicious)
+
+    with pytest.raises(ConfigAuthorityError, match="open attested config|symlink"):
+        read_yaml("config/static/test.yaml")
+
+
+def test_config_authority_is_enforced_in_nested_experiment_process(
+    tmp_path, monkeypatch
+):
+    authority, override = _config_authority_fixture(tmp_path, monkeypatch)
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(REPO_ROOT)
+    command = [
+        sys.executable,
+        "-c",
+        (
+            "from util.config import read_yaml; "
+            "print(read_yaml('config/static/test.yaml')['value'])"
+        ),
+    ]
+    valid = subprocess.run(
+        command, cwd=tmp_path, env=env, check=False, capture_output=True, text=True
+    )
+    assert valid.returncode == 0, valid.stderr
+    assert valid.stdout.strip() == "2"
+
+    override.write_text("value: 999\n", encoding="utf-8")
+    attacked = subprocess.run(
+        command, cwd=tmp_path, env=env, check=False, capture_output=True, text=True
+    )
+    assert attacked.returncode != 0
+    assert "Config size differs from authority" in attacked.stderr
 
 
 def test_existing_plot_from_csv_callers_remain_compatible(tmp_path, monkeypatch):

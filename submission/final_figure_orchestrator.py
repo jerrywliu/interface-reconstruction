@@ -3,6 +3,37 @@
 
 from __future__ import annotations
 
+import sys
+
+
+def _require_isolated_cli_startup() -> None:
+    flags = sys.flags
+    forbidden_modules = sorted(
+        name
+        for name in sys.modules
+        if name in {"sitecustomize", "usercustomize", "submission", "experiments"}
+        or name.startswith(("submission.", "experiments."))
+    )
+    if not (
+        flags.isolated
+        and flags.ignore_environment
+        and flags.no_user_site
+        and not forbidden_modules
+    ):
+        detail = (
+            f"; preloaded={','.join(forbidden_modules)}" if forbidden_modules else ""
+        )
+        sys.stderr.write(
+            "FINAL FIGURE STARTUP ERROR: use the trusted "
+            "submission/run_final_figure_orchestrator launcher; the CLI requires "
+            f"a fresh isolated Python process{detail}\n"
+        )
+        raise SystemExit(2)
+
+
+if __name__ == "__main__":
+    _require_isolated_cli_startup()
+
 import argparse
 import csv
 import ctypes
@@ -15,7 +46,6 @@ import re
 import shutil
 import stat
 import subprocess
-import sys
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -247,6 +277,22 @@ class ReleaseInputSnapshot:
 
 
 @dataclass(frozen=True)
+class CompleteReleaseSnapshot:
+    root: Path
+    file_count: int
+    total_size_bytes: int
+    live_sha256sums_sha256: str
+
+
+@dataclass(frozen=True)
+class ExecutionConfigAuthority:
+    config_root: Path
+    manifest_path: Path
+    manifest_sha256: str
+    file_count: int
+
+
+@dataclass(frozen=True)
 class ReleaseAuditPin:
     root: Path
     device: int
@@ -339,6 +385,77 @@ def _assert_release_matches_audit_pin(
     _require(
         config.get("source", {}).get("target_commit") == audit_pin.source_commit,
         "Release source commit differs from the audited source commit",
+    )
+
+
+def _snapshot_complete_release(
+    release_root: Path,
+    destination: Path,
+    *,
+    live_pin: ReleaseAuditPin,
+    after_open_hook: Optional[Callable[[Path], None]] = None,
+) -> CompleteReleaseSnapshot:
+    """Materialize the complete live ledger before any scientific audit."""
+
+    release_root = Path(release_root).expanduser().absolute()
+    destination = Path(destination).resolve()
+    _assert_release_matches_audit_pin(release_root, live_pin)
+    _require(
+        not destination.exists(), f"Complete release snapshot exists: {destination}"
+    )
+    destination.mkdir(parents=True, mode=0o700)
+    try:
+        ledger_path = release_root / "SHA256SUMS"
+        ledger_bytes = stable_file_bytes(ledger_path)
+        _require(
+            ledger_bytes == live_pin.sha256sums_bytes,
+            "Live release ledger changed before complete snapshot",
+        )
+        snapshot_ledger = destination / "SHA256SUMS"
+        snapshot_ledger.write_bytes(ledger_bytes)
+        ledger = parse_sha256_manifest(snapshot_ledger)
+
+        actual_paths = set()
+        for path in sorted(release_root.rglob("*")):
+            _require(not path.is_symlink(), f"Live release contains symlink: {path}")
+            _require(
+                path.is_file() or path.is_dir(),
+                f"Live release contains non-regular entry: {path}",
+            )
+            if path.is_file() and path != ledger_path:
+                actual_paths.add(path.relative_to(release_root).as_posix())
+        _require(
+            actual_paths == set(ledger),
+            "Live release inventory differs from its pinned SHA256SUMS",
+        )
+
+        total_size = 0
+        for relative, expected_sha256 in sorted(ledger.items()):
+            source = release_root / relative
+            target = destination / relative
+            copy_verified_file(
+                source,
+                target,
+                expected_sha256=expected_sha256,
+                after_open_hook=after_open_hook,
+            )
+            total_size += target.stat().st_size
+
+        _assert_release_matches_audit_pin(release_root, live_pin)
+        _require(
+            snapshot_ledger.read_bytes() == live_pin.sha256sums_bytes,
+            "Complete release snapshot has different ledger bytes",
+        )
+        make_tree_read_only(destination)
+    except Exception:
+        if destination.exists():
+            _remove_tree(destination)
+        raise
+    return CompleteReleaseSnapshot(
+        root=destination,
+        file_count=len(ledger),
+        total_size_bytes=total_size,
+        live_sha256sums_sha256=live_pin.sha256sums_sha256,
     )
 
 
@@ -1457,18 +1574,65 @@ def _write_command_record(
     return path
 
 
-def _copy_config_tree(source: Path, destination: Path) -> None:
-    _require(not destination.exists(), f"Config snapshot already exists: {destination}")
-    destination.mkdir(parents=True)
-    for path in sorted(Path(source).rglob("*")):
+def _config_authority_payload(config_root: Path) -> dict:
+    config_root = Path(config_root).resolve()
+    _require(config_root.is_dir(), f"Approved config root is missing: {config_root}")
+    records = []
+    for path in sorted(config_root.rglob("*")):
         _require(not path.is_symlink(), f"Approved config contains symlink: {path}")
-        relative = path.relative_to(source)
-        target = destination / relative
-        if path.is_dir():
-            target.mkdir(exist_ok=True)
-        elif path.is_file():
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(path.read_bytes())
+        _require(
+            path.is_file() or path.is_dir(),
+            f"Approved config contains non-regular entry: {path}",
+        )
+        if path.is_file():
+            relative = path.relative_to(config_root).as_posix()
+            data = stable_file_bytes(path)
+            records.append(
+                {
+                    "path": relative,
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                    "size_bytes": len(data),
+                }
+            )
+    _require(records, "Approved config tree is empty")
+    return {
+        "schema_version": 1,
+        "authority": "approved_generator_config",
+        "files": records,
+    }
+
+
+def _seal_execution_config(
+    config_root: Path, manifest_path: Path
+) -> ExecutionConfigAuthority:
+    payload = _config_authority_payload(config_root)
+    atomic_write_json(manifest_path, payload)
+    manifest_path.chmod(0o400)
+    return ExecutionConfigAuthority(
+        config_root=Path(config_root).resolve(),
+        manifest_path=Path(manifest_path).resolve(),
+        manifest_sha256=file_sha256(manifest_path),
+        file_count=len(payload["files"]),
+    )
+
+
+def _verify_execution_config(authority: ExecutionConfigAuthority) -> None:
+    manifest_bytes = stable_file_bytes(authority.manifest_path)
+    _require(
+        hashlib.sha256(manifest_bytes).hexdigest() == authority.manifest_sha256,
+        "Execution config authority manifest mutated",
+    )
+    try:
+        expected = json.loads(manifest_bytes.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise FinalFigureOrchestrationError(
+            f"Execution config authority manifest is invalid: {exc}"
+        ) from exc
+    _require(
+        expected == _config_authority_payload(authority.config_root)
+        and len(expected.get("files", [])) == authority.file_count,
+        "Attested execution config bytes mutated",
+    )
 
 
 def _generator_environment(
@@ -1715,6 +1879,12 @@ def validate_published_logical_paths(root: Path) -> tuple[str, ...]:
                 external_approval["snapshot_path"],
                 "orchestration external approval snapshot_path",
             )
+        config_authority = orchestration.get("execution_config_authority", {})
+        if isinstance(config_authority, dict) and "path" in config_authority:
+            check(
+                config_authority["path"],
+                "orchestration execution config authority path",
+            )
         scientific_release = orchestration.get("scientific_release", {})
         if isinstance(scientific_release, dict):
             if "root" in scientific_release:
@@ -1862,7 +2032,18 @@ def finalize_publication(
         _release_reservation(reservation)
 
 
-def orchestrate_final_figures(
+@dataclass(frozen=True)
+class _OrchestrationTestHooks:
+    command_runner: Callable[[Sequence[str], Path, Mapping[str, str], Path], None] = (
+        run_command
+    )
+    after_acceptance: Optional[Callable[[Path], None]] = None
+    after_publish_freeze: Optional[Callable[[Path], None]] = None
+    source_materialized: Optional[Callable[[Path, Path], None]] = None
+    release_after_open: Optional[Callable[[Path], None]] = None
+
+
+def _orchestrate_final_figures(
     *,
     repository: Path,
     release_root: Path,
@@ -1871,14 +2052,9 @@ def orchestrate_final_figures(
     approval_record_sha256: str,
     output_root: Path,
     allowlist_path: Path = DEFAULT_ALLOWLIST,
-    command_runner: Callable[
-        [Sequence[str], Path, Mapping[str, str], Path], None
-    ] = run_command,
-    after_acceptance_hook: Optional[Callable[[Path], None]] = None,
-    after_publish_freeze_hook: Optional[Callable[[Path], None]] = None,
-    source_materialized_hook: Optional[Callable[[Path, Path], None]] = None,
-    release_after_open_hook: Optional[Callable[[Path], None]] = None,
+    _test_hooks: Optional[_OrchestrationTestHooks] = None,
 ) -> Path:
+    hooks = _test_hooks or _OrchestrationTestHooks()
     repository = Path(repository).resolve()
     release_root = Path(release_root).expanduser().absolute()
     supplied_output = Path(output_root).expanduser().absolute()
@@ -1897,9 +2073,9 @@ def orchestrate_final_figures(
         "Final acceptance must use the approved repository allowlist",
     )
     _require(not output_root.exists(), f"Output root must not exist: {output_root}")
-    release_audit_pin = validate_final_release_contract(release_root)
+    live_release_pin = _capture_release_audit_pin(release_root)
     attestation = verify_generator_checkout(
-        repository, approved_generator_commit, release_audit_pin.source_commit
+        repository, approved_generator_commit, live_release_pin.source_commit
     )
     reservation = _reserve_publication(output_root)
     staging = None
@@ -1928,11 +2104,15 @@ def orchestrate_final_figures(
             len(specs) == EXPECTED_COUNTS["candidate_pdfs"],
             "Private allowlist does not encode the exact candidate contract",
         )
-        if source_materialized_hook is not None:
-            source_materialized_hook(repository, immutable_source)
+        if hooks.source_materialized is not None:
+            hooks.source_materialized(repository, immutable_source)
         verify_materialized_source(
             repository, approved_generator_commit, immutable_source, attestation
         )
+        config_authority = _seal_execution_config(
+            immutable_source / "config", execution / "config_authority.json"
+        )
+        _verify_execution_config(config_authority)
 
         def approved_command_runner(
             command: Sequence[str],
@@ -1943,10 +2123,14 @@ def orchestrate_final_figures(
             verify_materialized_source(
                 repository, approved_generator_commit, immutable_source, attestation
             )
-            command_runner(command, cwd, command_environment, log_path)
-            verify_materialized_source(
-                repository, approved_generator_commit, immutable_source, attestation
-            )
+            _verify_execution_config(config_authority)
+            try:
+                hooks.command_runner(command, cwd, command_environment, log_path)
+            finally:
+                _verify_execution_config(config_authority)
+                verify_materialized_source(
+                    repository, approved_generator_commit, immutable_source, attestation
+                )
 
         figure_root = staging / "candidates" / "figure_root"
         c0_root = staging / "candidates" / "c0_root"
@@ -1954,18 +2138,27 @@ def orchestrate_final_figures(
             not figure_root.exists() and not c0_root.exists(),
             "Candidate roots must start nonexistent",
         )
-        _copy_config_tree(
-            immutable_source / "config",
-            execution / "config",
-        )
         plots_root = execution / "plots"
         plots_root.mkdir()
-        release_snapshot = _snapshot_release_inputs(
+        complete_release = _snapshot_complete_release(
             release_root,
+            execution / "audited_release",
+            live_pin=live_release_pin,
+            after_open_hook=hooks.release_after_open,
+        )
+        release_audit_pin = validate_final_release_contract(complete_release.root)
+        _require(
+            release_audit_pin.sha256sums_bytes == live_release_pin.sha256sums_bytes
+            and release_audit_pin.source_commit == live_release_pin.source_commit
+            and release_audit_pin.resolved_config_sha256
+            == live_release_pin.resolved_config_sha256,
+            "Immutable release audit authority differs from the pinned live release",
+        )
+        release_snapshot = _snapshot_release_inputs(
+            complete_release.root,
             staging / "provenance" / "release_input_snapshot",
             audit_pin=release_audit_pin,
             staging_root=staging,
-            after_open_hook=release_after_open_hook,
         )
         anchor = release_snapshot.anchor
         release_view = release_snapshot.plots_root
@@ -1974,7 +2167,7 @@ def orchestrate_final_figures(
         _require(
             release_sha256sums_sha256 == release_audit_pin.sha256sums_sha256
             and anchor["source_commit"] == release_audit_pin.source_commit,
-            "Private release snapshot differs from the completed live audit",
+            "Compact release input view differs from the immutable release audit",
         )
         approval = verify_external_approval_record(
             approval_record,
@@ -1990,6 +2183,13 @@ def orchestrate_final_figures(
         )
         runtime = prepare_trusted_figure_runtime(execution / "trusted_runtime")
         env = _generator_environment(repository, immutable_source, runtime)
+        env.update(
+            {
+                "INTERFACE_CONFIG_ROOT": str(config_authority.config_root),
+                "INTERFACE_CONFIG_AUTHORITY": str(config_authority.manifest_path),
+                "INTERFACE_CONFIG_AUTHORITY_SHA256": (config_authority.manifest_sha256),
+            }
+        )
         python = str(runtime.attestation["python"]["executable"])
         generated = execution / "generated"
         logs = staging / "provenance" / "logs"
@@ -2001,6 +2201,13 @@ def orchestrate_final_figures(
         atomic_write_json(runtime_record, runtime.attestation)
         snapshot_artifacts.append(
             snapshot_record(runtime_record, staging, "trusted_figure_runtime")
+        )
+        config_authority_snapshot = _copy_manifest(
+            config_authority.manifest_path,
+            staging,
+            "provenance/execution_config_authority.json",
+            "execution_config_authority",
+            snapshot_artifacts,
         )
         candidates: list[dict] = []
         contracts: dict[str, dict] = {"final_release": dict(release_audit_pin.contract)}
@@ -2590,6 +2797,7 @@ def orchestrate_final_figures(
             "Exactly 165 C0 run manifests must be snapshotted",
         )
         for role, expected_count in {
+            "execution_config_authority": 1,
             "resolution_case_metrics": 30,
             "resolution_case_geometry": 30,
             "resolution_mesh_geometry": 30,
@@ -2615,6 +2823,13 @@ def orchestrate_final_figures(
             "created_at_utc": datetime.now(timezone.utc).isoformat(),
             "generator_checkout": attestation.to_dict(),
             "trusted_figure_runtime": runtime.attestation,
+            "execution_config_authority": {
+                "path": config_authority_snapshot.relative_to(staging).as_posix(),
+                "sha256": config_authority.manifest_sha256,
+                "file_count": config_authority.file_count,
+                "source": "approved_materialized_generator_commit",
+                "verification": "per_yaml_read_and_before_after_generator",
+            },
             "external_approval": {
                 key: value for key, value in approval.to_dict().items() if key != "path"
             }
@@ -2624,6 +2839,10 @@ def orchestrate_final_figures(
                 "source_commit": release_audit_pin.source_commit,
                 "sha256sums_sha256": release_audit_pin.sha256sums_sha256,
                 "resolved_config_sha256": release_audit_pin.resolved_config_sha256,
+                "audit_root": "private_complete_release_snapshot",
+                "checksum_verification": "complete_inventory_passed",
+                "snapshotted_file_count": complete_release.file_count,
+                "snapshotted_size_bytes": complete_release.total_size_bytes,
             },
             "release_input_snapshot": {
                 "root": "provenance/release_input_snapshot",
@@ -2677,8 +2896,8 @@ def orchestrate_final_figures(
                 "review_builder": partial(build_vector_review_pdf, runtime=runtime),
             },
             candidate_specs=specs,
-            after_acceptance_hook=after_acceptance_hook,
-            after_publish_freeze_hook=after_publish_freeze_hook,
+            after_acceptance_hook=hooks.after_acceptance,
+            after_publish_freeze_hook=hooks.after_publish_freeze,
         )
     except Exception as exc:
         if staging is not None and staging.exists():
@@ -2709,6 +2928,29 @@ def orchestrate_final_figures(
                 pass
             _remove_tree(execution)
     return output_root
+
+
+def orchestrate_final_figures(
+    *,
+    repository: Path,
+    release_root: Path,
+    approved_generator_commit: str,
+    approval_record: Path,
+    approval_record_sha256: str,
+    output_root: Path,
+    allowlist_path: Path = DEFAULT_ALLOWLIST,
+) -> Path:
+    """Run production orchestration without injectable command or race hooks."""
+
+    return _orchestrate_final_figures(
+        repository=repository,
+        release_root=release_root,
+        approved_generator_commit=approved_generator_commit,
+        approval_record=approval_record,
+        approval_record_sha256=approval_record_sha256,
+        output_root=output_root,
+        allowlist_path=allowlist_path,
+    )
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:

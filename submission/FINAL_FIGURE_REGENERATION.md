@@ -49,8 +49,10 @@ replaces an existing path.
 ```bash
 FINAL_FIGURE_ROOT="results/submission/final_figures_$(date -u +%Y%m%d_%H%M%S)"
 GENERATOR_COMMIT="$(git rev-parse HEAD)"
+TRUSTED_PYTHON="/absolute/non-symlink/path/to/reviewed/python"
 
-python submission/final_figure_orchestrator.py \
+submission/run_final_figure_orchestrator \
+  --python "$TRUSTED_PYTHON" \
   --repository "$PWD" \
   --release-root "$FINAL_ROOT" \
   --approved-generator-commit "$GENERATOR_COMMIT" \
@@ -61,18 +63,22 @@ python submission/final_figure_orchestrator.py \
 
 The wrapper performs, in order:
 
-1. pin the live release root, exact checksum-ledger bytes/digest, resolved-config
-   digest, and scientific source commit, then complete the full release audit;
-2. exact commit, index, tracked-byte, and external-approval attestation;
-3. read-only source materialization from approved Git blobs and repeated source re-attestation;
-4. one private read-only allowlist copy and immutable release-input snapshot that
-   re-attests the live root and exactly matches the audited ledger and source;
-5. main-text and all-method generation from that snapshot;
-6. 30 fresh resolution runs plus quantitative/geometry evidence capture;
-7. 165 fresh guarded-C0 runs plus exact 2,700-row metrics validation;
-8. deterministic PLIC and staged figures;
-9. internal 38-PDF vector/preview/page-map acceptance with absolute attested Poppler tools; and
-10. publication-root-relative path resolution for every wrapper-owned artifact,
+1. start a fresh isolated Python process with no caller Python path, user site,
+   startup customization, or preloaded repository modules;
+2. pin the live release identity and ledger, copy the complete ledger into a
+   private read-only tree, and run the scientific audit plus checksum verification
+   only on that immutable tree;
+3. exact commit, index, tracked-byte, and external-approval attestation;
+4. read-only source materialization from approved Git blobs, per-read sealed
+   config verification, and repeated source/config re-attestation;
+5. one private read-only allowlist copy and compact release-input view derived
+   only from the audited complete snapshot;
+6. main-text and all-method generation from that snapshot;
+7. 30 fresh resolution runs plus quantitative/geometry evidence capture;
+8. 165 fresh guarded-C0 runs plus exact 2,700-row metrics validation;
+9. deterministic PLIC and staged figures;
+10. internal 38-PDF vector/preview/page-map acceptance with absolute attested Poppler tools; and
+11. publication-root-relative path resolution for every wrapper-owned artifact,
     checksum-copy to a separate sealed publication tree, locked final rehash, and
     atomic no-replace publication.
 
@@ -89,6 +95,7 @@ $FINAL_FIGURE_ROOT/
   provenance/approved_candidate_allowlist.json
   provenance/external_approval_record.json
   provenance/trusted_runtime.json
+  provenance/execution_config_authority.json
   provenance/release_input_snapshot/...
   provenance/resolution/.../run_manifests/       # 30
   provenance/resolution/.../inputs/              # metrics + geometry

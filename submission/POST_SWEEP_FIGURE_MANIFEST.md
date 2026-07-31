@@ -22,11 +22,14 @@ The final review inventory is defined only by
 ## Promotion Rule
 
 Historical March, May, and July assets remain layout or comparison references.
-No existing figure directory may be passed into the submission gate. Run
-`submission/final_figure_orchestrator.py`; it starts from nonexistent candidate
+No existing figure directory may be passed into the submission gate. Run the
+isolated `submission/run_final_figure_orchestrator` launcher documented below;
+it starts from nonexistent candidate
 roots, requires the external approval record for the exact integrated commit,
-materializes source and release inputs into immutable snapshots, invokes the
-exact generators, and publishes only after its internal acceptance gate passes.
+materializes the complete release before auditing it, derives all consumed
+release inputs from that audit snapshot, reads config through the attested
+source authority, invokes the exact generators, and publishes only after its
+internal acceptance gate passes.
 It uses only the private copy of this allowlist, records the attested
 Poppler/Python/font runtime, snapshots the actual square/circle VTP truth inputs
 used by the resolution plots, and seals a separately copied final tree before

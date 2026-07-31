@@ -1,0 +1,38 @@
+#!/bin/sh
+
+set -eu
+IFS=$(printf ' \t\n_')
+IFS=${IFS%_}
+PATH='/usr/bin:/bin:/usr/sbin:/sbin'
+export PATH
+unset CDPATH ENV BASH_ENV PYTHONPATH PYTHONHOME PYTHONSTARTUP PYTHONINSPECT
+unset PYTHONUSERBASE PYTHONWARNINGS PYTHONBREAKPOINT PYTHONPLATLIBDIR
+
+if [ "$#" -lt 2 ] || [ "$1" != "--python" ]; then
+    echo "usage: submission/run_final_figure_orchestrator --python /absolute/non-symlink/python [orchestrator arguments]" >&2
+    exit 2
+fi
+
+python=$2
+shift 2
+case "$python" in
+    /*) ;;
+    *)
+        echo "trusted launcher: --python must be an absolute path" >&2
+        exit 2
+        ;;
+esac
+if [ -L "$python" ] || [ ! -f "$python" ] || [ ! -x "$python" ]; then
+    echo "trusted launcher: --python must name a non-symlink executable file" >&2
+    exit 2
+fi
+
+script_dir=$(CDPATH= cd -P -- "$(/usr/bin/dirname -- "$0")" && /bin/pwd)
+exec /usr/bin/env -i \
+    HOME=/var/empty \
+    PATH="$PATH" \
+    TMPDIR=/tmp \
+    LC_ALL=C \
+    LANG=C \
+    TZ=UTC \
+    "$python" -I "$script_dir/final_figure_orchestrator.py" "$@"

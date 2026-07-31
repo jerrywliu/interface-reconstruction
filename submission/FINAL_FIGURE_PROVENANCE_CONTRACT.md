@@ -1,7 +1,9 @@
 # Final Figure Provenance Contract
 
-The submission figure set is produced only by
-`submission/final_figure_orchestrator.py`. The review builder in
+The submission figure set is produced only through
+`submission/run_final_figure_orchestrator`, which starts the internal
+`submission/final_figure_orchestrator.py` entry point in an isolated process.
+The review builder in
 `submission/accept_figure_candidates.py` is internal-only: it accepts a
 process-local state created by the orchestrator and has no standalone
 acceptance CLI. A JSON manifest that merely claims `status=completed` has no
@@ -51,6 +53,17 @@ responsibilities.
 
 ## Source Trust
 
+The supported CLI starts only through
+`submission/run_final_figure_orchestrator`. This fixed `/bin/sh` launcher
+requires an explicit absolute, non-symlink Python executable, clears Python
+startup and module-path variables, constructs a minimal environment, and
+executes a fresh interpreter with `-I`. The Python entry point refuses a
+non-isolated process, user/site customization, or any preloaded `submission`
+or `experiments` module. Direct `python .../final_figure_orchestrator.py`
+execution is deliberately unsupported. Production orchestration exposes no
+injectable command or race hooks; those exist only on a private test entry
+point that the CLI cannot select.
+
 Every Git command receives a scrubbed Git environment. Replacement objects are
 disabled, caller `GIT_*` configuration is removed, and object facts are read
 with `ls-tree` and `cat-file`. The wrapper verifies:
@@ -66,10 +79,13 @@ Generation never imports the live checkout. The wrapper materializes a new,
 read-only source tree from the approved commit blobs. Ignored files and bytecode
 cannot enter that tree. Generator subprocesses use `-B`, disable bytecode and
 user site packages, discard inherited Python/Git environment variables, and
-use only this immutable tree as their module path. The execution configuration
-is a physical copy from the same tree; no live-source symlink is used. The
-materialized inventory, modes, and bytes are re-attested before and after every
-generator command.
+use only this immutable tree as their module path. Configuration YAML is read
+directly from that attested tree. A private authority manifest records every
+config path, size, and SHA-256; its own digest is fixed in every generator
+environment. Every nested resolution/C0 process verifies the authority and
+hashes each YAML before parsing those same bytes. The full config/source
+inventory is also re-attested before and after every top-level generator
+command. A mutation therefore cannot produce an accepted run.
 
 The candidate allowlist is copied once from the approved materialized source
 into private staging and made read-only. Approval, generation staging,
@@ -94,20 +110,25 @@ SHA-256, Python/package versions, tool versions, and configuration digests in
 
 ## Release Input Snapshot
 
-Before the complete release audit starts, the wrapper pins the release-root
-device/inode, the exact `SHA256SUMS` bytes and SHA-256, the exact resolved-config
-SHA-256, and the resolved scientific source commit. The completed audit must
-still match that pin. The wrapper then snapshots every release byte the
-generators consume before any figure generation:
+Before any scientific audit, the wrapper pins the live release-root
+device/inode, exact `SHA256SUMS` bytes and SHA-256, exact resolved-config
+SHA-256, and scientific source commit. It then checksum-copies every file in
+that ledger into a private complete release snapshot and makes the tree
+read-only. Both `audit_final_release` and complete-inventory checksum
+verification run only on this immutable snapshot, never on the live release.
+
+After that audit passes, the wrapper derives the smaller plotting view solely
+from the audited snapshot:
 
 - resolved configuration, completed sweep manifest, aggregate CSV, and checksum ledger;
 - the complete raw run bundles required by all representative main-text panels.
 
-Each file is opened without following a symlink, read once, checked for stable
-inode/size/timestamps during the read, verified against `SHA256SUMS`, and copied
-without replacement. Before the snapshot is accepted, the live release root is
-re-attested and the private ledger bytes, resolved-config digest, and source
-commit must equal the audit pin exactly. The snapshot is made read-only.
+Each full-release and plotting-view file is opened without following a symlink,
+checked for stable inode/size/timestamps during the read, verified against the
+pinned ledger, and copied without replacement. The live root is re-attested
+after the complete copy; later live replacement cannot affect the private audit
+or any consumed bytes. The compact view is also read-only and must retain the
+audited ledger bytes, resolved-config digest, and source commit exactly.
 Main-text and all-method generators consume only the snapshotted CSV and
 physical raw-bundle copies, never a live CSV, symlink, or release directory.
 
@@ -168,8 +189,10 @@ After external approval of the exact integrated commit:
 
 ```bash
 GENERATOR_COMMIT="$(git rev-parse HEAD)"
+TRUSTED_PYTHON="/absolute/non-symlink/path/to/reviewed/python"
 
-python submission/final_figure_orchestrator.py \
+submission/run_final_figure_orchestrator \
+  --python "$TRUSTED_PYTHON" \
   --repository "$PWD" \
   --release-root "$FINAL_ROOT" \
   --approved-generator-commit "$GENERATOR_COMMIT" \
