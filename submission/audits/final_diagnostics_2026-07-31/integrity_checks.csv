@@ -1,0 +1,10 @@
+check,status,observed,expected,details
+completed_runs,PASS,970,970,zero controller failures
+case_count,PASS,24250,24250,unique consolidated case keys
+final_missing_facets,PASS,0,0,sum(num_final_missing_cells)
+final_facet_cell_partition,PASS,3091429,3091429,linear+circular+linear_corner+curved_corner
+final_facet_component_partition,PASS,3088697,3088697,one final facet class per component
+plic_fallback_provenance,PASS,9838,9838,policies=LVIRA; cell/event/ledger exact
+hardened_fallback_event_contract,PASS,9838,9838,"component keys, member cells, and LVIRA policy joined consistently"
+july_case_coverage,PASS,7500,7500,all July case keys present in final release
+raw_consolidated_tables,PASS,5820,5820,"six tables, exact per-bundle canonical hashes"

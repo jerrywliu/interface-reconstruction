@@ -1,0 +1,7 @@
+table,raw_rows,consolidated_rows,run_bundles,matching_run_bundles,mismatching_run_bundles,status,details
+run_manifests.jsonl,970,970,970,970,0,PASS,exact canonical manifest hashes
+case_geometry.jsonl,24250,24250,970,970,0,PASS,exact canonical scientific-object hashes
+case_metrics.csv,24250,24250,970,970,0,PASS,exact canonical row hashes
+cell_metrics.csv,3091429,3091429,970,970,0,PASS,exact canonical row hashes
+merge_events.csv,3544985,3544985,970,970,0,PASS,exact canonical row hashes
+unresolved_plic_fallbacks.csv,9838,9838,970,970,0,PASS,exact canonical row hashes
