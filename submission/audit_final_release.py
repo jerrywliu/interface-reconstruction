@@ -1041,6 +1041,31 @@ def _check_exact_command_option(
         )
 
 
+def _check_optional_exact_command_option(
+    tokens: Sequence[str],
+    option: str,
+    expected: object,
+    label: str,
+    report: AuditReport,
+    *,
+    numeric: bool = False,
+) -> None:
+    """Bind an explicit override while allowing the authenticated driver default."""
+
+    try:
+        values = _option_values(tokens, option)
+    except ReleaseAuditInputError as exc:
+        report.add_error(f"{label} {option} evidence is invalid: {exc}")
+        return
+    if not values:
+        return
+    if len(values) != 1 or not _values_match(values[0], str(expected), numeric=numeric):
+        report.add_error(
+            f"{label} command overrides {option} inconsistently with the resolved "
+            f"run value: {values!r} != {[str(expected)]!r}"
+        )
+
+
 def _check_child_manifest_contract(
     manifest: Mapping[str, object],
     key: RunKey,
@@ -1157,6 +1182,14 @@ def _check_child_manifest_contract(
         _check_exact_command_option(
             tokens, option, expected, label, report, numeric=numeric
         )
+    _check_optional_exact_command_option(
+        tokens,
+        "--random_seed",
+        BENCHMARK_RANDOM_SEEDS[key.experiment],
+        label,
+        report,
+        numeric=True,
+    )
 
 
 def _iter_jsonl(path: Path, report: AuditReport) -> Iterator[tuple[int, dict]]:
@@ -3139,6 +3172,214 @@ def _read_reconstructed_facet_vtp(path: Path, report: AuditReport):
         return None
 
 
+def _read_structured_mesh_geometry(
+    path: Path, report: AuditReport
+) -> tuple[tuple[tuple[tuple[float, float], ...], ...], float] | None:
+    """Read the 2-D legacy structured grid emitted by ``writeMesh``."""
+
+    try:
+        tokens = path.read_text(encoding="utf-8").split()
+        dataset_index = tokens.index("DATASET")
+        dimensions_index = tokens.index("DIMENSIONS")
+        points_index = tokens.index("POINTS")
+        if tokens[dataset_index + 1] != "STRUCTURED_GRID":
+            raise ReleaseAuditInputError("DATASET is not STRUCTURED_GRID")
+        nx, ny, nz = (
+            _parse_int(tokens[dimensions_index + offset], f"{path} mesh dimension")
+            for offset in (1, 2, 3)
+        )
+        point_count = _parse_int(tokens[points_index + 1], f"{path} point count")
+        if nx < 2 or ny < 2 or nz != 1 or point_count != nx * ny:
+            raise ReleaseAuditInputError(
+                f"expected a 2-D structured grid, got dimensions "
+                f"{(nx, ny, nz)} and {point_count} points"
+            )
+        coordinate_start = points_index + 3
+        coordinate_tokens = tokens[
+            coordinate_start : coordinate_start + 3 * point_count
+        ]
+        if len(coordinate_tokens) != 3 * point_count:
+            raise ReleaseAuditInputError("mesh point coordinates are truncated")
+        coordinates = []
+        for point_index in range(point_count):
+            xyz = tuple(
+                float(coordinate_tokens[3 * point_index + offset])
+                for offset in range(3)
+            )
+            if not all(math.isfinite(value) for value in xyz) or xyz[2] != 0.0:
+                raise ReleaseAuditInputError(
+                    f"mesh point {point_index} is not a finite 2-D point"
+                )
+            coordinates.append((xyz[0], xyz[1]))
+    except (
+        OSError,
+        UnicodeError,
+        ValueError,
+        IndexError,
+        ReleaseAuditInputError,
+    ) as exc:
+        report.add_error(f"could not read structured reconstruction mesh {path}: {exc}")
+        return None
+
+    # writeMesh stores x in the outer loop and y in the inner loop.
+    points = tuple(
+        tuple(coordinates[cell_x * ny + cell_y] for cell_y in range(ny))
+        for cell_x in range(nx)
+    )
+    xs = [point[0] for point in coordinates]
+    ys = [point[1] for point in coordinates]
+    tolerance = max(
+        1.0e-4,
+        1.0e-6 * math.hypot(max(xs) - min(xs), max(ys) - min(ys)),
+    )
+    return points, tolerance
+
+
+def _cross_2d(
+    first: tuple[float, float],
+    second: tuple[float, float],
+    third: tuple[float, float],
+) -> float:
+    return (second[0] - first[0]) * (third[1] - first[1]) - (second[1] - first[1]) * (
+        third[0] - first[0]
+    )
+
+
+def _point_in_convex_cell(
+    point: tuple[float, float],
+    polygon: Sequence[tuple[float, float]],
+    tolerance: float,
+) -> bool:
+    signed_distances = []
+    for index, first in enumerate(polygon):
+        second = polygon[(index + 1) % len(polygon)]
+        edge_length = math.dist(first, second)
+        if edge_length == 0.0:
+            return False
+        signed_distances.append(_cross_2d(first, second, point) / edge_length)
+    return min(signed_distances) >= -tolerance or max(signed_distances) <= tolerance
+
+
+def _segment_edge_parameters(
+    start: tuple[float, float],
+    end: tuple[float, float],
+    edge_start: tuple[float, float],
+    edge_end: tuple[float, float],
+    tolerance: float,
+) -> list[float]:
+    direction = (end[0] - start[0], end[1] - start[1])
+    edge = (edge_end[0] - edge_start[0], edge_end[1] - edge_start[1])
+    denominator = direction[0] * edge[1] - direction[1] * edge[0]
+    offset = (edge_start[0] - start[0], edge_start[1] - start[1])
+    scale = max(1.0, math.hypot(*direction), math.hypot(*edge))
+    if abs(denominator) <= tolerance * scale:
+        if abs(direction[0] * offset[1] - direction[1] * offset[0]) > (
+            tolerance * scale
+        ):
+            return []
+        length_squared = direction[0] ** 2 + direction[1] ** 2
+        if length_squared == 0.0:
+            return []
+        parameters = [
+            (
+                (point[0] - start[0]) * direction[0]
+                + (point[1] - start[1]) * direction[1]
+            )
+            / length_squared
+            for point in (edge_start, edge_end)
+        ]
+        return [
+            min(1.0, max(0.0, value))
+            for value in parameters
+            if -tolerance <= value <= 1.0 + tolerance
+        ]
+    parameter = (offset[0] * edge[1] - offset[1] * edge[0]) / denominator
+    edge_parameter = (offset[0] * direction[1] - offset[1] * direction[0]) / denominator
+    if (
+        -tolerance <= parameter <= 1.0 + tolerance
+        and -tolerance <= edge_parameter <= 1.0 + tolerance
+    ):
+        return [min(1.0, max(0.0, parameter))]
+    return []
+
+
+def _check_fallback_facet_member_geometry(
+    signature: tuple[tuple[str, str], tuple[str, str]],
+    members: set[tuple[int, int]],
+    mesh: tuple[tuple[tuple[float, float], ...], ...],
+    tolerance: float,
+    label: str,
+    report: AuditReport,
+) -> None:
+    start = (float(signature[0][0]), float(signature[0][1]))
+    end = (float(signature[1][0]), float(signature[1][1]))
+    nx = len(mesh)
+    ny = len(mesh[0]) if mesh else 0
+    polygons: list[tuple[tuple[int, int], tuple[tuple[float, float], ...]]] = []
+    for cell_x, cell_y in sorted(members):
+        if not 0 <= cell_x < nx - 1 or not 0 <= cell_y < ny - 1:
+            report.add_error(
+                f"{label} member cell {(cell_x, cell_y)} is outside the saved mesh "
+                f"with {(nx - 1, ny - 1)} cells"
+            )
+            continue
+        polygon = (
+            mesh[cell_x][cell_y],
+            mesh[cell_x + 1][cell_y],
+            mesh[cell_x + 1][cell_y + 1],
+            mesh[cell_x][cell_y + 1],
+        )
+        polygons.append(((cell_x, cell_y), polygon))
+    if len(polygons) != len(members):
+        return
+
+    parameters = [0.0, 1.0]
+    for _, polygon in polygons:
+        for index, edge_start in enumerate(polygon):
+            parameters.extend(
+                _segment_edge_parameters(
+                    start,
+                    end,
+                    edge_start,
+                    polygon[(index + 1) % len(polygon)],
+                    tolerance,
+                )
+            )
+    parameters.sort()
+    unique_parameters = []
+    for parameter in parameters:
+        if not unique_parameters or abs(parameter - unique_parameters[-1]) > 1.0e-10:
+            unique_parameters.append(parameter)
+    test_parameters = list(unique_parameters)
+    test_parameters.extend(
+        (first + second) / 2.0
+        for first, second in zip(unique_parameters, unique_parameters[1:])
+        if second - first > 1.0e-10
+    )
+
+    def point_at(parameter: float) -> tuple[float, float]:
+        return (
+            start[0] + parameter * (end[0] - start[0]),
+            start[1] + parameter * (end[1] - start[1]),
+        )
+
+    sampled_points = [point_at(parameter) for parameter in test_parameters]
+    if not all(
+        any(_point_in_convex_cell(point, polygon, tolerance) for _, polygon in polygons)
+        for point in sampled_points
+    ):
+        report.add_error(
+            f"{label} saved LVIRA facet is not contained in its claimed member cells"
+        )
+    for cell, polygon in polygons:
+        if not any(
+            _point_in_convex_cell(point, polygon, tolerance) for point in sampled_points
+        ):
+            report.add_error(
+                f"{label} saved LVIRA facet does not intersect claimed member cell {cell}"
+            )
+
+
 def _check_vtp_line_primitive(
     polydata,
     primitive_index: int,
@@ -4363,6 +4604,29 @@ def _check_raw_cell_fallback_provenance(
                 f"for {key.display()}/case={event_key[0]}/merge_id={event_key[1]}: "
                 f"{sorted(merge_fallback_events[event_key])!r} != "
                 f"{sorted(component_cells[event_key])!r}"
+            )
+
+    mesh_geometry = None
+    if fallback_components:
+        mesh_geometry = _read_structured_mesh_geometry(
+            bundle / "vtk" / "mesh.vtk", report
+        )
+    if mesh_geometry is not None:
+        mesh_points, mesh_tolerance = mesh_geometry
+        for component_key in sorted(fallback_components):
+            facets = component_facets.get(component_key, set())
+            if len(facets) != 1:
+                continue
+            _check_fallback_facet_member_geometry(
+                next(iter(facets)),
+                component_cells[component_key],
+                mesh_points,
+                mesh_tolerance,
+                (
+                    f"{key.display()}/case={component_key[0]}/"
+                    f"merge_id={component_key[1]}"
+                ),
+                report,
             )
 
     fallback_cases = sorted({case_index for case_index, _ in fallback_components})

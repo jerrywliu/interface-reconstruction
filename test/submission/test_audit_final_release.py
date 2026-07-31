@@ -714,6 +714,26 @@ def _write_line_vtp(path: Path, lines, scalar=8) -> None:
     )
 
 
+def _write_structured_mesh(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        """# vtk DataFile Version 3.0
+test mesh
+ASCII
+DATASET STRUCTURED_GRID
+DIMENSIONS 3 2 1
+POINTS 6 float
+0 0 0
+0 1 0
+1 0 0
+1 1 0
+3 0 0
+3 1 0
+""",
+        encoding="utf-8",
+    )
+
+
 def _add_provenance_rows(root: Path) -> None:
     context = _run_context()
     merge_fields = [
@@ -829,6 +849,7 @@ def _add_provenance_rows(root: Path) -> None:
     _write_line_vtp(
         metadata_path.with_suffix("").with_suffix(".vtp"), [([0, 0], [1, 1])]
     )
+    _write_structured_mesh(root / "raw_runs" / SAVE_NAME / "vtk" / "mesh.vtk")
 
     inventory_path = root / "diagnostics" / "run_inventory.csv"
     fieldnames, rows = _read_csv(inventory_path)
@@ -2160,6 +2181,24 @@ def test_child_command_must_bind_mesh_sampling_and_case_count(tmp_path):
     assert "command does not bind --mesh_type" in _messages(report)
 
 
+@pytest.mark.parametrize(
+    "seed_arguments",
+    ["--random_seed 99", "--random_seed 42 --random_seed 42"],
+)
+def test_child_command_random_seed_override_must_match_once(tmp_path, seed_arguments):
+    root = _make_release(tmp_path / "release")
+
+    def append_seed_override(manifest):
+        manifest["command"] = f"{manifest['command']} {seed_arguments}"
+
+    _mutate_both_child_manifests(root, append_seed_override)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    assert not report.ok
+    assert "command overrides --random_seed inconsistently" in _messages(report)
+
+
 def test_coordinated_case_geometry_tampering_fails_benchmark_contract(tmp_path):
     root = _make_release(tmp_path / "release")
     for path in (
@@ -2398,6 +2437,32 @@ def test_fallback_cell_geometry_must_match_saved_facet_metadata(tmp_path):
     assert "sidecar geometry differs from its exact merge component" in _messages(
         report
     )
+
+
+def test_coordinated_fallback_member_substitution_fails_saved_mesh_binding(tmp_path):
+    root = _make_release(tmp_path / "release")
+    _add_provenance_rows(root)
+    for relative in (
+        "diagnostics/cell_metrics.csv",
+        f"raw_runs/{SAVE_NAME}/metrics/cell_metrics.csv",
+    ):
+        path = root / relative
+        fieldnames, rows = _read_csv(path)
+        rows[0].update({"cell_id": "500,500", "cell_x": "500", "cell_y": "500"})
+        _write_csv(path, fieldnames, rows)
+    for relative in (
+        "diagnostics/merge_events.csv",
+        f"raw_runs/{SAVE_NAME}/metrics/merge_events.csv",
+    ):
+        path = root / relative
+        fieldnames, rows = _read_csv(path)
+        rows[0]["member_cells_json"] = "[[500,500]]"
+        _write_csv(path, fieldnames, rows)
+
+    report = audit_final_release(root, required_runs=1, required_cases=2)
+
+    assert not report.ok
+    assert "is outside the saved mesh" in _messages(report)
 
 
 def test_two_same_case_fallback_components_bind_to_distinct_artifact_facets(tmp_path):
