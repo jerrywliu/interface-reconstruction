@@ -30,7 +30,7 @@ This document summarizes the reconstruction algorithms used across the static ex
 
 - Friendly: Circular (without merging)
   - Code identifier: `safe_circle`
-  - Description: Circular facet reconstruction that skips cell merging (falls back to Youngs when orientation/curvature is ambiguous by design).
+  - Description: Circular facet reconstruction that skips cell merging (falls back to LVIRA when orientation/curvature is ambiguous).
 
 - Friendly: Circular (with merging)
   - Code identifier: `circular`

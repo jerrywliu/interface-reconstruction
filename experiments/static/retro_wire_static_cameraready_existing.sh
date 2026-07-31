@@ -1,6 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
+# Legacy March 2026 asset replay. Use the final figure workflow for submission
+# candidates generated from the immutable release.
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"

@@ -44,16 +44,18 @@ RUN_SLACK_INTEGRATION=1 python -m pytest -q \
   test/integration/test_slack_integration.py
 ```
 
-Install the runtime stack plus the review-packet dependency:
+Install the runtime stack plus reproducibility-analysis and review-packet
+dependencies:
 
 ```bash
 python -m pip install -r requirements-figures.txt
 ```
 
-`reportlab` is needed by `experiments/static/build_figure_review_pdf.py`; ordinary
-vector plots use Matplotlib from the runtime requirements. PDF vector QA also needs
-the external Poppler commands `pdfimages` and `pdffonts`. Compiling the manuscript
-requires a separate LaTeX installation and is not part of the Python environment.
+`pandas` is needed by the committed perfect-reconstruction audit, and `reportlab`
+is needed by `experiments/static/build_figure_review_pdf.py`. Ordinary vector plots
+use Matplotlib from the runtime requirements. PDF vector QA also needs the external
+Poppler commands `pdfimages` and `pdffonts`. Compiling the manuscript requires a
+separate LaTeX installation and is not part of the Python environment.
 
 ## What CI Establishes
 

@@ -1,6 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
+# Legacy March 2026 camera-ready bundler. It is retained for historical replay;
+# it must not be used to assemble the audited final submission release.
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"

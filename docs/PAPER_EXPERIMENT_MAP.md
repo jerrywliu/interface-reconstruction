@@ -180,12 +180,25 @@ python -m experiments.static.run_perturbed_sweeps \
 ### Resolution studies
 
 These are deterministic companion runs at `N=16,32,64`, not rows in the
-970-run release. Run each benchmark separately so its manifest remains intact:
+970-run release. The authoritative final-figure orchestrator materializes and
+attests the release source commit itself. When running the companion commands
+below manually for diagnosis, do not use a later integration checkout. Create a
+clean detached worktree at the exact scientific source commit first:
 
 ```bash
+export CONTROL_REPO="$(git rev-parse --show-toplevel)"
+export COMPANION_WORKTREE="${CONTROL_REPO}-companion-${SOURCE_COMMIT:0:12}"
+test ! -e "$COMPANION_WORKTREE"
+git -C "$CONTROL_REPO" worktree add --detach "$COMPANION_WORKTREE" "$SOURCE_COMMIT"
+cd "$COMPANION_WORKTREE"
 test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
 python submission/check_submission_freeze.py --source-only
+```
 
+Keep `FINAL_ROOT` and `FIGURE_ROOT` as the absolute paths exported above. Run each
+benchmark separately so its manifest remains intact:
+
+```bash
 python -m experiments.static.run_appendix_resolution_visuals \
   --only <benchmark> \
   --case_index <case> \
@@ -211,12 +224,10 @@ These case choices remain an author-approval gate. Preserve each generated
 
 All four guarded-`C0` figures are active manuscript assets. They come from a
 dedicated final-commit study because the primary 970-run sweep has `C0`
-disabled:
+disabled. Manual execution uses the same detached source worktree established
+above:
 
 ```bash
-test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
-python submission/check_submission_freeze.py --source-only
-
 export C0_ROOT="$PWD/results/static/final_guarded_c0_${SOURCE_COMMIT:0:12}"
 test ! -e "$C0_ROOT"
 python -m experiments.static.run_appendix_c0_study \
@@ -240,15 +251,11 @@ not. Historical pre-guard `C0` assets are ineligible.
 
 ### Deterministic explanatory figures
 
-```bash
-test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
-python submission/check_submission_freeze.py --source-only
+Manual execution uses the same detached source worktree established above:
 
+```bash
 python -m experiments.static.generate_plic_baseline_stencil_figure \
   --out "$FIGURE_ROOT/deterministic/perfect_reconstruction_plic_stencil"
-
-test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
-python submission/check_submission_freeze.py --source-only
 
 python -m experiments.static.generate_staged_reconstruction_figure \
   --output-dir "$FIGURE_ROOT/deterministic" \

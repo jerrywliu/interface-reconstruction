@@ -1,4 +1,6 @@
 #!/bin/bash
+
+# Legacy convenience shard; use the submission launcher for paper results.
 ########################################################
 # Run perturbed static-ellipse experiments for circular methods:
 #   - safe_circle
@@ -106,4 +108,3 @@ echo "Logs:        $LOG_DIR"
 if [ "$failed_runs" -gt 0 ]; then
   exit 1
 fi
-

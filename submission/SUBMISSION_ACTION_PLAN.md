@@ -97,6 +97,9 @@ March and May assets are historical comparison baselines, not the target submiss
 
 ## P0: Bibliography And Declarations
 
+- [ ] Author selects and approves the public repository license before publication.
+- [ ] Author supplies the permanent final-data DOI/URL and confirms that its
+  deposited manifest matches the release ledger digest used for packaging.
 - [ ] Replace four Semantic Scholar placeholder records with publisher/DOI metadata.
 - [ ] Remove blanket `\nocite` lists or cite the intended works in context.
 - [ ] Correct the unsupported thesis entry type, DOI URL fields, and identified typos.

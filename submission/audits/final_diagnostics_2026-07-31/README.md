@@ -98,19 +98,31 @@ Fractions are weighted by mixed cells or final components, as named. Rescue and 
 
 ## Reproduce
 
-The report stores release names and relative artifact paths only. From a clean checkout, define the input roots for the local archive and run:
+The report stores release names and relative artifact paths only. From a clean
+checkout, define the input roots, regenerate into a fresh directory, and compare
+the result with the committed evidence:
 
 ```bash
 REPO=/path/to/interface-reconstruction
 FINAL_ROOT=/path/to/submission_static_20260731_012430_505aefa45432
 JULY_ROOT=/path/to/static_paper_simplified_default_20260717_212413
+EVIDENCE_DIR="$REPO/submission/audits/final_diagnostics_2026-07-31"
+OUTPUT_DIR="${OUTPUT_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/final-diagnostics-audit.XXXXXX")}"
 cd "$REPO"
 python submission/audit_final_release.py "$FINAL_ROOT"
 python submission/audit_topology_diagnostics.py \
   --final-root "$FINAL_ROOT" \
   --july-root "$JULY_ROOT" \
-  --output-dir submission/audits/final_diagnostics_2026-07-31
-(cd submission/audits/final_diagnostics_2026-07-31 && shasum -a 256 -c SHA256SUMS)
+  --output-dir "$OUTPUT_DIR"
+(cd "$EVIDENCE_DIR" && shasum -a 256 -c SHA256SUMS)
+(cd "$OUTPUT_DIR" && shasum -a 256 -c SHA256SUMS)
+diff -u \
+  <(grep -v '  README.md$' "$EVIDENCE_DIR/SHA256SUMS") \
+  <(grep -v '  README.md$' "$OUTPUT_DIR/SHA256SUMS")
+printf 'Regenerated audit: %s\n' "$OUTPUT_DIR"
 ```
+
+Set `OUTPUT_DIR` to a new, nonexistent path when a persistent comparison copy is
+preferred. Never point it at `EVIDENCE_DIR`; that directory is committed evidence.
 
 No PDF was generated for this audit, so raster-object and font-embedding QA are not applicable.

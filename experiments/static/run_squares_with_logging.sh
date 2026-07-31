@@ -1,4 +1,7 @@
 #!/bin/bash
+
+# Legacy diagnostic wrapper retained for getArcFacet call logging. It is not a
+# paper-result entry point.
 ########################################################
 # Run square experiments with getArcFacet logging enabled
 #
@@ -37,4 +40,3 @@ echo ""
 
 # Execute the Python script
 $CMD
-

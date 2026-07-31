@@ -28,7 +28,9 @@ Each fallback was cross-checked in the run configuration, case summary, cell-lev
 
 ## Pre/post comparison
 
-The invalid release supplied `6` complete control bundles. Its `24` failed settings retained partial run directories under `/Users/wei/Code/Interface/active/interface-reconstruction/plots`. Together they provide pre-fix facet artifacts for `282` cases:
+The invalid release supplied `6` complete control bundles. Its `24` failed settings
+retained partial run directories under `$REPO/plots`. Together they provide pre-fix
+facet artifacts for `282` cases:
 
 - `150` cases from complete archived controls.
 - `132` cases from retained failed-run prefixes, including each failing witness.
@@ -57,8 +59,8 @@ The [vector witness PDF](square_n50_w0p2_case3_before_after.pdf) and [300 DPI Sl
 - Case-level comparison: [`square_confidence_case_comparison.csv`](square_confidence_case_comparison.csv)
 - Witness PDF: [`square_n50_w0p2_case3_before_after.pdf`](square_n50_w0p2_case3_before_after.pdf)
 - Witness PNG: [`square_n50_w0p2_case3_before_after.png`](square_n50_w0p2_case3_before_after.png)
-- Corrected confidence root: `/Users/wei/Code/Interface/active/interface-reconstruction/results/static/square_active_partition_retry_20260730_181530_505aefa45432`
-- Invalid diagnostic root: `/Users/wei/Code/Interface/active/interface-reconstruction/results/static/submission_static_20260730_202949_525d0cf5b4df`
-- Retained failed-run prefixes: `/Users/wei/Code/Interface/active/interface-reconstruction/plots`
+- Corrected confidence root: `$REPO/results/static/square_active_partition_retry_20260730_181530_505aefa45432`
+- Invalid diagnostic root: `$REPO/results/static/submission_static_20260730_202949_525d0cf5b4df`
+- Retained failed-run prefixes: `$REPO/plots`
 
 This audit is scoped to the 30-run square confidence grid. It does not promote the invalid 970-run release and does not audit the still-running corrected authoritative release. Both source result roots were read only.

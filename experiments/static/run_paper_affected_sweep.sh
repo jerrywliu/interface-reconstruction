@@ -1,6 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
+# Historical affected-row validation launcher. It explicitly uses LVIRA but is
+# not the canonical 970-run submission sweep.
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"

@@ -1,6 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
+# Legacy March 2026 Cartesian sweep retained for historical replay. It is not
+# the frozen paper experiment grid.
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"

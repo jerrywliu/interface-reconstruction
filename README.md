@@ -21,7 +21,9 @@ python -m pip install -r requirements-test.txt
 python -m pytest -q test
 ```
 
-For a compact targeted reconstruction, run one deterministic circle case:
+For a compact targeted reconstruction, run one deterministic circle case. Paper-
+facing runs use `LVIRA` whenever the oriented reconstruction requires a PLIC
+fallback:
 
 ```bash
 python -m experiments.static.circles \
@@ -29,6 +31,7 @@ python -m experiments.static.circles \
   --facet_algo circular \
   --resolution 1.0 \
   --case_indices 0 \
+  --plic_fallback LVIRA \
   --save_name quickstart_circle
 ```
 
@@ -79,75 +82,46 @@ Our algorithms consist of two main features:
 
 ## Static Experiments
 
-These experiments test interface reconstruction on various geometric shapes with different algorithms and mesh resolutions.
-For the current local inspection workflow, including `--plot_only`, Section 6 figure regeneration, and Zalesak outlier replay, see `docs/VISUALIZATION_WORKFLOW.md`.
+The supported targeted interface is the benchmark's Python module. Set the config,
+method, resolution, cases, fallback, and unique output name explicitly. For example:
 
-### Lines
 ```bash
-./experiments/static/run_lines.sh
-```
-Tests reconstruction of straight lines with varying orientations (0 to 2π).
+python -m experiments.static.ellipses \
+  --config static/ellipse \
+  --facet_algo circular \
+  --resolution 1.0 \
+  --case_indices 0 \
+  --plic_fallback LVIRA \
+  --save_name example_ellipse
 
-To plot:
-```bash
-python -m experiments.static.lines --plot_only --results_file results/static/line_reconstruction_results.txt
-```
-
-### Circles
-```bash
-./experiments/static/run_circles.sh
-```
-Tests reconstruction of circles with varying centers and fixed radius.
-
-To plot:
-```bash
-python -m experiments.static.circles --plot_only --results_file results/static/circle_reconstruction_results.txt
+python -m experiments.static.zalesak \
+  --config static/zalesak \
+  --facet_algo 'circular+corner' \
+  --resolution 1.0 \
+  --case_indices 0 \
+  --plic_fallback LVIRA \
+  --corner_behavior_profile pre_f8_corner \
+  --rescue_profile exact_linear_support_only \
+  --save_name example_zalesak
 ```
 
-### Ellipses
-```bash
-./experiments/static/run_ellipses.sh
-```
-Tests reconstruction of ellipses with varying aspect ratios (1.5 to 3.0).
+The corresponding modules and configs are:
 
-To plot:
-```bash
-python -m experiments.static.ellipses --plot_only --results_file results/static/ellipse_reconstruction_results.txt
-```
+| Benchmark | Module | Config |
+|---|---|---|
+| Lines | `experiments.static.lines` | `static/line` |
+| Circles | `experiments.static.circles` | `static/circle` |
+| Ellipses | `experiments.static.ellipses` | `static/ellipse` |
+| Squares | `experiments.static.squares` | `static/square` |
+| Zalesak | `experiments.static.zalesak` | `static/zalesak` |
 
-To run the unit tests of the ellipse helper functions, run:
-```bash
-python -m experiments.static.ellipses --test_plot_ellipse_arc
-python -m experiments.static.ellipses --test_plot_hausdorff_case
-python -m experiments.static.ellipses --test_ellipse_hausdorff
-```
-
-### Squares
-```bash
-./experiments/static/run_squares.sh
-```
-Tests reconstruction of squares with varying orientations.
-
-To plot:
-```bash
-python -m experiments.static.squares --plot_only --results_file results/static/square_reconstruction_results.txt
-```
-
-To run the unit test for the square edge alignment metric:
-```bash
-python -m experiments.static.squares --test_edge_metric
-```
-
-### Zalesak (Static)
-```bash
-python -m experiments.static.zalesak --config static/zalesak --sweep --num_cases 15
-```
-Tests reconstruction of Zalesak's disk (circle with slot) with random centers and random rotations.
-
-To plot:
-```bash
-python -m experiments.static.zalesak --plot_only --results_file results/static/zalesak_reconstruction_results.txt
-```
+Use `bash submission/run_final_static_sweep.sh` for the exact paper result set;
+per-shape `experiments/static/run_*.sh` files are retained as legacy convenience
+wrappers and are not equivalent to that launcher. The tracked
+`results/static/*_reconstruction_results.txt` files and root `test.vtp` are small
+historical artifacts, not the audited final release. See `docs/ENTRY_POINTS.md` for
+the complete status classification and `docs/VISUALIZATION_WORKFLOW.md` for plotting
+from an immutable release.
 
 ## Advection Experiments
 

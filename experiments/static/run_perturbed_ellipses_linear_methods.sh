@@ -1,4 +1,6 @@
 #!/bin/bash
+
+# Legacy convenience shard; use the submission launcher for paper results.
 ########################################################
 # Run perturbed static-ellipse experiments for linear methods:
 #   - Youngs

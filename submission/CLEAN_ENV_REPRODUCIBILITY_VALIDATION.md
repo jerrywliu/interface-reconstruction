@@ -7,7 +7,7 @@ Source commit: `525d0cf5b4df8ad6526429316872acf9eb656517`
 Validation branch: `codex/clean-env-repro-20260730`
 
 Validation worktree:
-`/Users/wei/Code/Interface/active/interface-reconstruction-clean-env-repro-20260730`
+`<workspace>/interface-reconstruction-clean-env-repro-20260730`
 
 Disposable environment:
 `/tmp/interface-reconstruction-clean-env-20260730-py39`

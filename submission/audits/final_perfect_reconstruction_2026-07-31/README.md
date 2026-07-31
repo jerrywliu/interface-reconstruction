@@ -149,26 +149,38 @@ checkout, `RESULTS_ROOT` defaults to the repository's ignored
 `results/static/` directory. In an isolated worktree, set it to the matching
 directory in the checkout that contains the frozen release roots.
 
-Regenerate and verify this directory with:
+Regenerate into a fresh directory and compare it with the committed evidence:
 
 ```bash
 REPO="$(git rev-parse --show-toplevel)"
 RESULTS_ROOT="${RESULTS_ROOT:-$REPO/results/static}"
 FINAL_ROOT="$RESULTS_ROOT/submission_static_20260731_012430_505aefa45432"
-AUDIT_DIR="$REPO/submission/audits/final_perfect_reconstruction_2026-07-31"
+EVIDENCE_DIR="$REPO/submission/audits/final_perfect_reconstruction_2026-07-31"
+OUTPUT_DIR="${OUTPUT_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/perfect-reconstruction-audit.XXXXXX")}"
 
-python "$AUDIT_DIR/analyze.py" \
+python "$EVIDENCE_DIR/analyze.py" \
   --final-release "$FINAL_ROOT" \
   --july-simplified "$RESULTS_ROOT/static_paper_simplified_default_20260717_212413" \
   --july-complex "$RESULTS_ROOT/static_paper_affected_diagnostics_20260714_102206" \
   --invalid-release "$RESULTS_ROOT/submission_static_20260730_202949_525d0cf5b4df" \
   --keep-all-summary "$RESULTS_ROOT/linear_rescue_cleanup_analysis_20260715/full_grid_comparison.csv" \
-  --output-dir "$AUDIT_DIR"
+  --output-dir "$OUTPUT_DIR"
 
-(cd "$AUDIT_DIR" && shasum -a 256 -c SHA256SUMS)
+(cd "$EVIDENCE_DIR" && shasum -a 256 -c SHA256SUMS)
+(cd "$OUTPUT_DIR" && shasum -a 256 -c SHA256SUMS)
+diff -u \
+  <(grep -Ev '  (README.md|analyze.py|perfect_reconstruction_audit\.(pdf|png))$' "$EVIDENCE_DIR/SHA256SUMS") \
+  <(grep -Ev '  perfect_reconstruction_audit\.(pdf|png)$' "$OUTPUT_DIR/SHA256SUMS")
 python "$REPO/submission/pdf_vector_qa.py" \
-  "$AUDIT_DIR/perfect_reconstruction_audit.pdf"
+  "$OUTPUT_DIR/perfect_reconstruction_audit.pdf"
+printf 'Regenerated audit: %s\n' "$OUTPUT_DIR"
 ```
+
+Set `OUTPUT_DIR` to a new, nonexistent path when a persistent comparison copy is
+preferred. Never point it at `EVIDENCE_DIR`; that directory is committed evidence.
+The strict comparison covers the analysis manifest, CSVs, and PDF-QA record. The
+PDF and PNG are validated separately because rendering-library metadata can change
+their bytes without changing the plotted values or vector/no-raster result.
 
 Primary artifacts:
 

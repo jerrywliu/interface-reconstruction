@@ -1,45 +1,31 @@
-#!/bin/bash
-########################################################
-# Example usage:
-# Youngs
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Legacy convenience sweep. Use submission/run_final_static_sweep.sh for the
+# frozen paper result set, or invoke experiments.static.squares directly for a
+# recorded targeted run. Oriented-method PLIC fallback is LVIRA.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+cd "$REPO_ROOT"
+
+# Examples:
 # python3 -m experiments.static.squares --config static/square --num_squares 15 --facet_algo Youngs --save_name square_youngs
-# ELVIRA
 # python3 -m experiments.static.squares --config static/square --num_squares 15 --facet_algo ELVIRA --save_name square_elvira
-# LVIRA
 # python3 -m experiments.static.squares --config static/square --num_squares 15 --facet_algo LVIRA --save_name square_lvira
-# Our linear facets
-# python3 -m experiments.static.squares --config static/square --num_squares 15 --facet_algo linear --save_name square_linear
-# Our linear facets with corner detection, without merging
-# python3 -m experiments.static.squares --config static/square --num_squares 15 --facet_algo safe_linear_corner --save_name square_safelinearcorner
-# Our linear facets with corner detection, with merging
-# python3 -m experiments.static.squares --config static/square --num_squares 15 --facet_algo linear+corner --save_name square_linear+corner
-# Our circular facets without merging, defaults to Youngs when orientation is ambiguous
-# python3 -m experiments.static.squares --config static/square --num_squares 15 --facet_algo safe_circle --save_name square_safecircle
-# Our circular facets with merging
-# python3 -m experiments.static.squares --config static/square --num_squares 15 --facet_algo circular --save_name square_mergecircle
-########################################################
+# python3 -m experiments.static.squares --config static/square --num_squares 15 --facet_algo linear --plic_fallback LVIRA --save_name square_linear
+# python3 -m experiments.static.squares --config static/square --num_squares 15 --facet_algo linear+corner --plic_fallback LVIRA --save_name square_linear_corner
+# python3 -m experiments.static.squares --config static/square --num_squares 15 --facet_algo safe_circle --plic_fallback LVIRA --save_name square_safecircle
+# python3 -m experiments.static.squares --config static/square --num_squares 15 --facet_algo circular --plic_fallback LVIRA --save_name square_mergecircle
 
-# Sweep
-python3 -m experiments.static.squares --config static/square --sweep --num_squares 15
+python3 -m experiments.static.squares \
+  --config static/square \
+  --sweep \
+  --num_squares 15 \
+  --plic_fallback LVIRA
 
-# Plot only
-python3 -m experiments.static.squares --config static/square --plot_only --results_file results/static/square_reconstruction_results.txt
-
-# Youngs
-# python3 -m experiments.static.squares --config static/square --num_squares 15 --facet_algo Youngs --save_name square_youngs
-# ELVIRA
-# python3 -m experiments.static.squares --config static/square --num_squares 15 --facet_algo ELVIRA --save_name square_elvira
-# LVIRA
-# python3 -m experiments.static.squares --config static/square --num_squares 15 --facet_algo LVIRA --save_name square_lvira
-# Our linear facets
-# python3 -m experiments.static.squares --config static/square --num_squares 15 --facet_algo linear --save_name square_linear
-
-# Our linear facets with corner detection, without merging
-# python3 -m experiments.static.squares --config static/square --num_squares 15 --facet_algo safe_linear_corner --save_name square_safelinearcorner
-# Our linear facets with corner detection, with merging
-# python3 -m experiments.static.squares --config static/square --num_squares 15 --facet_algo linear+corner --save_name square_linear+corner
-
-# Our circular facets without merging, defaults to Youngs when orientation is ambiguous
-# python3 -m experiments.static.squares --config static/square --num_squares 15 --facet_algo safe_circle --save_name square_safecircle
-# Our circular facets with merging
-# python3 -m experiments.static.squares --config static/square --num_squares 15 --facet_algo circular --save_name square_mergecircle
+# Historical tracked summary replay; this is not the audited final release.
+python3 -m experiments.static.squares \
+  --config static/square \
+  --plot_only \
+  --results_file results/static/square_reconstruction_results.txt

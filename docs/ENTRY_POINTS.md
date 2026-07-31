@@ -30,7 +30,6 @@ submission command unless every launcher parameter is reproduced.
 | `experiments/submission/*.py` | Focused conservation, convergence, topology, ablation, and failure-diagnosis studies used to audit manuscript claims. Consult the paper experiment map for the exact applicable command and source bundle. |
 | `experiments/static/replay_zalesak_outlier.py` | Deterministic replay of a selected Zalesak case for diagnosis and visual comparison. |
 | `experiments/static/run_linear_sweeps.py` | General Cartesian development sweep. Useful for exploratory comparison, but not the frozen submission grid. |
-| Per-shape `run_*.sh` wrappers | Convenience wrappers around individual static drivers. Review their fixed arguments before use; prefer direct module commands for recorded work. |
 
 ## Legacy Or Superseded Paths
 
@@ -44,6 +43,8 @@ generate new paper results.
 | `main/algos/static_interface_reconstruction.py` | Older reconstruction path with process-global random behavior; it is outside the final submission launcher. |
 | `util/initialize/initialize_areas_old.py` | Retained initialization implementation from the older code path. |
 | `run_cameraready_static_*.sh`, `bundle_static_cameraready_release.sh`, and `retro_wire_static_cameraready_existing.sh` | March 2026 camera-ready workflow, superseded for final results by the submission launcher and immutable release bundle. |
+| Per-shape `experiments/static/run_{lines,circles,ellipses,squares,zalesak}.sh` wrappers | Historical convenience sweeps that also replay tracked summary text files. Their configs and LVIRA fallback are kept valid, but direct module commands are required for recorded work. |
+| `results/static/*_reconstruction_results.txt` and root `test.vtp` | Small historical artifacts retained for replay/provenance. They are not members of the audited final result release. |
 | Scripts named for a dated ablation, shard finalization, or candidate analysis | Artifact-specific historical analysis. Use only with the result layout documented by that study. |
 
 Legacy means "not a supported source of new submission results," not necessarily

@@ -1,4 +1,5 @@
 -r requirements.txt
 
-# Used only to assemble multi-page figure review packets.
+# Used by reproducibility analyses and multi-page figure review packets.
+pandas==2.2.2
 reportlab==4.4.3
