@@ -1,8 +1,15 @@
+import math
+
+import numpy as np
 import pytest
 
 from experiments.static.generate_section6_maintext_figures import (
+    REPRESENTATIVE_CASES,
+    _circle_case_params,
     _endpoint_variant_specs,
     _endpoint_visibility_spec,
+    _ellipse_case_params,
+    _inset_bounds,
     _outer_spyglass_axes,
     _panel_spyglass_spec,
     _resolution_panel_spec,
@@ -51,3 +58,31 @@ def test_paired_endpoint_variants_keep_spyglass_labels():
     resolution = _resolution_panel_spec({**clean, "case_index": 22})
     assert resolution["show_main_endpoints"] is False
     assert resolution["show_inset_endpoints"] is True
+
+
+def test_circle_spyglass_targets_the_upper_right_interface():
+    spec = REPRESENTATIVE_CASES["circles"]
+    bounds = _inset_bounds("circles", spec)
+    params = _circle_case_params(spec["case_index"])
+    target = params["center"] + params["radius"] / math.sqrt(2.0)
+
+    assert bounds is not None
+    assert np.allclose(
+        [(bounds[0] + bounds[1]) / 2.0, (bounds[2] + bounds[3]) / 2.0],
+        target,
+    )
+
+
+def test_ellipse_spyglass_targets_a_maximum_curvature_tip():
+    spec = REPRESENTATIVE_CASES["ellipses"]
+    bounds = _inset_bounds("ellipses", spec)
+    params = _ellipse_case_params(spec["case_index"])
+    target = params["center"] + params["major_axis"] * np.asarray(
+        [math.cos(params["theta"]), math.sin(params["theta"])]
+    )
+
+    assert bounds is not None
+    assert np.allclose(
+        [(bounds[0] + bounds[1]) / 2.0, (bounds[2] + bounds[3]) / 2.0],
+        target,
+    )

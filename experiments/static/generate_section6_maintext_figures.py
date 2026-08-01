@@ -138,7 +138,7 @@ REPRESENTATIVE_CASES = {
         ],
         "min_span": 26.0,
         "margin_frac": 0.14,
-        "inset": None,
+        "inset": {"kind": "circle_curvature", "half_span": 4.5},
     },
     "ellipses": {
         "resolution": 0.32,
@@ -153,7 +153,7 @@ REPRESENTATIVE_CASES = {
         ],
         "min_span": 66.0,
         "margin_frac": 0.12,
-        "inset": None,
+        "inset": {"kind": "ellipse_max_curvature", "half_span": 5.0},
     },
     "zalesak": {
         "resolution": 1.00,
@@ -1277,6 +1277,32 @@ def _inset_bounds(exp_name: str, spec: dict) -> tuple[float, float, float, float
         params = _line_case_params(case_index)
         center = 0.5 * (params["p1"] + params["p2"])
         half_span = float(inset_spec.get("half_span", 4.0))
+        return (
+            float(center[0] - half_span),
+            float(center[0] + half_span),
+            float(center[1] - half_span),
+            float(center[1] + half_span),
+        )
+    if inset_spec["kind"] == "circle_curvature":
+        params = _circle_case_params(case_index)
+        angle = math.pi / 4.0
+        center = params["center"] + params["radius"] * np.asarray(
+            [math.cos(angle), math.sin(angle)], dtype=float
+        )
+        half_span = float(inset_spec.get("half_span", 4.5))
+        return (
+            float(center[0] - half_span),
+            float(center[0] + half_span),
+            float(center[1] - half_span),
+            float(center[1] + half_span),
+        )
+    if inset_spec["kind"] == "ellipse_max_curvature":
+        params = _ellipse_case_params(case_index)
+        direction = np.asarray(
+            [math.cos(params["theta"]), math.sin(params["theta"])], dtype=float
+        )
+        center = params["center"] + params["major_axis"] * direction
+        half_span = float(inset_spec.get("half_span", 5.0))
         return (
             float(center[0] - half_span),
             float(center[0] + half_span),

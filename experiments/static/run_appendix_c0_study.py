@@ -80,7 +80,7 @@ APPENDIX_EXPERIMENTS = [
             ],
             "min_span": 66.0,
             "margin_frac": 0.12,
-            "inset": None,
+            "inset": {"kind": "ellipse_max_curvature", "half_span": 5.0},
         },
     },
     {
