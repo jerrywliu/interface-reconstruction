@@ -40,6 +40,9 @@ from submission.final_figure_orchestration import (
     _verify_frozen_publication_tree,
     _verify_private_generator_git_view,
     _write_command_record,
+    resolution_endpoint_mode,
+    resolution_endpoint_variants,
+    resolution_endpoint_visibility_contract,
     resolution_input_paths,
     stage_all_method_candidates,
     validate_c0_metrics,
@@ -501,14 +504,14 @@ def test_real_transaction_races_after_preflight_and_requires_noreplace(tmp_path)
 
     assert result["success"] == {
         "candidate_fonts_embedded": True,
-        "candidate_pdfs": 38,
+        "candidate_pdfs": 41,
         "candidate_rasters": 0,
         "preview_dpi": [300.0],
-        "previews": 38,
+        "previews": 41,
         "publish_temporaries": 0,
         "reservation_cleaned": True,
         "review_fonts_embedded": True,
-        "review_pages": 41,
+        "review_pages": 44,
         "review_rasters": 0,
         "root_mode": 0o500,
         "staging_cleaned": True,
@@ -902,18 +905,53 @@ def _resolution_fixture(tmp_path, experiment="lines", status="completed"):
         {
             "status": "completed",
             "generation_provenance": _generation(),
-            "endpoint_variants": "paired",
+            "endpoint_variants": resolution_endpoint_mode(experiment),
             "runs": runs,
-            "summary_plots": {experiment: {"with_endpoints": {}, "clean": {}}},
+            "summary_plots": {
+                experiment: {
+                    variant: {} for variant in resolution_endpoint_variants(experiment)
+                }
+            },
+            "endpoint_visibility": {
+                experiment: resolution_endpoint_visibility_contract(experiment)
+            },
         },
     )
     return manifest, plots
+
+
+def test_resolution_case_contract_uses_approved_zalesak_case():
+    assert RESOLUTION_CASES["zalesak"] == (6, "circular+corner")
 
 
 def test_resolution_rejects_planned_plot_only_runs(tmp_path):
     manifest, plots = _resolution_fixture(tmp_path, status="planned")
     with pytest.raises(FinalFigureOrchestrationError, match="planned/plot-only"):
         validate_resolution_manifest(manifest, plots, "lines", COMMIT)
+
+
+def test_resolution_requires_exact_hybrid_endpoint_contract(tmp_path):
+    manifest, plots = _resolution_fixture(tmp_path, experiment="ellipses")
+    assert len(validate_resolution_manifest(manifest, plots, "ellipses", COMMIT)) == 6
+
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["endpoint_visibility"]["ellipses"]["hybrid_endpoints_n16_n32"][
+        "main_endpoint_visibility_by_resolution"
+    ]["64"] = True
+    _write_json(manifest, payload)
+    with pytest.raises(
+        FinalFigureOrchestrationError, match="endpoint visibility contract differs"
+    ):
+        validate_resolution_manifest(manifest, plots, "ellipses", COMMIT)
+
+
+def test_resolution_rejects_hybrid_variant_for_square_slot(tmp_path):
+    manifest, plots = _resolution_fixture(tmp_path, experiment="squares")
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["summary_plots"]["squares"]["hybrid_endpoints_n16_n32"] = {}
+    _write_json(manifest, payload)
+    with pytest.raises(FinalFigureOrchestrationError, match="outputs incomplete"):
+        validate_resolution_manifest(manifest, plots, "squares", COMMIT)
 
 
 def _c0_fixture(tmp_path):

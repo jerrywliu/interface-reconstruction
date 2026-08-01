@@ -1,10 +1,12 @@
 {
   "schema_version": 1,
   "expected_counts": {
-    "candidate_pdfs": 38,
+    "candidate_pdfs": 41,
     "unpaired_candidates": 14,
     "paired_slots": 12,
-    "paired_candidates": 24
+    "paired_candidates": 24,
+    "hybrid_slots": 3,
+    "hybrid_candidates": 3
   },
   "candidates": [
     {
@@ -224,6 +226,15 @@
       "pdf": "resolution/lines/summary_plots/lines_resolution_cartesian_vs_perturbed_clean.pdf"
     },
     {
+      "candidate_id": "lines_resolution_hybrid_endpoints_n16_n32",
+      "slot_id": "lines_resolution",
+      "section": "Appendix",
+      "title": "Lines: resolution study",
+      "variant": "hybrid_endpoints_n16_n32",
+      "root": "figure_root",
+      "pdf": "resolution/lines/summary_plots/lines_resolution_cartesian_vs_perturbed_hybrid_endpoints_n16_n32.pdf"
+    },
+    {
       "candidate_id": "squares_resolution_with_endpoints",
       "slot_id": "squares_resolution",
       "section": "Appendix",
@@ -278,6 +289,15 @@
       "pdf": "resolution/ellipses/summary_plots/ellipses_resolution_cartesian_vs_perturbed_clean.pdf"
     },
     {
+      "candidate_id": "ellipses_resolution_hybrid_endpoints_n16_n32",
+      "slot_id": "ellipses_resolution",
+      "section": "Appendix",
+      "title": "Ellipses: resolution study",
+      "variant": "hybrid_endpoints_n16_n32",
+      "root": "figure_root",
+      "pdf": "resolution/ellipses/summary_plots/ellipses_resolution_cartesian_vs_perturbed_hybrid_endpoints_n16_n32.pdf"
+    },
+    {
       "candidate_id": "zalesak_resolution_with_endpoints",
       "slot_id": "zalesak_resolution",
       "section": "Appendix",
@@ -294,6 +314,15 @@
       "variant": "clean",
       "root": "figure_root",
       "pdf": "resolution/zalesak/summary_plots/zalesak_resolution_cartesian_vs_perturbed_clean.pdf"
+    },
+    {
+      "candidate_id": "zalesak_resolution_hybrid_endpoints_n16_n32",
+      "slot_id": "zalesak_resolution",
+      "section": "Appendix",
+      "title": "Zalesak: resolution study",
+      "variant": "hybrid_endpoints_n16_n32",
+      "root": "figure_root",
+      "pdf": "resolution/zalesak/summary_plots/zalesak_resolution_cartesian_vs_perturbed_hybrid_endpoints_n16_n32.pdf"
     },
     {
       "candidate_id": "ellipses_appendix_c0_metrics",

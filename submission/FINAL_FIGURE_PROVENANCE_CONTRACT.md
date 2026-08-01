@@ -33,10 +33,12 @@ The record schema is:
   "release_sha256sums_sha256": "<SHA-256 of final release SHA256SUMS>",
   "allowlist_sha256": "<SHA-256 of submission/final_figure_candidates.json>",
   "candidate_contract": {
-    "candidate_pdfs": 38,
+    "candidate_pdfs": 41,
     "unpaired_candidates": 14,
     "paired_slots": 12,
-    "paired_candidates": 24
+    "paired_candidates": 24,
+    "hybrid_slots": 3,
+    "hybrid_candidates": 3
   },
   "orchestrator_schema_version": 4,
   "approved_by": "<reviewer identity>",
@@ -149,13 +151,16 @@ The fixed contracts are:
   `LVIRA`/`pre_f8_corner`/`exact_linear_support_only` profile.
 - Main text: all five experiments, exact methods and representative cases, and
   paired endpoint variants.
-- Resolution appendix: exact cases `0/22/12/12/20`, designated methods,
+- Resolution appendix: exact cases `0/22/12/12/6`, designated methods,
   `N=16,32,64`, perturbations `0,0.1`, seed 0, and 30 newly completed runs. In
   addition to all run manifests, the exact per-case quantitative CSV,
   case-geometry JSONL, mesh, reconstructed VTP, and facet metadata are validated
   and snapshotted. The square and circle panels consume the VTP truth geometry
   from their `N=16`, Cartesian base runs, so those exact two VTP files are also
-  snapshotted and hashed. The line panel derives its truth segment analytically
+  snapshotted and hashed. The lines, ellipses, and Zalesak slots additionally
+  contain a `hybrid_endpoints_n16_n32` candidate whose manifest requires visible
+  main-panel endpoints at `N=16,32`, hidden main-panel endpoints at `N=64`, and
+  retained spyglass endpoint labels. The line panel derives its truth segment analytically
   from the case definition and mesh bounds; `true_line*.vtp` is not consumed and
   is deliberately not claimed as figure input.
 - Guarded C0 appendix: exact six/five resolution grids, five perturbations,
@@ -173,12 +178,12 @@ and do not establish submission provenance.
 
 ## Acceptance And Publication
 
-The orchestrator's boundary-local immutable state covers exactly 38 allowlisted
+The orchestrator's boundary-local immutable state covers exactly 41 allowlisted
 one-page PDFs; it uses no mutable authority flag. Operational acceptance calls
 the fixed PDF inspector, page inspector, preview renderer, review builder, and
 page-map verifier with the attested runtime. It runs vector QA fail-closed,
 renders fresh 300-DPI previews, verifies their dimensions, builds the indexed
-vector review PDF, measures its 41 pages, verifies the page map, and writes
+vector review PDF, measures its 44 pages, verifies the page map, and writes
 JSON/CSV source maps. Every
 wrapper-owned PDF, preview, QA, source-map, candidate, snapshot, and provenance
 artifact path is a publication-root-relative POSIX path. Before publication,
@@ -193,7 +198,7 @@ makes files `0400` and directories `0500`, and rehashes the ledger, exact
 inventory, modes, and every artifact while still holding the lock immediately
 before an atomic no-replace directory rename. Any late mutation fails and all
 owned temporary trees are removed. A concurrent destination wins untouched.
-The transaction-level adversarial test drives this fixed path with 38 real
+The transaction-level adversarial test drives this fixed path with 41 real
 embedded-font vector PDFs and no production hooks, covering acceptance,
 reservation, freeze/rehash, successful no-replace rename, competing-destination
 preservation, and owned cleanup.

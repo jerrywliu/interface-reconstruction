@@ -127,9 +127,32 @@ def _candidate_specs() -> list[dict]:
                 "pdf": f"synthetic/{candidate_id}.pdf",
             }
         )
-    for index in range(12):
-        slot_id = f"paired_{index:02d}"
+    selectable_slots = [
+        "lines_resolution",
+        "ellipses_resolution",
+        "zalesak_resolution",
+        *(f"paired_{index:02d}" for index in range(9)),
+    ]
+    for index, slot_id in enumerate(selectable_slots):
         for variant in ("with_endpoints", "clean"):
+            candidate_id = f"{slot_id}_{variant}"
+            specs.append(
+                {
+                    "candidate_id": candidate_id,
+                    "slot_id": slot_id,
+                    "section": "Synthetic",
+                    "title": f"Paired {index}",
+                    "variant": variant,
+                    "root": "figure_root",
+                    "pdf": f"synthetic/{candidate_id}.pdf",
+                }
+            )
+        if slot_id in {
+            "lines_resolution",
+            "ellipses_resolution",
+            "zalesak_resolution",
+        }:
+            variant = "hybrid_endpoints_n16_n32"
             candidate_id = f"{slot_id}_{variant}"
             specs.append(
                 {
@@ -149,13 +172,28 @@ def _allowlist_payload() -> dict:
     return {
         "schema_version": 1,
         "expected_counts": {
-            "candidate_pdfs": 38,
+            "candidate_pdfs": 41,
             "unpaired_candidates": 14,
             "paired_slots": 12,
             "paired_candidates": 24,
+            "hybrid_slots": 3,
+            "hybrid_candidates": 3,
         },
         "candidates": _candidate_specs(),
     }
+
+
+def _selected_candidate_specs() -> list[dict]:
+    return [
+        spec
+        for spec in _candidate_specs()
+        if spec["variant"] == "unpaired"
+        or (
+            spec["slot_id"] == "lines_resolution"
+            and spec["variant"] == "hybrid_endpoints_n16_n32"
+        )
+        or (spec["slot_id"] != "lines_resolution" and spec["variant"] == "clean")
+    ]
 
 
 def _write_final_figure_publication(
@@ -196,11 +234,7 @@ def _write_final_figure_publication(
     candidate_rows = []
     orchestration_candidates = []
     approvals: dict[str, dict] = {}
-    selected = {
-        spec["candidate_id"]
-        for spec in allowlist["candidates"]
-        if spec["variant"] in {"unpaired", "clean"}
-    }
+    selected = {spec["candidate_id"] for spec in _selected_candidate_specs()}
     selected_specs = [
         spec for spec in allowlist["candidates"] if spec["candidate_id"] in selected
     ]
@@ -593,9 +627,7 @@ def _make_inputs(tmp_path: Path) -> tuple[Path, Path, Path, str, Path]:
     source = paper / "interface-reconstruction-paper"
     figure_dir = source / "figs"
     figure_dir.mkdir(parents=True)
-    selected_specs = [
-        spec for spec in _candidate_specs() if spec["variant"] in {"unpaired", "clean"}
-    ]
+    selected_specs = _selected_candidate_specs()
     paper_paths = [
         "interface-reconstruction-paper/figs/approved.pdf",
         *[
@@ -1009,13 +1041,18 @@ def test_approved_figures_require_exactly_one_candidate_per_slot(tmp_path):
         )
 
 
-def test_candidate_contract_requires_exact_clean_endpoint_pairs():
+def test_candidate_contract_requires_exact_pairs_and_named_hybrid_slots():
     specs = {spec["candidate_id"]: dict(spec) for spec in _candidate_specs()}
     _validate_final_figure_candidate_contract(specs)
 
     specs["paired_00_clean"]["variant"] = "with_endpoints"
     specs["paired_01_with_endpoints"]["variant"] = "clean"
     with pytest.raises(SubmissionPackagingError, match="14 unique unpaired slots"):
+        _validate_final_figure_candidate_contract(specs)
+
+    specs = {spec["candidate_id"]: dict(spec) for spec in _candidate_specs()}
+    specs["lines_resolution_hybrid_endpoints_n16_n32"]["slot_id"] = "paired_00"
+    with pytest.raises(SubmissionPackagingError, match="lines_resolution"):
         _validate_final_figure_candidate_contract(specs)
 
 
@@ -1418,13 +1455,17 @@ def test_build_stages_compact_payload_and_valid_checksums(tmp_path):
     )
     assert len(inventory["approved_figures"]) == 26
     assert inventory["approved_figures"][0]["candidate_id"]
+    assert any(
+        figure["variant"] == "hybrid_endpoints_n16_n32"
+        for figure in inventory["approved_figures"]
+    )
     binding = json.loads(
         (
             package / "provenance" / "figures" / "approved_figure_bindings.json"
         ).read_text(encoding="utf-8")
     )
     assert binding["passed"] is True
-    assert binding["candidate_count"] == 38
+    assert binding["candidate_count"] == 41
     assert binding["approved_slot_count"] == 26
     assert binding["generator_commit"] == plan.generator_commit
     assert binding["generator_tree"] == plan.generator_tree_object_id

@@ -56,12 +56,18 @@ FINAL_FIGURE_TREE_LEDGER = "provenance/published_tree_sha256.json"
 FINAL_FIGURE_SCHEMA_VERSION = 4
 FINAL_FIGURE_SOURCE_MAP_SCHEMA_VERSION = 2
 EXPECTED_FINAL_FIGURE_COUNTS = {
-    "candidate_pdfs": 38,
+    "candidate_pdfs": 41,
     "unpaired_candidates": 14,
     "paired_slots": 12,
     "paired_candidates": 24,
+    "hybrid_slots": 3,
+    "hybrid_candidates": 3,
 }
 EXPECTED_APPROVED_FIGURE_COUNT = 26
+HYBRID_FIGURE_VARIANT = "hybrid_endpoints_n16_n32"
+HYBRID_FIGURE_SLOTS = frozenset(
+    {"lines_resolution", "ellipses_resolution", "zalesak_resolution"}
+)
 REQUIRED_GENERATOR_PATHS = frozenset(
     {
         GENERATOR_EXPERIMENT_MAP,
@@ -1484,7 +1490,7 @@ def _validate_final_figure_candidate_contract(
 ) -> None:
     if len(specs) != EXPECTED_FINAL_FIGURE_COUNTS["candidate_pdfs"]:
         raise SubmissionPackagingError(
-            "published final-figure allowlist does not contain exactly 38 candidates"
+            "published final-figure allowlist does not contain exactly 41 candidates"
         )
     slots: dict[str, list[str]] = {}
     for spec in specs.values():
@@ -1497,22 +1503,51 @@ def _validate_final_figure_candidate_contract(
         for slot_id, variants in slots.items()
         if variants == ["unpaired"]
     }
+    base_variants = {"clean", "with_endpoints"}
     paired_slots = {
         slot_id: variants
         for slot_id, variants in slots.items()
-        if len(variants) == 2 and set(variants) == {"clean", "with_endpoints"}
+        if base_variants <= set(variants)
+    }
+    hybrid_slots = {
+        slot_id: variants
+        for slot_id, variants in slots.items()
+        if HYBRID_FIGURE_VARIANT in variants
+    }
+    invalid_selectable_slots = {
+        slot_id: sorted(variants)
+        for slot_id, variants in paired_slots.items()
+        if (
+            len(variants) != (3 if slot_id in HYBRID_FIGURE_SLOTS else 2)
+            or set(variants)
+            != (
+                base_variants | {HYBRID_FIGURE_VARIANT}
+                if slot_id in HYBRID_FIGURE_SLOTS
+                else base_variants
+            )
+        )
     }
     if (
         len(unpaired_slots) != EXPECTED_FINAL_FIGURE_COUNTS["unpaired_candidates"]
         or len(paired_slots) != EXPECTED_FINAL_FIGURE_COUNTS["paired_slots"]
         or len(unpaired_slots) + len(paired_slots) != len(slots)
-        or sum(len(variants) for variants in paired_slots.values())
+        or sum(
+            sum(variant in base_variants for variant in variants)
+            for variants in paired_slots.values()
+        )
         != EXPECTED_FINAL_FIGURE_COUNTS["paired_candidates"]
+        or set(hybrid_slots) != HYBRID_FIGURE_SLOTS
+        or sum(
+            variants.count(HYBRID_FIGURE_VARIANT) for variants in hybrid_slots.values()
+        )
+        != EXPECTED_FINAL_FIGURE_COUNTS["hybrid_candidates"]
+        or invalid_selectable_slots
     ):
         raise SubmissionPackagingError(
             "published final-figure allowlist must define exactly 14 unique "
-            "unpaired slots and 12 paired slots with one clean and one "
-            "with_endpoints candidate each"
+            "unpaired slots, 12 clean/with_endpoints slots, and one additional "
+            "hybrid_endpoints_n16_n32 candidate in exactly lines_resolution, "
+            "ellipses_resolution, and zalesak_resolution"
         )
 
 
@@ -1895,7 +1930,13 @@ def inspect_final_figure_publication(
         )
         if (
             not slot_id
-            or variant not in {"unpaired", "with_endpoints", "clean"}
+            or variant
+            not in {
+                "unpaired",
+                "with_endpoints",
+                "clean",
+                HYBRID_FIGURE_VARIANT,
+            }
             or root_key not in {"figure_root", "c0_root"}
         ):
             raise SubmissionPackagingError(
@@ -3092,7 +3133,7 @@ and compiled a disposable copy of the extracted manuscript before reporting
 success.
 
 Every approved manuscript PDF is byte-identical to one candidate in the sealed
-38-candidate publication. Exactly one candidate is selected for each of the 26
+41-candidate publication. Exactly one candidate is selected for each of the 26
 paper slots. The copied privacy-sanitized orchestration and approval records,
 JSON/CSV source maps, allowlist, and publication ledger bind those choices to generator commit
 `{plan.generator_commit}`, scientific commit `{plan.scientific_commit}`, and the

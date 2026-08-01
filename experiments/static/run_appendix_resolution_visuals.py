@@ -49,6 +49,11 @@ PLOTS_ROOT = REPO_ROOT / "plots"
 
 MainEndpointVisibility = Union[bool, Mapping[int, bool]]
 
+HYBRID_ENDPOINT_VARIANT = "hybrid_endpoints_n16_n32"
+HYBRID_ENDPOINT_MODE = "paired_with_hybrid_endpoints_n16_n32"
+HYBRID_ENDPOINT_EXPERIMENTS = frozenset({"lines", "ellipses", "zalesak"})
+HYBRID_ENDPOINT_VISIBILITY = {16: True, 32: True, 64: False}
+
 APPENDIX_RESOLUTION_EXPERIMENTS = [
     {
         "name": "lines",
@@ -158,7 +163,9 @@ def _selected_experiments(
     if not only:
         selected = APPENDIX_RESOLUTION_EXPERIMENTS
     else:
-        selected = [exp for exp in APPENDIX_RESOLUTION_EXPERIMENTS if exp["name"] in only]
+        selected = [
+            exp for exp in APPENDIX_RESOLUTION_EXPERIMENTS if exp["name"] in only
+        ]
 
     configured = []
     for exp in selected:
@@ -191,7 +198,12 @@ def _save_name(
 def _required_paths(save_name: str, case_index: int) -> tuple[Path, Path]:
     mesh_path = PLOTS_ROOT / save_name / "vtk" / "mesh.vtk"
     facet_path = (
-        PLOTS_ROOT / save_name / "vtk" / "reconstructed" / "facets" / f"{case_index}.vtp"
+        PLOTS_ROOT
+        / save_name
+        / "vtk"
+        / "reconstructed"
+        / "facets"
+        / f"{case_index}.vtp"
     )
     return mesh_path, facet_path
 
@@ -210,7 +222,9 @@ def _run_subprocess(cmd, log_path):
 
 def _true_vtp_segments(exp_name: str, save_name: str, case_index: int) -> np.ndarray:
     true_path = maintext_figs._true_vtp_path(exp_name, save_name, case_index)
-    return maintext_figs._segments_from_polydata(maintext_figs._read_polydata(true_path))
+    return maintext_figs._segments_from_polydata(
+        maintext_figs._read_polydata(true_path)
+    )
 
 
 def _dedupe_points(points: list[np.ndarray], tol: float = 1e-8) -> list[np.ndarray]:
@@ -278,7 +292,9 @@ def _line_fill_polygon_from_points(
     )
 
     def _cross(point):
-        return (p2[0] - p1[0]) * (point[1] - p1[1]) - (p2[1] - p1[1]) * (point[0] - p1[0])
+        return (p2[0] - p1[0]) * (point[1] - p1[1]) - (p2[1] - p1[1]) * (
+            point[0] - p1[0]
+        )
 
     def _intersect(start, end):
         s_val = _cross(start)
@@ -335,11 +351,15 @@ def _ordered_loop_vertices(segments: np.ndarray) -> np.ndarray:
     return np.asarray(points, dtype=float)
 
 
-def _single_case_ellipse_segments(case_index: int, sample_count: int = 720) -> np.ndarray:
+def _single_case_ellipse_segments(
+    case_index: int, sample_count: int = 720
+) -> np.ndarray:
     return maintext_figs._ellipse_true_segments(case_index, sample_count=sample_count)
 
 
-def _single_case_zalesak_truth(case_index: int) -> tuple[np.ndarray, np.ndarray, tuple[float, float, float, float]]:
+def _single_case_zalesak_truth(
+    case_index: int,
+) -> tuple[np.ndarray, np.ndarray, tuple[float, float, float, float]]:
     true_facets = maintext_figs._zalesak_true_facets(case_index)
     true_segments = maintext_figs._zalesak_true_segments(case_index)
     fill_vertices = maintext_figs._concat_facet_points(true_facets)
@@ -393,7 +413,11 @@ def _truth_payload(
     if exp_name == "zalesak":
         return _single_case_zalesak_truth(case_index)
 
-    return maintext_figs._load_true_segments(exp_name, base_save_name, case_index), None, None
+    return (
+        maintext_figs._load_true_segments(exp_name, base_save_name, case_index),
+        None,
+        None,
+    )
 
 
 def _figure_bounds(
@@ -462,7 +486,9 @@ def _generate_figure(
         exp_spec["seed"],
         prefix=exp_spec.get("save_prefix", "appendix_resolution"),
     )
-    base_mesh_segments = maintext_figs._mesh_segments(PLOTS_ROOT / base_save_name / "vtk" / "mesh.vtk")
+    base_mesh_segments = maintext_figs._mesh_segments(
+        PLOTS_ROOT / base_save_name / "vtk" / "mesh.vtk"
+    )
     mesh_bounds = maintext_figs._segments_bounds(base_mesh_segments)
     true_segments, true_fill_vertices, inset_bounds = _truth_payload(
         exp_spec,
@@ -482,7 +508,9 @@ def _generate_figure(
                 exp_spec["seed"],
                 prefix=exp_spec.get("save_prefix", "appendix_resolution"),
             )
-            mesh_segments = maintext_figs._mesh_segments(PLOTS_ROOT / save_name / "vtk" / "mesh.vtk")
+            mesh_segments = maintext_figs._mesh_segments(
+                PLOTS_ROOT / save_name / "vtk" / "mesh.vtk"
+            )
             (
                 recon_segments,
                 endpoint_points,
@@ -524,7 +552,12 @@ def _generate_figure(
                 bounds=bounds,
             )
 
-    fig.suptitle(f"{exp_spec['display']} on {exp_spec['name'].title()}", fontsize=12.5, fontweight="bold", y=0.995)
+    fig.suptitle(
+        f"{exp_spec['display']} on {exp_spec['name'].title()}",
+        fontsize=12.5,
+        fontweight="bold",
+        y=0.995,
+    )
     if has_spyglass:
         fig.subplots_adjust(
             left=0.16,
@@ -546,9 +579,20 @@ def _generate_endpoint_variant_figures(
     endpoint_variants: str,
 ) -> dict[str, dict[str, str]]:
     outputs = {}
-    for variant_name, suffix, show_main_endpoints in maintext_figs._endpoint_variant_specs(
-        endpoint_variants
+    experiment = exp_spec["name"]
+    if (
+        endpoint_variants == HYBRID_ENDPOINT_MODE
+        and experiment not in HYBRID_ENDPOINT_EXPERIMENTS
     ):
+        raise ValueError(f"Hybrid endpoint output is not allowlisted for {experiment}")
+    base_mode = (
+        "paired" if endpoint_variants == HYBRID_ENDPOINT_MODE else endpoint_variants
+    )
+    for (
+        variant_name,
+        suffix,
+        show_main_endpoints,
+    ) in maintext_figs._endpoint_variant_specs(base_mode):
         review_png = (
             summary_dir
             / f"{exp_spec['name']}_resolution_cartesian_vs_perturbed{suffix}.png"
@@ -559,7 +603,44 @@ def _generate_endpoint_variant_figures(
             main_endpoint_visibility=show_main_endpoints,
         )
         outputs[variant_name] = vector_figure_artifacts(review_png)
+    if endpoint_variants == HYBRID_ENDPOINT_MODE:
+        review_png = (
+            summary_dir / f"{experiment}_resolution_cartesian_vs_perturbed_"
+            f"{HYBRID_ENDPOINT_VARIANT}.png"
+        )
+        _generate_figure(
+            exp_spec,
+            review_png,
+            main_endpoint_visibility=HYBRID_ENDPOINT_VISIBILITY,
+        )
+        outputs[HYBRID_ENDPOINT_VARIANT] = vector_figure_artifacts(review_png)
     return outputs
+
+
+def _endpoint_visibility_manifest(exp_spec: dict, endpoint_variants: str) -> dict:
+    resolutions = [int(round(value * 100)) for value in exp_spec["resolutions"]]
+    base_mode = (
+        "paired" if endpoint_variants == HYBRID_ENDPOINT_MODE else endpoint_variants
+    )
+    policies = {}
+    for variant_name, _suffix, visibility in maintext_figs._endpoint_variant_specs(
+        base_mode
+    ):
+        policies[variant_name] = {
+            "main_endpoint_visibility_by_resolution": {
+                str(resolution): visibility for resolution in resolutions
+            },
+            "show_inset_endpoints": True,
+        }
+    if endpoint_variants == HYBRID_ENDPOINT_MODE:
+        policies[HYBRID_ENDPOINT_VARIANT] = {
+            "main_endpoint_visibility_by_resolution": {
+                str(resolution): HYBRID_ENDPOINT_VISIBILITY[resolution]
+                for resolution in resolutions
+            },
+            "show_inset_endpoints": True,
+        }
+    return policies
 
 
 def main():
@@ -568,23 +649,60 @@ def main():
     parser = argparse.ArgumentParser(
         description="Run deterministic appendix resolution-study reconstruction visuals."
     )
-    parser.add_argument("--only", type=str, default=None, help="comma-separated experiments to run")
-    parser.add_argument("--out_dir", type=Path, default=None, help="artifact output directory")
-    parser.add_argument("--log_dir", type=Path, default=None, help="log directory override")
-    parser.add_argument("--skip_existing", action="store_true", help="skip runs whose required artifacts already exist")
-    parser.add_argument("--plot_only", action="store_true", help="generate figures only from existing run outputs")
-    parser.add_argument("--dry_run", action="store_true", help="print commands without executing")
-    parser.add_argument("--resolutions", type=str, default=None, help="comma-separated resolution values, e.g. 0.16,0.32,0.64")
-    parser.add_argument("--wiggles", type=str, default=None, help="comma-separated perturbation magnitudes")
-    parser.add_argument("--case_index", type=int, default=None, help="single case index override for quick example-swap checks")
-    parser.add_argument("--save_prefix", type=str, default=None, help="prefix for plot save directories, useful for non-clobbering case probes")
+    parser.add_argument(
+        "--only", type=str, default=None, help="comma-separated experiments to run"
+    )
+    parser.add_argument(
+        "--out_dir", type=Path, default=None, help="artifact output directory"
+    )
+    parser.add_argument(
+        "--log_dir", type=Path, default=None, help="log directory override"
+    )
+    parser.add_argument(
+        "--skip_existing",
+        action="store_true",
+        help="skip runs whose required artifacts already exist",
+    )
+    parser.add_argument(
+        "--plot_only",
+        action="store_true",
+        help="generate figures only from existing run outputs",
+    )
+    parser.add_argument(
+        "--dry_run", action="store_true", help="print commands without executing"
+    )
+    parser.add_argument(
+        "--resolutions",
+        type=str,
+        default=None,
+        help="comma-separated resolution values, e.g. 0.16,0.32,0.64",
+    )
+    parser.add_argument(
+        "--wiggles",
+        type=str,
+        default=None,
+        help="comma-separated perturbation magnitudes",
+    )
+    parser.add_argument(
+        "--case_index",
+        type=int,
+        default=None,
+        help="single case index override for quick example-swap checks",
+    )
+    parser.add_argument(
+        "--save_prefix",
+        type=str,
+        default=None,
+        help="prefix for plot save directories, useful for non-clobbering case probes",
+    )
     parser.add_argument(
         "--endpoint_variants",
-        choices=sorted(maintext_figs.ENDPOINT_VARIANT_MODES),
+        choices=sorted(maintext_figs.ENDPOINT_VARIANT_MODES | {HYBRID_ENDPOINT_MODE}),
         default="annotated",
         help=(
             "Qualitative endpoint-marker exports: annotated, clean main panels, "
-            "or paired. Spyglass endpoint labels are always retained."
+            "paired, or paired plus the N=16/32 hybrid. Spyglass endpoint labels "
+            "are always retained."
         ),
     )
     parser.add_argument(
@@ -701,7 +819,9 @@ def main():
                     print(" ".join(cmd))
                     continue
 
-                if args.skip_existing and _run_exists(save_name, exp_spec["case_index"]):
+                if args.skip_existing and _run_exists(
+                    save_name, exp_spec["case_index"]
+                ):
                     run_record["status"] = "existing"
                     print(
                         f"[SKIP] {exp_spec['name']} {exp_spec['algo']} "
@@ -742,6 +862,9 @@ def main():
             args.endpoint_variants,
         )
         manifest["summary_plots"][exp_spec["name"]] = variant_outputs
+        manifest.setdefault("endpoint_visibility", {})[exp_spec["name"]] = (
+            _endpoint_visibility_manifest(exp_spec, args.endpoint_variants)
+        )
         for variant_name, artifacts in variant_outputs.items():
             print(f"[summary:{variant_name}] {exp_spec['name']}: {artifacts['pdf']}")
 

@@ -9,6 +9,8 @@ from PIL import Image
 
 from submission.accept_figure_candidates import (
     EXPECTED_COUNTS,
+    HYBRID_SLOTS,
+    HYBRID_VARIANT,
     AcceptedCandidate,
     CandidateSpec,
     FigureAcceptanceError,
@@ -59,19 +61,22 @@ def _populate_candidate_roots(tmp_path):
     return roots
 
 
-def test_explicit_allowlist_has_exact_38_candidate_contract():
+def test_explicit_allowlist_has_exact_41_candidate_contract():
     specs = load_candidate_allowlist()
-    assert len(specs) == EXPECTED_COUNTS["candidate_pdfs"] == 38
+    assert len(specs) == EXPECTED_COUNTS["candidate_pdfs"] == 41
     assert sum(spec.variant == "unpaired" for spec in specs) == 14
     assert len({spec.slot_id for spec in specs if spec.variant == "unpaired"}) == 14
-    paired = [spec for spec in specs if spec.variant != "unpaired"]
+    paired = [spec for spec in specs if spec.variant in {"with_endpoints", "clean"}]
     assert len(paired) == 24
     slots = {}
     for spec in paired:
         slots.setdefault(spec.slot_id, set()).add(spec.variant)
     assert len(slots) == 12
     assert all(variants == {"with_endpoints", "clean"} for variants in slots.values())
-    assert len({(spec.root, spec.pdf) for spec in specs}) == 38
+    hybrid = [spec for spec in specs if spec.variant == HYBRID_VARIANT]
+    assert len(hybrid) == 3
+    assert {spec.slot_id for spec in hybrid} == HYBRID_SLOTS
+    assert len({(spec.root, spec.pdf) for spec in specs}) == 41
 
 
 def test_candidate_inventory_fails_on_missing_and_unexpected_pdfs(tmp_path):

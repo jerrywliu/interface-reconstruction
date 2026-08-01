@@ -129,10 +129,14 @@ RESOLUTION_CASES = {
     "squares": (22, "linear+corner"),
     "circles": (12, "circular"),
     "ellipses": (12, "circular"),
-    "zalesak": (20, "circular+corner"),
+    "zalesak": (6, "circular+corner"),
 }
 RESOLUTION_VALUES = (0.16, 0.32, 0.64)
 RESOLUTION_WIGGLES = (0.0, 0.1)
+HYBRID_RESOLUTION_VARIANT = "hybrid_endpoints_n16_n32"
+HYBRID_RESOLUTION_MODE = "paired_with_hybrid_endpoints_n16_n32"
+HYBRID_RESOLUTION_EXPERIMENTS = frozenset({"lines", "ellipses", "zalesak"})
+HYBRID_RESOLUTION_VISIBILITY = {"16": True, "32": True, "64": False}
 C0_RESOLUTIONS = {
     "ellipses": (0.32, 0.5, 0.64, 1.0, 1.28, 1.5),
     "zalesak": (0.5, 0.64, 1.0, 1.28, 1.5),
@@ -176,6 +180,45 @@ C0_METRIC_BASES = {
     "zalesak": ("area_error", "facet_gap", "hausdorff"),
 }
 METRIC_STATS = ("mean", "median", "p25", "p75")
+
+
+def resolution_endpoint_mode(experiment: str) -> str:
+    if experiment in HYBRID_RESOLUTION_EXPERIMENTS:
+        return HYBRID_RESOLUTION_MODE
+    return "paired"
+
+
+def resolution_endpoint_variants(experiment: str) -> tuple[str, ...]:
+    variants = ("with_endpoints", "clean")
+    if experiment in HYBRID_RESOLUTION_EXPERIMENTS:
+        return variants + (HYBRID_RESOLUTION_VARIANT,)
+    return variants
+
+
+def resolution_endpoint_visibility_contract(experiment: str) -> dict:
+    resolutions = tuple(str(int(round(value * 100))) for value in RESOLUTION_VALUES)
+    contract = {
+        "with_endpoints": {
+            "main_endpoint_visibility_by_resolution": {
+                resolution: True for resolution in resolutions
+            },
+            "show_inset_endpoints": True,
+        },
+        "clean": {
+            "main_endpoint_visibility_by_resolution": {
+                resolution: False for resolution in resolutions
+            },
+            "show_inset_endpoints": True,
+        },
+    }
+    if experiment in HYBRID_RESOLUTION_EXPERIMENTS:
+        contract[HYBRID_RESOLUTION_VARIANT] = {
+            "main_endpoint_visibility_by_resolution": dict(
+                HYBRID_RESOLUTION_VISIBILITY
+            ),
+            "show_inset_endpoints": True,
+        }
+    return contract
 
 
 def _numbers(values: Sequence[float]) -> str:
@@ -858,9 +901,10 @@ def validate_resolution_manifest(
         payload.get("status") == "completed",
         f"Resolution {experiment} is not completed",
     )
+    expected_endpoint_mode = resolution_endpoint_mode(experiment)
     _require(
-        payload.get("endpoint_variants") == "paired",
-        f"Resolution {experiment} is not paired",
+        payload.get("endpoint_variants") == expected_endpoint_mode,
+        f"Resolution {experiment} has the wrong endpoint variant mode",
     )
     runs = payload.get("runs")
     _require(
@@ -903,9 +947,15 @@ def validate_resolution_manifest(
         manifests.append(manifest)
     _require(actual == expected, f"Resolution {experiment} scientific grid differs")
     summary = payload.get("summary_plots", {}).get(experiment)
+    expected_variants = set(resolution_endpoint_variants(experiment))
     _require(
-        isinstance(summary, dict) and set(summary) == {"with_endpoints", "clean"},
+        isinstance(summary, dict) and set(summary) == expected_variants,
         f"Resolution {experiment} outputs incomplete",
+    )
+    endpoint_visibility = payload.get("endpoint_visibility", {}).get(experiment)
+    _require(
+        endpoint_visibility == resolution_endpoint_visibility_contract(experiment),
+        f"Resolution {experiment} endpoint visibility contract differs",
     )
     return manifests
 

@@ -7,7 +7,7 @@ Section 6 and its appendix. Run commands from the repository root. The target
 submission outputs are vector PDFs; PNG files are review previews only.
 
 The family-level execution checklist is
-`submission/POST_SWEEP_FIGURE_MANIFEST.md`. The exact 38-candidate inventory is
+`submission/POST_SWEEP_FIGURE_MANIFEST.md`. The exact 41-candidate inventory is
 `submission/final_figure_candidates.json`; each completed run also writes
 `review/figure_candidate_source_map.csv`, which binds every candidate PDF to its
 producer inputs. The tables below map the resulting slots to the active manuscript.
@@ -143,7 +143,7 @@ The only submission-producing entry point is
 `submission/run_final_figure_orchestrator`, documented in
 `submission/FINAL_FIGURE_REGENERATION.md`. It privately materializes and audits
 the sealed release, creates a physical run-bundle view, performs companion runs,
-and accepts exactly the 38 allowlisted vector PDFs. It never follows a user-built
+and accepts exactly the 41 allowlisted vector PDFs. It never follows a user-built
 symlink view or fills missing geometry from historical results.
 
 The generator commands below document the paper-to-code mapping and are useful
@@ -223,19 +223,22 @@ python -m experiments.static.run_appendix_resolution_visuals \
   --resolutions 0.16,0.32,0.64 \
   --wiggles 0,0.1 \
   --save_prefix "final_resolution_${SOURCE_COMMIT:0:12}_<benchmark>" \
-  --endpoint_variants paired \
+  --endpoint_variants <paired-or-paired_with_hybrid_endpoints_n16_n32> \
   --out_dir "$FIGURE_ROOT/resolution/<benchmark>"
 ```
 
-| Benchmark / candidate case | Generated and paper asset |
-| --- | --- |
-| Lines / 0 | `lines_resolution_cartesian_vs_perturbed.pdf` |
-| Squares / 22 | `squares_resolution_cartesian_vs_perturbed.pdf` |
-| Circles / 12 | `circles_resolution_cartesian_vs_perturbed.pdf` |
-| Ellipses / 12 | `ellipses_resolution_cartesian_vs_perturbed.pdf` |
-| Zalesak / 20 | `zalesak_resolution_cartesian_vs_perturbed.pdf` |
+| Benchmark / candidate case | Generated vector candidates | Paper asset |
+| --- | --- | --- |
+| Lines / 0 | `lines_resolution_cartesian_vs_perturbed_{with_endpoints,clean,hybrid_endpoints_n16_n32}.pdf` | `lines_resolution_cartesian_vs_perturbed.pdf` |
+| Squares / 22 | `squares_resolution_cartesian_vs_perturbed_{with_endpoints,clean}.pdf` | `squares_resolution_cartesian_vs_perturbed.pdf` |
+| Circles / 12 | `circles_resolution_cartesian_vs_perturbed_{with_endpoints,clean}.pdf` | `circles_resolution_cartesian_vs_perturbed.pdf` |
+| Ellipses / 12 | `ellipses_resolution_cartesian_vs_perturbed_{with_endpoints,clean,hybrid_endpoints_n16_n32}.pdf` | `ellipses_resolution_cartesian_vs_perturbed.pdf` |
+| Zalesak / 6 | `zalesak_resolution_cartesian_vs_perturbed_{with_endpoints,clean,hybrid_endpoints_n16_n32}.pdf` | `zalesak_resolution_cartesian_vs_perturbed.pdf` |
 
-These case choices remain an author-approval gate. Preserve each generated
+Zalesak case 6 was selected after the resolution-case search: it has no `N=16`
+corner markers, reconstructs `2/2` true corners at `N=32` and `4/4` at `N=64`,
+and has worst `N=64` Hausdorff error `2.85e-9`. These case choices remain an
+author-approval gate. Preserve each generated
 `manifest.json`, logs, and the associated `plots/<save-prefix>_*` geometry.
 
 ### Guarded `C0` appendix panels
@@ -293,6 +296,11 @@ a raster color key and must be replaced by this regenerated vector PDF.
 - `clean`: main-panel endpoint/cell-crossing circles are hidden, but endpoints
   remain labeled in spyglass zooms and semantic reconstructed corners remain
   diamonds everywhere.
+
+For lines, ellipses, and Zalesak resolution studies,
+`--endpoint_variants paired_with_hybrid_endpoints_n16_n32` adds a third
+`hybrid_endpoints_n16_n32` PDF. It shows main-panel endpoints at `N=16,32`,
+hides them at `N=64`, and retains endpoint labels in every spyglass.
 
 Only the author-selected variant is renamed to the unsuffixed paper asset.
 Record the choice in the figure approval CSV and `submission/figure_provenance.csv`.

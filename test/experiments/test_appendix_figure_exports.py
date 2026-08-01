@@ -116,6 +116,65 @@ def test_resolution_runner_generates_paired_vector_artifacts(tmp_path, monkeypat
     assert outputs["clean"]["png_review_300dpi"].endswith("_clean.png")
 
 
+def test_resolution_runner_generates_allowlisted_hybrid_artifact(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        resolution_visuals,
+        "_generate_figure",
+        lambda exp_spec, out_path, main_endpoint_visibility: calls.append(
+            (Path(out_path), main_endpoint_visibility)
+        ),
+    )
+
+    exp_spec = {
+        "name": "ellipses",
+        "resolutions": [0.16, 0.32, 0.64],
+    }
+    outputs = resolution_visuals._generate_endpoint_variant_figures(
+        exp_spec,
+        tmp_path,
+        resolution_visuals.HYBRID_ENDPOINT_MODE,
+    )
+
+    assert [path.name for path, _ in calls] == [
+        "ellipses_resolution_cartesian_vs_perturbed_with_endpoints.png",
+        "ellipses_resolution_cartesian_vs_perturbed_clean.png",
+        "ellipses_resolution_cartesian_vs_perturbed_hybrid_endpoints_n16_n32.png",
+    ]
+    assert calls[-1][1] == {16: True, 32: True, 64: False}
+    assert set(outputs) == {
+        "with_endpoints",
+        "clean",
+        "hybrid_endpoints_n16_n32",
+    }
+    assert resolution_visuals._endpoint_visibility_manifest(
+        exp_spec, resolution_visuals.HYBRID_ENDPOINT_MODE
+    )["hybrid_endpoints_n16_n32"] == {
+        "main_endpoint_visibility_by_resolution": {
+            "16": True,
+            "32": True,
+            "64": False,
+        },
+        "show_inset_endpoints": True,
+    }
+
+
+def test_resolution_runner_rejects_hybrid_for_unapproved_experiment(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        resolution_visuals,
+        "_generate_figure",
+        lambda *_args, **_kwargs: None,
+    )
+    with pytest.raises(ValueError, match="not allowlisted for squares"):
+        resolution_visuals._generate_endpoint_variant_figures(
+            {"name": "squares"},
+            tmp_path,
+            resolution_visuals.HYBRID_ENDPOINT_MODE,
+        )
+
+
 def test_resolution_endpoint_visibility_can_hide_only_the_finest_main_panels():
     visibility = {16: True, 32: True, 64: False}
     base_spec = {"inset": {"kind": "zalesak_corner"}}

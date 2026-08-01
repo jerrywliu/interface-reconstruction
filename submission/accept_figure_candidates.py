@@ -39,13 +39,19 @@ from submission.trusted_figure_runtime import (
 
 DEFAULT_ALLOWLIST = Path(__file__).with_name("final_figure_candidates.json")
 EXPECTED_COUNTS = {
-    "candidate_pdfs": 38,
+    "candidate_pdfs": 41,
     "unpaired_candidates": 14,
     "paired_slots": 12,
     "paired_candidates": 24,
+    "hybrid_slots": 3,
+    "hybrid_candidates": 3,
 }
 ROOT_KEYS = ("figure_root", "c0_root")
-VARIANTS = ("unpaired", "with_endpoints", "clean")
+HYBRID_VARIANT = "hybrid_endpoints_n16_n32"
+HYBRID_SLOTS = frozenset(
+    {"lines_resolution", "ellipses_resolution", "zalesak_resolution"}
+)
+VARIANTS = ("unpaired", "with_endpoints", "clean", HYBRID_VARIANT)
 INDEX_ROWS_PER_PAGE = 14
 
 SOURCE_MAP_JSON = "figure_candidate_source_map.json"
@@ -221,7 +227,8 @@ def load_candidate_allowlist(
 def _validate_allowlist_contract(specs: Sequence[CandidateSpec]) -> None:
     if len(specs) != EXPECTED_COUNTS["candidate_pdfs"]:
         raise FigureAcceptanceError(
-            f"Expected 38 candidate PDFs, found {len(specs)} in the allowlist"
+            f"Expected {EXPECTED_COUNTS['candidate_pdfs']} candidate PDFs, "
+            f"found {len(specs)} in the allowlist"
         )
     candidate_ids = [spec.candidate_id for spec in specs]
     if len(set(candidate_ids)) != len(candidate_ids):
@@ -231,7 +238,8 @@ def _validate_allowlist_contract(specs: Sequence[CandidateSpec]) -> None:
         raise FigureAcceptanceError("Candidate root/PDF paths must be unique")
 
     unpaired = [spec for spec in specs if spec.variant == "unpaired"]
-    paired = [spec for spec in specs if spec.variant != "unpaired"]
+    paired = [spec for spec in specs if spec.variant in {"with_endpoints", "clean"}]
+    hybrid = [spec for spec in specs if spec.variant == HYBRID_VARIANT]
     if len(unpaired) != EXPECTED_COUNTS["unpaired_candidates"]:
         raise FigureAcceptanceError(
             f"Expected 14 unpaired candidates, found {len(unpaired)}"
@@ -239,6 +247,10 @@ def _validate_allowlist_contract(specs: Sequence[CandidateSpec]) -> None:
     if len(paired) != EXPECTED_COUNTS["paired_candidates"]:
         raise FigureAcceptanceError(
             f"Expected 24 paired candidates, found {len(paired)}"
+        )
+    if len(hybrid) != EXPECTED_COUNTS["hybrid_candidates"]:
+        raise FigureAcceptanceError(
+            f"Expected 3 hybrid candidates, found {len(hybrid)}"
         )
 
     paired_slots: Dict[str, set] = {}
@@ -258,13 +270,27 @@ def _validate_allowlist_contract(specs: Sequence[CandidateSpec]) -> None:
             "Every paired slot must contain exactly with_endpoints and clean: "
             + json.dumps(invalid_slots, sort_keys=True)
         )
+    hybrid_slots: Dict[str, int] = {}
+    for spec in hybrid:
+        hybrid_slots[spec.slot_id] = hybrid_slots.get(spec.slot_id, 0) + 1
+    if set(hybrid_slots) != HYBRID_SLOTS or any(
+        count != 1 for count in hybrid_slots.values()
+    ):
+        raise FigureAcceptanceError(
+            "Hybrid endpoint candidates must occur exactly once in lines_resolution, "
+            "ellipses_resolution, and zalesak_resolution"
+        )
     unpaired_slots = {spec.slot_id for spec in unpaired}
     if len(unpaired_slots) != EXPECTED_COUNTS["unpaired_candidates"]:
         raise FigureAcceptanceError(
             f"Expected 14 distinct unpaired slots, found {len(unpaired_slots)}"
         )
-    if unpaired_slots & set(paired_slots):
-        raise FigureAcceptanceError("A slot cannot be both paired and unpaired")
+    if not HYBRID_SLOTS <= set(paired_slots):
+        raise FigureAcceptanceError(
+            "Every hybrid endpoint slot must retain its clean/with_endpoints pair"
+        )
+    if unpaired_slots & (set(paired_slots) | set(hybrid_slots)):
+        raise FigureAcceptanceError("A slot cannot be both selectable and unpaired")
 
 
 def _sha256(path: Path) -> str:
@@ -488,7 +514,8 @@ def _write_vector_index(
         document.drawString(
             38,
             height - 69,
-            f"38 candidates | source {source_commit} | index {page_index + 1}/{index_pages}",
+            f"{len(records)} candidates | source {source_commit} | "
+            f"index {page_index + 1}/{index_pages}",
         )
 
         y = height - 94

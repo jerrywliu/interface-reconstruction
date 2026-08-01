@@ -22,7 +22,7 @@ record described in `FINAL_FIGURE_PROVENANCE_CONTRACT.md` outside this
 repository. The reviewer records the exact commit/tree, the source commit in
 `$FINAL_ROOT/submission_config.resolved.json`, the SHA-256 of the exact
 `$FINAL_ROOT/SHA256SUMS`, the SHA-256 of
-`submission/final_figure_candidates.json`, the exact 38-candidate count
+`submission/final_figure_candidates.json`, the exact 41-candidate count
 contract, and orchestration schema version 4. The record must use status
 `approved`, `revoked=false`, a reviewer identity of 3--200 printable
 characters, and a UTC timestamp formatted `YYYY-MM-DDTHH:MM:SSZ`; extra fields
@@ -79,7 +79,7 @@ The wrapper performs, in order:
 7. 30 fresh resolution runs plus quantitative/geometry evidence capture;
 8. 165 fresh guarded-C0 runs plus exact 2,700-row metrics validation;
 9. deterministic PLIC and staged figures;
-10. internal 38-PDF vector/preview/page-map acceptance with absolute attested Poppler tools; and
+10. internal 41-PDF vector/preview/44-page-map acceptance with absolute attested Poppler tools; and
 11. publication-root-relative path resolution for every wrapper-owned artifact,
     checksum-copy to a separate sealed publication tree, locked final rehash, and
     atomic no-replace publication.
@@ -108,7 +108,7 @@ $FINAL_FIGURE_ROOT/
   review/figure_candidate_source_map.json
   review/figure_candidate_source_map.csv
   review/figure_candidate_vector_qa.json
-  review/previews/                                # 38 fresh 300-DPI PNGs
+  review/previews/                                # 41 fresh 300-DPI PNGs
 ```
 
 Only PDFs under `candidates/` are eligible for manuscript promotion.

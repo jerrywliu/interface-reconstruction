@@ -155,6 +155,8 @@ from submission.final_figure_orchestration import (
     _verify_tree_records,
     _write_command_record,
     representative_geometry_input_paths,
+    resolution_endpoint_mode,
+    resolution_endpoint_variants,
     resolution_input_paths,
     stage_all_method_candidates,
     validate_c0_manifests,
@@ -304,7 +306,7 @@ def _candidate_provenance_from_state(
         )
     if set(evidence) != set(expected):
         raise FigureAcceptanceError(
-            "Orchestration does not cover exactly 38 candidates"
+            "Orchestration does not cover the exact candidate allowlist"
         )
     return evidence
 
@@ -363,7 +365,8 @@ def _accept_candidates(
         raise FigureAcceptanceError("\n".join(errors))
     if len(candidate_audits) != EXPECTED_COUNTS["candidate_pdfs"]:
         raise FigureAcceptanceError(
-            f"Internal error: audited {len(candidate_audits)} of 38 candidates"
+            f"Internal error: audited {len(candidate_audits)} of "
+            f"{EXPECTED_COUNTS['candidate_pdfs']} candidates"
         )
 
     output_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -1285,7 +1288,7 @@ def orchestrate_final_figures(
                 "--save_prefix",
                 prefix,
                 "--endpoint_variants",
-                "paired",
+                resolution_endpoint_mode(experiment),
                 "--plots_root",
                 str(plots_root),
             ]
@@ -1303,6 +1306,7 @@ def orchestrate_final_figures(
                 "case_index": case_index,
                 "method": method,
                 "completed_runs": 6,
+                "endpoint_variants": list(resolution_endpoint_variants(experiment)),
             }
             _copy_manifest(
                 out / "manifest.json",
@@ -1364,7 +1368,7 @@ def orchestrate_final_figures(
             resolution_contract["experiments"][experiment][
                 "snapshotted_input_files"
             ] = input_count
-            for variant in ("with_endpoints", "clean"):
+            for variant in resolution_endpoint_variants(experiment):
                 candidate_id = f"{experiment}_resolution_{variant}"
                 source = (
                     out
@@ -1542,9 +1546,9 @@ def orchestrate_final_figures(
             )
 
         _require(
-            len(candidates) == 38
+            len(candidates) == EXPECTED_COUNTS["candidate_pdfs"]
             and {row["candidate_id"] for row in candidates} == set(by_id),
-            "Staged candidate inventory is not the explicit 38-PDF allowlist",
+            "Staged candidate inventory is not the explicit candidate allowlist",
         )
         _require(
             sum(

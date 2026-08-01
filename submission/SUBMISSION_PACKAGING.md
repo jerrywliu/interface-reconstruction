@@ -15,7 +15,7 @@ It does not modify the release, the paper source, or Overleaf.
    contains the reviewed `docs/PAPER_EXPERIMENT_MAP.md`.
 6. The sealed, read-only final-figure publication root. It must contain the
    canonical orchestration manifest, JSON/CSV candidate source maps, private
-   allowlist and external-approval snapshots, 38 candidate PDFs, and full
+   allowlist and external-approval snapshots, 41 candidate PDFs, and full
    published-tree checksum ledger.
 7. A clean paper Git worktree pinned to an explicit full commit. Its root must
    contain `interface-reconstruction-paper/`.
@@ -151,7 +151,10 @@ lines_maintext_metrics,lines_maintext_metrics,unpaired,interface-reconstruction-
 - `approval_reference` records the review packet, decision sheet, or approval date.
 
 The CSV must contain exactly 26 rows: all 14 unpaired slots and one selected
-`clean` or `with_endpoints` candidate for each of the 12 paired slots. Every
+candidate for each of the 12 selectable slots. Every selectable slot offers
+`clean` and `with_endpoints`; the lines, ellipses, and Zalesak resolution slots
+also offer `hybrid_endpoints_n16_n32`, which shows main-panel endpoints at
+`N=16,32`, hides them at `N=64`, and retains endpoint labels in spyglasses. Every
 approved paper PDF must be byte-identical to its published candidate. Only those
 PDFs are copied. All active `\includegraphics` targets must be PDFs and must appear
 exactly once in the approval manifest. Poppler's `pdfimages` and `pdffonts` are
