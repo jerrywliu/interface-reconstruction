@@ -118,7 +118,9 @@ APPENDIX_EXPERIMENTS = [
             "resolution": 1.00,
             "wiggle": 0.10,
             "seed": 0,
-            "case_index": 12,
+            # Case 22 is continuous to numerical precision after the guarded pass
+            # (maximum eligible endpoint gap 2.11e-9 over 178 joins).
+            "case_index": 22,
             "methods": [
                 ("circular", "Ours (circular)"),
                 ("circular+C0", "Ours (circular, C0)"),

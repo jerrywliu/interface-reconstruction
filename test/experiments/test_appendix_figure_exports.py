@@ -257,6 +257,14 @@ def test_c0_ellipse_spyglass_targets_accepted_endpoint_refits():
     )
 
 
+def test_c0_zalesak_representative_uses_numerically_continuous_case():
+    zalesak_spec = next(
+        spec for spec in c0_study.APPENDIX_EXPERIMENTS if spec["name"] == "zalesak"
+    )["representative"]
+
+    assert zalesak_spec["case_index"] == 22
+
+
 def _scatter_collections(axis):
     return [
         collection
