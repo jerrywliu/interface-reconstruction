@@ -22,8 +22,10 @@ import argparse
 import json
 import subprocess
 import sys
+from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
+from typing import Union
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -44,6 +46,8 @@ from experiments.static import run_perturbed_sweeps as sweeps
 
 
 PLOTS_ROOT = REPO_ROOT / "plots"
+
+MainEndpointVisibility = Union[bool, Mapping[int, bool]]
 
 APPENDIX_RESOLUTION_EXPERIMENTS = [
     {
@@ -408,11 +412,40 @@ def _figure_bounds(
     )
 
 
+def _resolution_endpoint_visibility_spec(
+    panel_spec: dict,
+    *,
+    resolution: float,
+    main_endpoint_visibility: MainEndpointVisibility,
+) -> dict:
+    """Apply per-resolution main-panel visibility while preserving inset labels."""
+    if isinstance(main_endpoint_visibility, bool):
+        show_main_endpoints = main_endpoint_visibility
+    else:
+        grid_size = int(round(resolution * 100))
+        if grid_size not in main_endpoint_visibility:
+            raise ValueError(
+                "Missing main-panel endpoint visibility for "
+                f"N={grid_size}; configured resolutions are "
+                f"{sorted(main_endpoint_visibility)}"
+            )
+        show_main_endpoints = main_endpoint_visibility[grid_size]
+        if not isinstance(show_main_endpoints, bool):
+            raise TypeError(
+                f"Main-panel endpoint visibility for N={grid_size} must be boolean"
+            )
+
+    return maintext_figs._endpoint_visibility_spec(
+        panel_spec,
+        show_main_endpoints=show_main_endpoints,
+    )
+
+
 def _generate_figure(
     exp_spec: dict,
     out_path: Path,
     *,
-    show_main_endpoints: bool = True,
+    main_endpoint_visibility: MainEndpointVisibility = True,
 ):
     nrows = len(exp_spec["resolutions"])
     ncols = len(exp_spec["wiggles"])
@@ -463,14 +496,18 @@ def _generate_figure(
             )
             condition = "Cartesian" if wiggle == 0.0 else "Perturbed"
             title = f"{condition}, N={int(round(resolution * 100))}"
-            panel_spec = maintext_figs._endpoint_visibility_spec(
-                maintext_figs._panel_spyglass_spec({
-                    "case_index": exp_spec["case_index"],
-                    "inset": exp_spec["inset"],
-                    "true_fill_vertices": true_fill_vertices,
-                    "inset_bounds": inset_bounds,
-                }, col),
-                show_main_endpoints=show_main_endpoints,
+            panel_spec = _resolution_endpoint_visibility_spec(
+                maintext_figs._panel_spyglass_spec(
+                    {
+                        "case_index": exp_spec["case_index"],
+                        "inset": exp_spec["inset"],
+                        "true_fill_vertices": true_fill_vertices,
+                        "inset_bounds": inset_bounds,
+                    },
+                    col,
+                ),
+                resolution=resolution,
+                main_endpoint_visibility=main_endpoint_visibility,
             )
             maintext_figs._plot_panel(
                 ax,
@@ -519,7 +556,7 @@ def _generate_endpoint_variant_figures(
         _generate_figure(
             exp_spec,
             review_png,
-            show_main_endpoints=show_main_endpoints,
+            main_endpoint_visibility=show_main_endpoints,
         )
         outputs[variant_name] = vector_figure_artifacts(review_png)
     return outputs

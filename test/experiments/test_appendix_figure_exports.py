@@ -2,6 +2,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pytest
 from matplotlib.collections import PathCollection
 
 from experiments.static import figure_generation_provenance as provenance
@@ -90,8 +91,8 @@ def test_resolution_runner_generates_paired_vector_artifacts(tmp_path, monkeypat
     monkeypatch.setattr(
         resolution_visuals,
         "_generate_figure",
-        lambda exp_spec, out_path, show_main_endpoints: calls.append(
-            (Path(out_path), show_main_endpoints)
+        lambda exp_spec, out_path, main_endpoint_visibility: calls.append(
+            (Path(out_path), main_endpoint_visibility)
         ),
     )
 
@@ -113,6 +114,33 @@ def test_resolution_runner_generates_paired_vector_artifacts(tmp_path, monkeypat
         "zalesak_resolution_cartesian_vs_perturbed_clean.pdf"
     )
     assert outputs["clean"]["png_review_300dpi"].endswith("_clean.png")
+
+
+def test_resolution_endpoint_visibility_can_hide_only_the_finest_main_panels():
+    visibility = {16: True, 32: True, 64: False}
+    base_spec = {"inset": {"kind": "zalesak_corner"}}
+
+    specs = [
+        resolution_visuals._resolution_endpoint_visibility_spec(
+            base_spec,
+            resolution=resolution,
+            main_endpoint_visibility=visibility,
+        )
+        for resolution in (0.16, 0.32, 0.64)
+    ]
+
+    assert [spec["show_main_endpoints"] for spec in specs] == [True, True, False]
+    assert all(spec["show_inset_endpoints"] is True for spec in specs)
+    assert "show_main_endpoints" not in base_spec
+
+
+def test_resolution_endpoint_visibility_requires_an_explicit_mapping_entry():
+    with pytest.raises(ValueError, match=r"N=64"):
+        resolution_visuals._resolution_endpoint_visibility_spec(
+            {"inset": None},
+            resolution=0.64,
+            main_endpoint_visibility={16: True, 32: True},
+        )
 
 
 def test_c0_runner_generates_paired_representatives(tmp_path, monkeypatch):
