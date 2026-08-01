@@ -784,6 +784,7 @@ def _generate_summary_figure(
     rows: Sequence[Mapping[str, Any]],
     component_rows: Sequence[Mapping[str, Any]],
     resolution_count: int,
+    perturb_wiggle: float,
 ) -> Path:
     mpl.rcParams.update({"font.size": 9, "pdf.fonttype": 42, "ps.fonttype": 42})
     figure, axes = plt.subplots(2, 2, figsize=(10.4, 7.2))
@@ -853,8 +854,12 @@ def _generate_summary_figure(
     for axis in axes.flat:
         axis.grid(True, color="#e2e8f0", linewidth=0.6, alpha=0.7)
         axis.set_axisbelow(True)
+    mesh_label = (
+        "Cartesian" if perturb_wiggle == 0.0 else rf"perturbed ($w={perturb_wiggle:g}$)"
+    )
     figure.suptitle(
-        f"Ellipse joint conservative postprocessing: Cartesian $N={resolution_count}$",
+        f"Ellipse joint conservative postprocessing: {mesh_label}, "
+        f"$N={resolution_count}$",
         fontsize=13,
         fontweight="bold",
     )
@@ -944,6 +949,10 @@ def _write_readme(
     path: Path,
     rows: Sequence[Mapping[str, Any]],
     component_rows: Sequence[Mapping[str, Any]],
+    *,
+    resolution_count: int,
+    perturb_wiggle: float,
+    perturb_seed: int,
 ) -> None:
     total_bad_before = sum(int(row["bad_joins_before"]) for row in rows)
     total_bad_after = sum(int(row["bad_joins_after"]) for row in rows)
@@ -971,6 +980,8 @@ fallback enforces the shared endpoints and zone areas while minimizing the
 remaining tangent mismatch.
 
 - cases: `{len(rows)}`
+- resolution: `N={resolution_count}`
+- mesh perturbation: `w={perturb_wiggle:g}`, seed `{perturb_seed}`
 - rejected-join components solved: `{solved_components}/{len(component_rows)}`
 - exact-C1 components: `{exact_c1_components}`
 - conservative-C0 fallback components: `{c0_fallback_components}`
@@ -992,6 +1003,8 @@ def run(
     output_dir: Path,
     baseline_root: Path,
     resolution: float,
+    perturb_wiggle: float,
+    perturb_seed: int,
     case_indices: Sequence[int] | None,
     max_nfev: int,
 ) -> dict[str, Path]:
@@ -1035,8 +1048,8 @@ def run(
             num_ellipses=25,
             case_indices=cases,
             mesh_type="perturbed_quads",
-            perturb_wiggle=0.0,
-            perturb_seed=0,
+            perturb_wiggle=perturb_wiggle,
+            perturb_seed=perturb_seed,
             perturb_fix_boundary=True,
             do_c0=True,
             plic_fallback="LVIRA",
@@ -1068,7 +1081,11 @@ def run(
     _write_csv(component_csv, component_rows)
     summary_pdf = output_dir / "ellipse_joint_c0_summary.pdf"
     summary_png = _generate_summary_figure(
-        summary_pdf, case_rows, component_rows, int(round(100 * resolution))
+        summary_pdf,
+        case_rows,
+        component_rows,
+        int(round(100 * resolution)),
+        perturb_wiggle,
     )
     representative_pdf = output_dir / "ellipse_joint_c0_representatives.pdf"
     representative_png = _generate_representative_figure(
@@ -1078,7 +1095,14 @@ def run(
         REPO_ROOT / "plots" / run_name / "vtk" / "mesh.vtk",
     )
     readme = output_dir / "README.md"
-    _write_readme(readme, case_rows, component_rows)
+    _write_readme(
+        readme,
+        case_rows,
+        component_rows,
+        resolution_count=int(round(100 * resolution)),
+        perturb_wiggle=perturb_wiggle,
+        perturb_seed=perturb_seed,
+    )
     return {
         "case_csv": case_csv,
         "component_csv": component_csv,
@@ -1102,6 +1126,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--baseline-root", type=Path, default=DEFAULT_BASELINE_ROOT)
     parser.add_argument("--resolution", type=float, default=0.32)
+    parser.add_argument("--perturb-wiggle", type=float, default=0.0)
+    parser.add_argument("--perturb-seed", type=int, default=0)
     parser.add_argument("--case-indices", default=None)
     parser.add_argument("--max-nfev", type=int, default=3000)
     args = parser.parse_args(argv)
@@ -1110,6 +1136,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         output_dir=args.output_dir,
         baseline_root=args.baseline_root.resolve(),
         resolution=args.resolution,
+        perturb_wiggle=args.perturb_wiggle,
+        perturb_seed=args.perturb_seed,
         case_indices=_parse_case_indices(args.case_indices),
         max_nfev=args.max_nfev,
     )
