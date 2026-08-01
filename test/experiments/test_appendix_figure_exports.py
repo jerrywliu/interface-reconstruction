@@ -243,6 +243,20 @@ def test_c0_runner_generates_paired_representatives(tmp_path, monkeypatch):
     )
 
 
+def test_c0_ellipse_spyglass_targets_accepted_endpoint_refits():
+    ellipse_spec = next(
+        spec for spec in c0_study.APPENDIX_EXPERIMENTS if spec["name"] == "ellipses"
+    )["representative"]
+
+    assert ellipse_spec["inset"] == {"kind": "ellipse_continuity"}
+    assert maintext_figs._inset_bounds("ellipses", ellipse_spec) == (
+        72.0,
+        78.0,
+        48.0,
+        54.0,
+    )
+
+
 def _scatter_collections(axis):
     return [
         collection

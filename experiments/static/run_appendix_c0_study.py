@@ -80,7 +80,9 @@ APPENDIX_EXPERIMENTS = [
             ],
             "min_span": 66.0,
             "margin_frac": 0.12,
-            "inset": {"kind": "ellipse_max_curvature", "half_span": 5.0},
+            # Case 12 contains a consecutive run of accepted endpoint refits here.
+            "inset": {"kind": "ellipse_continuity"},
+            "inset_bounds": (72.0, 78.0, 48.0, 54.0),
         },
     },
     {
