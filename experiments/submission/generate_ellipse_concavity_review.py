@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import statistics
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
@@ -82,6 +83,7 @@ def _draw_case(
     mesh_segments: np.ndarray,
     *,
     zoom: bool,
+    cell_width: float,
 ) -> None:
     figures._add_segments(
         axis, mesh_segments, color="#cbd5e1", linewidth=0.30, alpha=0.7
@@ -112,7 +114,6 @@ def _draw_case(
         )
 
     if zoom:
-        cell_width = 100.0 / 32.0
         span = 2.8 * cell_width
         axis.set_xlim(worst.midpoint[0] - span / 2.0, worst.midpoint[0] + span / 2.0)
         axis.set_ylim(worst.midpoint[1] - span / 2.0, worst.midpoint[1] + span / 2.0)
@@ -172,14 +173,17 @@ def generate(
     run_root: Path,
     output_dir: Path,
     case_indices: Sequence[int],
+    *,
+    resolution_count: int,
+    perturb_wiggle: float,
 ) -> dict[str, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     mpl.rcParams.update({"font.size": 9, "pdf.fonttype": 42, "ps.fonttype": 42})
     mesh_segments = figures._mesh_segments(run_root / "vtk" / "mesh.vtk")
-    cell_width = 100.0 / 32.0
-    case_data = []
+    cell_width = 100.0 / resolution_count
+    records_by_case = {}
     all_concave_sags = []
-    for case_index in case_indices:
+    for case_index in range(25):
         params = figures._ellipse_case_params(case_index)
         records = _facet_records(
             run_root
@@ -190,18 +194,43 @@ def generate(
             params["center"],
             cell_width,
         )
+        records_by_case[case_index] = records
+        all_concave_sags.extend(
+            record.sag_over_h for record in records if record.concave
+        )
+
+    case_data = []
+    for case_index in case_indices:
+        records = records_by_case[case_index]
         truth = figures._ellipse_true_segments(case_index)
         concave_sags = [record.sag_over_h for record in records if record.concave]
-        all_concave_sags.extend(concave_sags)
         case_data.append((case_index, records, truth, concave_sags))
+
+    median_sag = statistics.median(all_concave_sags)
+    p95_sag = float(np.quantile(all_concave_sags, 0.95))
+    max_sag = max(all_concave_sags)
 
     figure, axes = plt.subplots(2, len(case_data), figsize=(4.0 * len(case_data), 7.4))
     if len(case_data) == 1:
         axes = np.asarray(axes).reshape(2, 1)
     labels = ("Mild", "Typical", "Worst")
     for column, (case_index, records, truth, concave_sags) in enumerate(case_data):
-        _draw_case(axes[0, column], records, truth, mesh_segments, zoom=False)
-        _draw_case(axes[1, column], records, truth, mesh_segments, zoom=True)
+        _draw_case(
+            axes[0, column],
+            records,
+            truth,
+            mesh_segments,
+            zoom=False,
+            cell_width=cell_width,
+        )
+        _draw_case(
+            axes[1, column],
+            records,
+            truth,
+            mesh_segments,
+            zoom=True,
+            cell_width=cell_width,
+        )
         prefix = labels[column] if column < len(labels) else "Example"
         axes[0, column].set_title(
             f"{prefix}: case {case_index}", fontsize=11, fontweight="bold"
@@ -244,22 +273,27 @@ def generate(
         ncol=3,
         frameon=False,
     )
+    mesh_label = (
+        "Cartesian" if perturb_wiggle == 0.0 else rf"perturbed ($w={perturb_wiggle:g}$)"
+    )
     figure.suptitle(
-        "Local concavity audit: Cartesian ellipse, $N=32$",
+        f"Local concavity audit: {mesh_label} ellipse, " rf"$N={resolution_count}$",
         fontsize=13,
         fontweight="bold",
     )
     figure.text(
         0.5,
         0.012,
-        "Across all 25 cases: median concave sag $0.37\%h$, "
-        "95th percentile $2.28\%h$, maximum $9.77\%h$.",
+        "Across all 25 cases: "
+        rf"median concave sag ${100 * median_sag:.2f}\%h$, "
+        rf"95th percentile ${100 * p95_sag:.2f}\%h$, "
+        rf"maximum ${100 * max_sag:.2f}\%h$.",
         ha="center",
         fontsize=9,
     )
     figure.tight_layout(rect=(0, 0.035, 1, 0.90))
-    pdf_path = output_dir / "ellipse_concavity_examples_n32.pdf"
-    png_path = output_dir / "ellipse_concavity_examples_n32.png"
+    pdf_path = output_dir / f"ellipse_concavity_examples_n{resolution_count}.pdf"
+    png_path = output_dir / f"ellipse_concavity_examples_n{resolution_count}.png"
     figure.savefig(pdf_path, bbox_inches="tight")
     figure.savefig(png_path, dpi=300, bbox_inches="tight")
     plt.close(figure)
@@ -268,9 +302,11 @@ def generate(
     summary_path.write_text(
         "# Ellipse Local Concavity Review\n\n"
         "Concave arcs are highlighted in red for mild, typical, and worst "
-        "Cartesian `N=32` cases ranked by maximum inward sag relative to cell "
-        "width. Across all 25 cases, the median concave sag is `0.37% h`, the "
-        "95th percentile is `2.28% h`, and the maximum is `9.77% h`.\n"
+        f"`N={resolution_count}`, `w={perturb_wiggle:g}` cases ranked by "
+        "maximum inward sag relative to nominal cell width. Across all 25 "
+        f"cases, the median concave sag is `{100 * median_sag:.2f}% h`, the "
+        f"95th percentile is `{100 * p95_sag:.2f}% h`, and the maximum is "
+        f"`{100 * max_sag:.2f}% h`.\n"
     )
     return {"pdf": pdf_path, "png": png_path, "readme": summary_path}
 
@@ -284,8 +320,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--run-root", type=Path, default=DEFAULT_RUN_ROOT)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--cases", default=",".join(map(str, DEFAULT_CASES)))
+    parser.add_argument("--resolution-count", type=int, default=32)
+    parser.add_argument("--perturb-wiggle", type=float, default=0.0)
     args = parser.parse_args(argv)
-    outputs = generate(args.run_root, args.output_dir, _parse_cases(args.cases))
+    outputs = generate(
+        args.run_root,
+        args.output_dir,
+        _parse_cases(args.cases),
+        resolution_count=args.resolution_count,
+        perturb_wiggle=args.perturb_wiggle,
+    )
     for path in outputs.values():
         print(path.resolve())
     return 0
