@@ -1081,6 +1081,27 @@ def _prefixed_save_name(
     return f"{save_prefix}_{base}" if save_prefix else base
 
 
+def _representative_source_save_name(
+    exp_name: str,
+    spec: dict,
+    algo: str,
+    *,
+    save_prefix: str | None = None,
+) -> str:
+    """Resolve an exact saved run when a representative mixes proven sources."""
+    source_runs = spec.get("source_runs", {})
+    if algo in source_runs:
+        return str(source_runs[algo])
+    return _prefixed_save_name(
+        exp_name,
+        algo,
+        spec["resolution"],
+        spec["wiggle"],
+        spec["seed"],
+        save_prefix=save_prefix,
+    )
+
+
 def _parse_figure_groups(raw: str) -> set[str]:
     if raw.strip().lower() == "all":
         return set(FIGURE_GROUPS)
@@ -1539,12 +1560,10 @@ def _generate_representative_figure(
     save_prefix: str | None = None,
 ):
     base_method = spec["methods"][0][0]
-    base_save_name = _prefixed_save_name(
+    base_save_name = _representative_source_save_name(
         exp_name,
+        spec,
         base_method,
-        spec["resolution"],
-        spec["wiggle"],
-        spec["seed"],
         save_prefix=save_prefix,
     )
     mesh_path = PLOTS_ROOT / base_save_name / "vtk" / "mesh.vtk"
@@ -1568,12 +1587,10 @@ def _generate_representative_figure(
         zip(flat_axes, spec["methods"])
     ):
         panel_spec = _panel_spyglass_spec(spec, panel_index % 2)
-        save_name = _prefixed_save_name(
+        save_name = _representative_source_save_name(
             exp_name,
+            spec,
             algo,
-            spec["resolution"],
-            spec["wiggle"],
-            spec["seed"],
             save_prefix=save_prefix,
         )
         (

@@ -265,6 +265,22 @@ def test_c0_zalesak_representative_uses_numerically_continuous_case():
     assert zalesak_spec["case_index"] == 22
 
 
+def test_representative_can_bind_each_panel_to_an_exact_source_run():
+    spec = {
+        "resolution": 0.32,
+        "wiggle": 0.1,
+        "seed": 0,
+        "source_runs": {"linear+C0": "validated_joint_c0_run"},
+    }
+
+    assert maintext_figs._representative_source_save_name(
+        "ellipses", spec, "linear+C0", save_prefix="ignored"
+    ) == "validated_joint_c0_run"
+    assert maintext_figs._representative_source_save_name(
+        "ellipses", spec, "linear", save_prefix="paper"
+    ) == "paper_perturb_sweep_ellipses_linear_r0p32_w0p1_s0"
+
+
 def _scatter_collections(axis):
     return [
         collection
