@@ -514,8 +514,6 @@ PDF has zero raster image objects and no unembedded fonts.
   `git -C <paper-worktree> rev-parse HEAD`. Durable documentation must not pin a
   paper commit that becomes stale on the next writing edit.
 
-- Publish the approved ellipse case-9 and Zalesak case-22 C0 representatives in
-  a new immutable figure publication, then update the 26-row approval ledger.
 - Decide whether the public artifact is the complete sealed release or the
   compact archive defined above. The current author preference is compact data
   plus an "available on reasonable request" statement for large cell-level
