@@ -116,6 +116,14 @@ $FINAL_FIGURE_ROOT/
 
 Only PDFs under `candidates/` are eligible for manuscript promotion.
 
+The authoritative 2026-08-03 publication is
+`final_figures_87c40309d16c_20260803_final`. Its completed 26-slot author
+selection and exact published-candidate checksums are recorded in
+`submission/approved_final_figures_20260803.csv`. Promotion completed at
+Overleaf commits `1ea4d3e` (ellipse) and `b593f5d` (Zalesak), with both files in
+standalone paper commit `d2d9548`; all four promoted copies passed vector QA and
+match the published checksums.
+
 ## Compatibility
 
 Historical and ordinary plotting commands keep their existing interfaces. For

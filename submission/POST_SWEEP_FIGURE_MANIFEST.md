@@ -19,9 +19,12 @@ The three row-level maps serve different stages of the review:
 - `review/figure_candidate_source_map.csv` is generated with the packet and binds
   all 41 concrete PDFs to producer inputs and evidence.
 
-After the author selects one PDF for each selectable slot, the approved-figures CSV
-described in `submission/SUBMISSION_PACKAGING.md` pins the selected 26 manuscript
-paths and file digests. Until then, no candidate is promoted automatically.
+The completed author selection is recorded in
+`submission/approved_final_figures_20260803.csv`. It pins all 26 manuscript
+slots to exact candidate IDs, variants, publication-relative paths, and file
+digests. All 26 selected assets are promoted; the two final C0 representatives
+are recorded at Overleaf commits `1ea4d3e` and `b593f5d` and standalone paper
+commit `d2d9548`.
 
 ## Figure Families
 

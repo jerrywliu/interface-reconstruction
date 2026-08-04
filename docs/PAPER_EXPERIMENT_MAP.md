@@ -253,9 +253,13 @@ from the two commands above.
 | `zalesak_appendix_c0_representative` | Globally continuous guarded case 22 candidates under `$FIGURE_PUBLICATION/candidates/c0_root/representative_cases/zalesak_appendix_c0_representative_{with_endpoints,clean}.pdf` |
 
 The author selected the clean connected-component ellipse case 9 and clean
-globally continuous Zalesak case 22 representatives on 2026-08-03. Their final
-promotion still requires the new immutable orchestrator publication and exact
-published checksums. Historical pre-guard `C0` assets are ineligible.
+globally continuous Zalesak case 22 representatives on 2026-08-03. The immutable
+publication is `final_figures_87c40309d16c_20260803_final`; exact candidate IDs,
+paths, and checksums for all 26 selected slots are recorded in
+`submission/approved_final_figures_20260803.csv`. The two paper files still
+contain those exact published bytes: ellipse was promoted to Overleaf at
+`1ea4d3e`, Zalesak at `b593f5d`, and both are in standalone paper commit
+`d2d9548`. Historical pre-guard `C0` assets are ineligible.
 
 ### P5: Deterministic Explanatory Figures
 
@@ -492,10 +496,10 @@ PDF has zero raster image objects and no unembedded fonts.
   narrow the abstract/introduction/method-overview wording to the demonstrated
   metric and benchmark or add separately mapped evidence for a broader claim.
   Any manuscript change remains blue until approved.
-- **Guarded-`C0` representative publication is in progress.** The author chose
-  connected-component ellipse case 9 and guarded Zalesak case 22. Publish the
-  fresh attested candidates, promote their exact bytes, and reconcile the
-  captions with the two distinct correction procedures. Any manuscript change
+- **Guarded-`C0` representative publication and promotion passed.** The author
+  chose connected-component ellipse case 9 and guarded Zalesak case 22. Both
+  checksum-pinned clean candidates are installed in Overleaf and the standalone
+  paper; `4/4` promoted copies passed vector QA. Any later manuscript change
   remains blue until approved.
 - **The reproducibility seed sentence is ambiguous.** It currently says only
   that the perturbed-mesh experiments use seed `0`. A blue revision should state
