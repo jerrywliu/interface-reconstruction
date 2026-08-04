@@ -3,7 +3,7 @@
 Updated: 2026-03-03
 
 > **Superseded for final results:** This March 2026 bundling workflow is retained
-> for historical replay. New submission results use
+> under `archive/march_2026_camera_ready/` for historical replay. New submission results use
 > `submission/run_final_static_sweep.sh` and the immutable release workflow mapped
 > in `docs/PAPER_EXPERIMENT_MAP.md`.
 
@@ -34,7 +34,7 @@ with subfolders:
 
 ## Script Entry Points
 
-All scripts are in `experiments/static/`.
+All scripts are in `archive/march_2026_camera_ready/`.
 
 - `run_cameraready_static_all.sh`
   - One-command pipeline: perturbed sweep(s) + Cartesian sweep(s) + release bundle.
@@ -63,29 +63,29 @@ All scripts are in `experiments/static/`.
 Full pipeline:
 
 ```bash
-./experiments/static/run_cameraready_static_all.sh
+./archive/march_2026_camera_ready/run_cameraready_static_all.sh
 ```
 
 Perturbed-all static tests (Section 6 coverage):
 
 ```bash
-ONLY=lines,circles,ellipses,squares,zalesak ./experiments/static/run_cameraready_static_perturbed.sh
+ONLY=lines,circles,ellipses,squares,zalesak ./archive/march_2026_camera_ready/run_cameraready_static_perturbed.sh
 ```
 
 Retro-wire current outputs into a structured release:
 
 ```bash
-./experiments/static/retro_wire_static_cameraready_existing.sh
+./archive/march_2026_camera_ready/retro_wire_static_cameraready_existing.sh
 ```
 
 Sync bundled `paper_figs/` to Overleaf:
 
 ```bash
-SYNC_OVERLEAF=1 ./experiments/static/bundle_static_cameraready_release.sh
+SYNC_OVERLEAF=1 ./archive/march_2026_camera_ready/bundle_static_cameraready_release.sh
 ```
 
 Disable Slack notifications for a run:
 
 ```bash
-NOTIFY=0 ./experiments/static/run_cameraready_static_all.sh
+NOTIFY=0 ./archive/march_2026_camera_ready/run_cameraready_static_all.sh
 ```

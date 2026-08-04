@@ -1,18 +1,39 @@
 # Interface Reconstruction
 
-An example implementation in Python of an interface reconstruction method, using linear/circular elements and cusps.
+Python implementation and reproducibility tooling for a volume-of-fluid
+interface reconstruction method using line, circular-arc, and corner facets.
 
-## Quick Start
+The paper-facing production configuration is frozen as:
 
-This repository includes current paper workflows alongside historical research
-drivers. Start with the status index before choosing an entry point:
+```text
+corner behavior: pre_f8_corner
+rescue profile:  exact_linear_support_only
+PLIC fallback:   LVIRA
+```
 
-- `docs/ENTRY_POINTS.md`: canonical, supported research, and legacy commands
-- `docs/DEPENDENCIES.md`: runtime, test, and figure environments
-- `docs/GENERATED_FILES.md`: scratch-output and release-metadata policy
-- `docs/PAPER_EXPERIMENT_MAP.md`: paper experiments and plots mapped to code
+The defaults are enforced in the implementation, benchmark CLIs, submission
+configuration, and regression tests.
 
-Install the frozen runtime and test tooling, then run the test suite:
+## Start Here
+
+| Goal | Entry point |
+|---|---|
+| Understand the supported source tree | `docs/CODE_STRUCTURE.md` |
+| Run one static benchmark | `python -m experiments.static.<benchmark>` |
+| Reproduce the frozen full sweep | `submission/run_final_static_sweep.sh` |
+| Map every paper result and figure to code | `docs/PAPER_EXPERIMENT_MAP.md` |
+| Regenerate final vector figures | `submission/run_final_figure_orchestrator` |
+| Build the submission package | `submission/package_submission.py` |
+| Inspect supported and archived entry points | `docs/ENTRY_POINTS.md` |
+
+The five paper benchmarks are `lines`, `squares`, `circles`, `ellipses`, and
+`zalesak`. Historical implementations, wrappers, camera-ready scripts, and
+dated ablations are isolated under `archive/`; supported code does not import
+from that directory.
+
+## Install And Test
+
+The validated public environment uses CPython 3.9.
 
 ```bash
 python3.9 -m venv .venv
@@ -21,9 +42,13 @@ python -m pip install -r requirements-test.txt
 python -m pytest -q test
 ```
 
-For a compact targeted reconstruction, run one deterministic circle case. Paper-
-facing runs use `LVIRA` whenever the oriented reconstruction requires a PLIC
-fallback:
+Use `requirements-figures.txt` when regenerating paper figures. Dependency and
+clean-environment details are in `docs/DEPENDENCIES.md` and
+`submission/CLEAN_ENV_REPRODUCIBILITY_VALIDATION.md`.
+
+## Run A Targeted Case
+
+Run commands from the repository root and use a unique output name:
 
 ```bash
 python -m experiments.static.circles \
@@ -35,68 +60,9 @@ python -m experiments.static.circles \
   --save_name quickstart_circle
 ```
 
-The frozen full-paper sweep is launched through
-`submission/run_final_static_sweep.sh`. It is intentionally not the quick-start
-command because it plans 970 runs and 24,250 cases; consult the submission config
-and paper experiment map first.
-
-For a full description of the sweep experiments (linear + perturbed), see `docs/EXPERIMENTS.md`.
-For local plotting and reconstruction inspection, see `docs/VISUALIZATION_WORKFLOW.md`.
-For the single fail-closed final paper-figure workflow, see
-`submission/FINAL_FIGURE_REGENERATION.md`. For the paper-to-code map of Section 6
-experiments, final data, diagnostics, and every figure asset, see
-`docs/PAPER_EXPERIMENT_MAP.md`.
-
-For deterministic, fail-closed assembly of the final code/manuscript package, see `submission/SUBMISSION_PACKAGING.md`.
-
-## Contributors
-
-Jerry Liu, jwl50@stanford.edu
-
-## Table of Contents
-
-- [Algorithms](#algorithms)
-- [Static Experiments](#static-experiments)
-- [Advection Experiments](#advection-experiments)
-- [Limitations](#limitations)
-
-## Algorithms
-
-Our algorithms consist of two main features:
-- **Circular facets**
-- **Corner facets** (either linear or circular), which requires merging cells
-
-### Supported Algorithms
-
-#### Baselines
-- **Youngs**
-- **ELVIRA**
-- **LVIRA**
-
-#### Our Algorithms
-
-**Independent Cells**
-- **safe_linear**: Linear reconstruction without shared topology or merging
-- **safe_circle**: Circular reconstruction without shared topology or merging
-
-**Coordinated Topology And Merging**
-- **linear**: Linear reconstruction with coordinated topology and merging
-- **circular**: Circular reconstruction with coordinated topology and merging
-
-## Static Experiments
-
-The supported targeted interface is the benchmark's Python module. Set the config,
-method, resolution, cases, fallback, and unique output name explicitly. For example:
+For the full corner method, the frozen profile can be written explicitly:
 
 ```bash
-python -m experiments.static.ellipses \
-  --config static/ellipse \
-  --facet_algo circular \
-  --resolution 1.0 \
-  --case_indices 0 \
-  --plic_fallback LVIRA \
-  --save_name example_ellipse
-
 python -m experiments.static.zalesak \
   --config static/zalesak \
   --facet_algo 'circular+corner' \
@@ -105,67 +71,34 @@ python -m experiments.static.zalesak \
   --plic_fallback LVIRA \
   --corner_behavior_profile pre_f8_corner \
   --rescue_profile exact_linear_support_only \
-  --save_name example_zalesak
+  --save_name quickstart_zalesak
 ```
 
-The corresponding modules and configs are:
+Outputs are written beneath `plots/<save_name>/`. The audited final result set
+uses an immutable release layout rather than those mutable local directories;
+see `docs/PAPER_EXPERIMENT_MAP.md` before reproducing manuscript results.
 
-| Benchmark | Module | Config |
-|---|---|---|
-| Lines | `experiments.static.lines` | `static/line` |
-| Circles | `experiments.static.circles` | `static/circle` |
-| Ellipses | `experiments.static.ellipses` | `static/ellipse` |
-| Squares | `experiments.static.squares` | `static/square` |
-| Zalesak | `experiments.static.zalesak` | `static/zalesak` |
+## Reproduce The Paper
 
-Use `bash submission/run_final_static_sweep.sh` for the exact paper result set;
-per-shape `experiments/static/run_*.sh` files are retained as legacy convenience
-wrappers and are not equivalent to that launcher. The tracked
-`results/static/*_reconstruction_results.txt` files and root `test.vtp` are small
-historical artifacts, not the audited final release. See `docs/ENTRY_POINTS.md` for
-the complete status classification and `docs/VISUALIZATION_WORKFLOW.md` for plotting
-from an immutable release.
-
-## Advection Experiments
-
-These are supported research configurations, not sources for the paper's final
-static result set. See `docs/ENTRY_POINTS.md` for that distinction.
-
-### Zalesak's Disk
-```bash
-python3 run.py --config advection/zalesak/50/zalesak_50_ccorner
-python3 run.py --config advection/zalesak/100/zalesak_100_ccorner
-```
-
-### x+o Problem
-```bash
-# Working configuration
-python3 run.py --config advection/x+o/50/x+o_50_safecircle
-
-# Other configurations
-python3 run.py --config advection/x+o/50/x+o_50_circular
-python3 run.py --config advection/x+o/50/x+o_50_ccorner  # TODO: Producing circular facets with inverted curvature and incorrect corners
-python3 run.py --config advection/x+o/100/x+o_100_ccorner
-python3 run.py --config advection/x+o/150/x+o_150_ccorner  # TODO: Mostly ok, but need to adjust corner threshold. Some corners failing and reforming
-```
-
-### Vortex Problem
-**Algorithms**: safecirclec0, safecircle, safelinear  
-**Resolutions**: 32, 64, 128
+The full submission sweep contains 970 runs and 24,250 cases. Inspect its
+resolved configuration and dry-run gates before launching:
 
 ```bash
-python3 run.py --config advection/vortex/32/vortex_32_safecirclec0
-python3 run.py --config advection/vortex/50/vortex_50_safecircle
-python3 run.py --config advection/vortex/100/vortex_100_safecircle
+python submission/check_submission_freeze.py --source-only
+bash submission/run_final_static_sweep.sh
 ```
 
-## Limitations
+Final figures are direct vector PDFs generated from the sealed numerical
+release through the fail-closed orchestrator. Manual plot commands are useful
+for diagnosis but are not authoritative submission candidates.
 
-The manuscript and submission audit document the validated scope and known
-limitations of the frozen method. Historical scripts and profiles may retain older
-failure modes and are classified in `docs/ENTRY_POINTS.md`; they are not supported
-sources of new paper results.
+## Data And Provenance
 
----
+Disposable local products such as `plots/`, logs, raster previews, and virtual
+environments are ignored. Release CSV, JSON, PDF, SVG, VTK/VTP, checksum, and
+manifest files remain visible for review. See `docs/GENERATED_FILES.md` for the
+policy and `submission/CODE_REPRODUCIBILITY_AUDIT.md` for the trust model.
 
-<div align="right"><a href="#table-of-contents">back to top</a></div>
+The repository preserves compact audit evidence and the code needed to
+reproduce paper outputs. Large sealed releases and raw cell-level bundles are
+managed as external immutable artifacts rather than committed source files.

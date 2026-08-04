@@ -1,52 +1,57 @@
 # Entry Point Status
 
-This repository retains current paper workflows, exploratory utilities, and older
-research drivers. The labels below distinguish supported public entry points from
-historical replay paths without deleting code that may still be useful.
+This repository distinguishes supported paper workflows, current research
+interfaces, and archived historical source. See `docs/CODE_STRUCTURE.md` for the
+module-level map.
 
 ## Canonical Paper And Release Paths
 
 | Task | Entry point | Status |
 |---|---|---|
-| Reproduce the frozen full static result set | `bash submission/run_final_static_sweep.sh` | Canonical submission launcher. It fixes the benchmark grid, method profiles, seeds, fallback policy, diagnostics, and release layout. Read the submission configuration before running; this is a large sweep. |
-| Check a source or release freeze | `python submission/check_submission_freeze.py --source-only` or the full checker | Canonical preflight audit. The full checker also requires an approved frozen configuration and matching commit. |
-| Capture the execution environment | `python submission/capture_environment.py --output <release>/environment.json` | Canonical release metadata utility. Run it with the same interpreter used for the sweep. |
-| Run one static benchmark | `python -m experiments.static.{lines,circles,ellipses,squares,zalesak}` | Supported targeted interface. Set the method, resolution, case indices, mesh perturbation, and output name explicitly. |
-| Map paper results and figures to code | `docs/PAPER_EXPERIMENT_MAP.md` | Canonical paper-to-code index, including exact final-data and figure commands. |
-| Regenerate and inspect figures | `docs/VISUALIZATION_WORKFLOW.md` and `submission/FINAL_FIGURE_REGENERATION.md` | Supported plotting workflow. Regenerate from an immutable release bundle rather than mutable top-level run directories. |
-| Validate vector PDFs | `python submission/pdf_vector_qa.py <pdf-or-directory>` | Canonical PDF QA. Requires Poppler command-line tools. |
-| Run automated tests | `python -m pytest -q test` | Canonical local test command. The live Slack integration is skipped unless explicitly enabled. |
+| Reproduce the frozen full static result set | `bash submission/run_final_static_sweep.sh` | Canonical submission launcher; fixes benchmark grid, profiles, seeds, fallback policy, diagnostics, and release layout. |
+| Check a source or result freeze | `python submission/check_submission_freeze.py --source-only` or the full checker | Canonical preflight and release gate. |
+| Capture the execution environment | `python submission/capture_environment.py --output <release>/environment.json` | Canonical environment record. |
+| Run one static benchmark | `python -m experiments.static.{lines,circles,ellipses,squares,zalesak}` | Supported targeted interface. Set method, resolution, cases, mesh perturbation, and a unique output name explicitly. |
+| Map paper results and figures to code | `docs/PAPER_EXPERIMENT_MAP.md` | Canonical paper-to-code index. |
+| Regenerate final figures | `submission/run_final_figure_orchestrator` | Only supported producer of final allowlisted vector candidates. |
+| Validate vector PDFs | `python submission/pdf_vector_qa.py <pdf-or-directory>` | Canonical vector, raster-object, and font check. |
+| Build the submission package | `python submission/package_submission.py ...` | Deterministic, fail-closed final package assembly. |
+| Run automated tests | `python -m pytest -q test` | Canonical local test command. Live Slack integration remains opt-in. |
 
-The full submission launcher delegates to
+The full sweep launcher delegates to
 `experiments/static/run_perturbed_sweeps.py`. Direct controller use is supported
-for development and plot-only replay, but it is not equivalent to the frozen
-submission command unless every launcher parameter is reproduced.
+for development and plot-only replay, but is not equivalent to the frozen
+launcher unless every recorded parameter is reproduced.
 
 ## Supported Research Interfaces
 
 | Path | Intended use |
 |---|---|
-| `run.py` | YAML-driven static/advection research runs. It is maintained as a research interface, but it is not the source of the paper's final static tables. Run it from the repository root because configuration paths are repository-relative. |
-| `experiments/submission/*.py` | Focused conservation, convergence, topology, ablation, and failure-diagnosis studies used to audit manuscript claims. Consult the paper experiment map for the exact applicable command and source bundle. |
-| `experiments/static/replay_zalesak_outlier.py` | Deterministic replay of a selected Zalesak case for diagnosis and visual comparison. |
-| `experiments/static/run_linear_sweeps.py` | General Cartesian development sweep. Useful for exploratory comparison, but not the frozen submission grid. |
+| `run.py` | YAML-driven static/advection research runs using the current reconstruction structures. Not a source for final paper tables. |
+| `experiments/static/run_linear_sweeps.py` | General Cartesian development sweep. |
+| `experiments/static/replay_zalesak_outlier.py` | Deterministic replay of a selected Zalesak case. |
+| `experiments/submission/*.py` | Conservation, convergence, topology, continuity, ablation, and failure diagnostics used to validate manuscript claims. |
+| `experiments/static/{build_figure_review_pdf,prepare_figure_review,generate_figure_review_diagnostics}.py` | Author-review tooling; does not publish final candidates. |
 
-## Legacy Or Superseded Paths
+## Archived Paths
 
-These files are retained for historical reproduction. They should not be used to
-generate new paper results.
+Archived code is tracked for provenance but unsupported for new paper results.
+Supported source does not import from `archive/`.
 
-| Path | Reason |
-|---|---|
-| `run_old.py`, root-level compatibility modules such as `facet.py`, and the older `main/algos/{plic,local_reconstruction,static_interface_reconstruction}.py` stack | Pre-package implementation path with hard-coded settings and older imports. The current method uses `util/reconstruction.py`, `main/structs/`, and `main/algos/plic_normals.py`. |
-| `run_static.sh` and `run_advection.sh` | Hard-coded convenience loops from earlier development. Use direct module/config commands for new work. |
-| `main/algos/static_interface_reconstruction.py` | Older reconstruction path with process-global random behavior; it is outside the final submission launcher. |
-| `util/initialize/initialize_areas_old.py` | Retained initialization implementation from the older code path. |
-| `run_cameraready_static_*.sh`, `bundle_static_cameraready_release.sh`, and `retro_wire_static_cameraready_existing.sh` | March 2026 camera-ready workflow, superseded for final results by the submission launcher and immutable release bundle. |
-| Per-shape `experiments/static/run_{lines,circles,ellipses,squares,zalesak}.sh` wrappers | Historical convenience sweeps that also replay tracked summary text files. Their configs and LVIRA fallback are kept valid, but direct module commands are required for recorded work. |
-| `results/static/*_reconstruction_results.txt` and root `test.vtp` | Small historical artifacts retained for replay/provenance. They are not members of the audited final result release. |
-| Scripts named for a dated ablation, shard finalization, or candidate analysis | Artifact-specific historical analysis. Use only with the result layout documented by that study. |
+| Current archive path | Former path or role | Replacement |
+|---|---|---|
+| `archive/legacy_v1/` | Root `facet.py`, `run_old.py`, old `main/algos/` stack, old initialization, examples, and sample VTP | `main/structs/`, `main/geoms/`, and `util/reconstruction.py` |
+| `archive/legacy_wrappers/` | Root and per-shape hard-coded shell loops | Direct benchmark modules or the final sweep launcher |
+| `archive/march_2026_camera_ready/` | March mutable camera-ready scripts and notification helper | Final figure orchestrator and immutable publication workflow |
+| `archive/ablations/` | Dated corner/rescue/fallback analyses | Frozen `pre_f8_corner + exact_linear_support_only + LVIRA` profile |
+| `archive/historical_sweeps/` | Affected-row, parallel, and repair scripts | Canonical static controller and final sweep launcher |
+| `archive/historical_experiment_docs/` | Superseded algorithm and benchmark notes | Tested paper experiment map and static package README |
 
-Legacy means "not a supported source of new submission results," not necessarily
-"broken." Moving or deleting these paths would make historical replay harder and
-is intentionally outside this cleanup.
+Tracked `results/static/*_reconstruction_results.txt` files are small historical
+summary artifacts. They remain in place because supported benchmark CLIs still
+offer an explicit compatibility plot/replay mode, but they are not members of
+the audited final release.
+
+Archive status means "not supported for new submission results," not
+necessarily broken. Historical source may depend on layouts or artifacts that
+are absent from a fresh checkout.

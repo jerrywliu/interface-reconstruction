@@ -39,7 +39,7 @@ whole-release checksum snapshot after the approved figure packet is added.
 | Environment consistency | Accepted with limited scope | The sweep stack differs from the public pins, but three paper-facing smokes showed no reconstruction-decision change and only negligible roundoff differences. Preserve both records and do not claim bitwise or cross-platform identity. |
 | Test capture | Good for the declared target | `requirements-test.txt` and a CPython 3.9 GitHub Actions workflow run the source audit and full suite. A broader Python/platform matrix is not claimed. |
 | Generated-file hygiene | Good | `.gitignore` excludes scratch roots and raster previews while keeping release CSV/JSON/PDF/VTK/manifests visible; `docs/GENERATED_FILES.md` records the policy. |
-| Stale scripts | Classified | `docs/ENTRY_POINTS.md` distinguishes canonical, supported research, and legacy/superseded paths without deleting replay code. |
+| Stale scripts | Isolated | `docs/ENTRY_POINTS.md` distinguishes canonical and supported research paths; pre-package code, dated ablations, and superseded wrappers are tracked under `archive/`. |
 
 ## Completed Low-Risk Cleanup
 
@@ -83,10 +83,9 @@ the precomputed specification order. Exact case geometry is saved, so a replay d
 not have to infer the sampled interfaces.
 
 The guarantee does not extend to every historical entry point. In particular,
-`main/algos/static_interface_reconstruction.py` uses the process-global `random`
-module without seeding. It is not used by the final submission launcher and should
-be labeled legacy or retired in a later cleanup rather than silently treated as a
-reproducible paper driver.
+`archive/legacy_v1/source/main/algos/static_interface_reconstruction.py` uses the
+process-global `random` module without seeding. It is isolated from supported
+imports and retained only as a pre-package source snapshot.
 
 Bitwise-identical output across different numerical stacks is not established.
 SciPy optimization, BLAS/LAPACK, GEOS/Shapely, VTK, Matplotlib, and font-library
@@ -127,8 +126,8 @@ bash submission/run_final_static_sweep.sh
 ```
 
 The launcher changes to the repository root before invoking modules, which avoids
-the relative-path assumptions in `util/config.py`. Direct use of `run.py` and some
-legacy shell scripts remains dependent on being launched from the repository root.
+the relative-path assumptions in `util/config.py`. Direct use of `run.py` and
+archived shell scripts remains dependent on being launched from the repository root.
 The root README points readers to `docs/ENTRY_POINTS.md`,
 `docs/DEPENDENCIES.md`, and `docs/PAPER_EXPERIMENT_MAP.md`; the launcher and map,
 not historical command examples later in the README, define the submission recipe.
@@ -257,9 +256,11 @@ record are final.
 
 The repository now ignores disposable scratch roots and raster previews while
 leaving release CSV, JSON, PDF, SVG, VTK, environment, checksum, and manifest files
-visible. `docs/GENERATED_FILES.md` records this policy. `docs/ENTRY_POINTS.md`
-classifies `run_old.py`, old initialization modules, historical camera-ready
-launchers, and optional research tooling without deleting paths needed for replay.
+visible. `docs/GENERATED_FILES.md` records this policy. The 2026-08-03 structure
+pass moved the pre-package implementation, old initialization, historical
+camera-ready launchers, dated ablations, and hard-coded wrappers under `archive/`.
+No result or diagnostic artifact was deleted. `docs/CODE_STRUCTURE.md` records
+the supported tree and retention rationale.
 
 ## Completed And Remaining Verification
 

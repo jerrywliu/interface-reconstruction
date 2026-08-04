@@ -148,12 +148,11 @@ This is the preferred workflow for:
 - Use `generate_section6_maintext_figures` when you want paper-style representative figures and compact main-text panels.
 - Use `replay_zalesak_outlier` when you are debugging a specific mixed-feature failure.
 
-## Relation To Camera-Ready Workflow
+## Relation To Final Figure Publication
 
-For release-style static figure bundling and Overleaf synchronization, see:
+For fail-closed regeneration and publication of final paper candidates, see
+`submission/FINAL_FIGURE_REGENERATION.md`. This document covers day-to-day local
+inspection; manual outputs are not authoritative submission candidates.
 
-- `docs/STATIC_CAMERAREADY_WORKFLOW.md`
-
-That document is about release packaging.
-This document is about day-to-day local inspection and figure regeneration.
-
+The superseded March 2026 mutable bundling workflow is preserved only at
+`archive/march_2026_camera_ready/README.md`.

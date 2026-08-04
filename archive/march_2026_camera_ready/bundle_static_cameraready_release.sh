@@ -164,7 +164,7 @@ if [[ "$SYNC_OVERLEAF" == "1" ]]; then
 fi
 
 if [[ "$NOTIFY" == "1" ]]; then
-  python3 -m experiments.static.notify_cameraready_release \
+  python3 "$SCRIPT_DIR/notify_cameraready_release.py" \
     --release_dir "$RELEASE_DIR" \
     --message "Static camera-ready bundle ready: ${RELEASE_ID}"
 fi
