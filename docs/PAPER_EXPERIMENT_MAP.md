@@ -263,12 +263,14 @@ python -m experiments.static.run_appendix_c0_study \
 | Active paper asset | Generated vector candidate |
 | --- | --- |
 | `ellipses_appendix_c0_2x2.pdf` | `$C0_ROOT/summary_plots/ellipses_appendix_c0_2x2.pdf` |
-| `ellipses_appendix_c0_representative.pdf` | `$C0_ROOT/representative_cases/ellipses_appendix_c0_representative_{with_endpoints,clean}.pdf` |
+| `ellipses_appendix_c0_representative.pdf` | Final orchestrator: connected-component case 9 candidates under `candidates/c0_root/representative_cases/ellipses_appendix_c0_representative_{with_endpoints,clean}.pdf` |
 | `zalesak_appendix_c0_2x2.pdf` | `$C0_ROOT/summary_plots/zalesak_appendix_c0_2x2.pdf` |
-| `zalesak_appendix_c0_representative.pdf` | `$C0_ROOT/representative_cases/zalesak_appendix_c0_representative_{with_endpoints,clean}.pdf` |
+| `zalesak_appendix_c0_representative.pdf` | Final orchestrator: globally continuous guarded case 22 candidates under `candidates/c0_root/representative_cases/zalesak_appendix_c0_representative_{with_endpoints,clean}.pdf` |
 
-The representative variants require author selection; the two metric panels do
-not. Historical pre-guard `C0` assets are ineligible.
+The author selected the clean connected-component ellipse case 9 and clean
+globally continuous Zalesak case 22 representatives on 2026-08-03. Their final
+promotion still requires the new immutable orchestrator publication and exact
+published checksums. Historical pre-guard `C0` assets are ineligible.
 
 ### Deterministic explanatory figures
 
@@ -448,11 +450,11 @@ PAPER_ROOT="$PAPER_ROOT" FINAL_ROOT="$FINAL_ROOT" \
   narrow the abstract/introduction/method-overview wording to the demonstrated
   metric and benchmark or add separately mapped evidence for a broader claim.
   Any manuscript change remains blue until approved.
-- **Guarded-`C0` numerical prose is unresolved.** The currently installed
-  appendix values and captions predate the final guarded study. Regenerate all
-  165 guarded settings, run the conservation validation above, and reconcile
-  every reported median and continuity/conservation statement before promotion.
-  Any manuscript change remains blue until approved.
+- **Guarded-`C0` representative publication is in progress.** The author chose
+  connected-component ellipse case 9 and guarded Zalesak case 22. Publish the
+  fresh attested candidates, promote their exact bytes, and reconcile the
+  captions with the two distinct correction procedures. Any manuscript change
+  remains blue until approved.
 - **The reproducibility seed sentence is ambiguous.** It currently says only
   that the perturbed-mesh experiments use seed `0`. A blue revision should state
   that `0` is the mesh-perturbation seed and separately report geometry-stream

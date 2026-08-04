@@ -161,6 +161,7 @@ from submission.final_figure_orchestration import (
     stage_all_method_candidates,
     validate_c0_manifests,
     validate_c0_metrics,
+    validate_c0_replacement_manifest,
     validate_final_release_contract,
     validate_maintext_manifest,
     validate_plic_metadata,
@@ -1437,6 +1438,104 @@ def orchestrate_final_figures(
             )
             for experiment in ("ellipses", "zalesak")
         }
+        c0_representative_runs = {}
+        for experiment in ("ellipses", "zalesak"):
+            representative = C0_REPRESENTATIVES[experiment]
+            c0_payload = load_json_object(c0_paths[experiment])
+            representative_runs = [
+                run
+                for run in c0_payload["runs"]
+                if _same_number(run.get("resolution"), representative["resolution"])
+                and _same_number(run.get("wiggle"), representative["wiggle"])
+                and run.get("seed") == representative["seed"]
+            ]
+            _require(
+                {run.get("variant") for run in representative_runs}
+                == set(C0_VARIANTS[experiment]),
+                f"Guarded-C0 representative run set differs for {experiment}",
+            )
+            c0_representative_runs[experiment] = {
+                str(run["variant"]): str(run["save_name"])
+                for run in representative_runs
+            }
+
+        connected_run_name = (
+            "final_connected_c0_ellipses_linearplusc0_" "r0p32_w0p1_s0_case9"
+        )
+        connected_out = generated / "connected_c0" / "ellipses"
+        connected_cmd = [
+            python,
+            "-B",
+            "-m",
+            "experiments.submission.ellipse_joint_c0_posthoc",
+            "--run-name",
+            connected_run_name,
+            "--output-dir",
+            str(connected_out),
+            "--baseline-root",
+            str(plots_root / c0_representative_runs["ellipses"]["linear+C0"]),
+            "--plots-root",
+            str(plots_root),
+            "--resolution",
+            "0.32",
+            "--perturb-wiggle",
+            "0.1",
+            "--perturb-seed",
+            "0",
+            "--case-indices",
+            "9",
+            "--max-nfev",
+            "3000",
+        ]
+        _require(
+            not connected_out.exists()
+            and not (plots_root / connected_run_name).exists(),
+            "Connected-C0 ellipse generator root already exists",
+        )
+        run_approved_command(
+            connected_cmd, execution, env, logs / "connected_c0_ellipse.log"
+        )
+        ellipse_replacement_runs = dict(c0_representative_runs["ellipses"])
+        ellipse_replacement_runs["linear+C0"] = connected_run_name
+        zalesak_replacement_runs = dict(c0_representative_runs["zalesak"])
+
+        replacement_out = generated / "approved_c0_representatives"
+        replacement_cmd = [
+            python,
+            "-B",
+            "-m",
+            "experiments.submission.generate_c0_replacement_representatives",
+            "--output-dir",
+            str(replacement_out),
+            "--plots-root",
+            str(plots_root),
+            "--ellipse-summary",
+            str(connected_out / "case_summary.csv"),
+            "--ellipse-case",
+            "9",
+            "--zalesak-case",
+            "22",
+        ]
+        for label, run_name in ellipse_replacement_runs.items():
+            replacement_cmd.extend(("--ellipse-run", f"{label}={run_name}"))
+        for label, run_name in zalesak_replacement_runs.items():
+            replacement_cmd.extend(("--zalesak-run", f"{label}={run_name}"))
+        _require(
+            not replacement_out.exists(),
+            "Approved C0 representative generator root already exists",
+        )
+        run_approved_command(
+            replacement_cmd, execution, env, logs / "approved_c0_representatives.log"
+        )
+        replacement_contract = validate_c0_replacement_manifest(
+            replacement_out / "manifest.json",
+            plots_root=plots_root,
+            ellipse_summary=connected_out / "case_summary.csv",
+            commit=approved_generator_commit,
+            ellipse_runs=ellipse_replacement_runs,
+            zalesak_runs=zalesak_replacement_runs,
+        )
+
         contracts["guarded_c0"] = {
             "status": "validated",
             "setting_count": 165,
@@ -1451,6 +1550,7 @@ def orchestrate_final_figures(
                 for key in C0_RESOLUTIONS
             },
             "metrics": c0_metric_contracts,
+            "approved_representatives": replacement_contract,
         }
         for experiment in ("ellipses", "zalesak"):
             out = generated / "guarded_c0" / experiment
@@ -1482,19 +1582,10 @@ def orchestrate_final_figures(
                 snapshot_artifacts,
             )
             representative = C0_REPRESENTATIVES[experiment]
-            c0_payload = load_json_object(c0_paths[experiment])
             representative_runs = [
-                run
-                for run in c0_payload["runs"]
-                if _same_number(run.get("resolution"), representative["resolution"])
-                and _same_number(run.get("wiggle"), representative["wiggle"])
-                and run.get("seed") == representative["seed"]
+                {"variant": label, "save_name": run_name}
+                for label, run_name in c0_representative_runs[experiment].items()
             ]
-            _require(
-                {run.get("variant") for run in representative_runs}
-                == set(C0_VARIANTS[experiment]),
-                f"Guarded-C0 representative run set differs for {experiment}",
-            )
             for run_index, run in enumerate(
                 sorted(representative_runs, key=lambda item: item["variant"])
             ):
@@ -1520,22 +1611,103 @@ def orchestrate_final_figures(
                 ),
                 (
                     f"{experiment}_appendix_c0_representative_with_endpoints",
-                    out
-                    / "representative_cases"
+                    replacement_out
                     / f"{experiment}_appendix_c0_representative_with_endpoints.pdf",
                 ),
                 (
                     f"{experiment}_appendix_c0_representative_clean",
-                    out
-                    / "representative_cases"
+                    replacement_out
                     / f"{experiment}_appendix_c0_representative_clean.pdf",
                 ),
             ):
                 candidates.append(
                     _stage_candidate(
-                        source, staging, by_id[candidate_id], "appendix_guarded_c0"
+                        source,
+                        staging,
+                        by_id[candidate_id],
+                        (
+                            "appendix_guarded_c0_metrics"
+                            if candidate_id.endswith("_metrics")
+                            else "approved_globally_continuous_c0_representative"
+                        ),
                     )
                 )
+        _copy_manifest(
+            _write_command_record(
+                execution / "connected_c0_ellipse_command.json",
+                connected_cmd,
+                approved_generator_commit,
+                staging_root=staging,
+                execution_root=execution,
+            ),
+            staging,
+            "provenance/approved_c0_representatives/connected_ellipse_command.json",
+            "generator_command",
+            snapshot_artifacts,
+        )
+        _copy_manifest(
+            connected_out / "case_summary.csv",
+            staging,
+            "provenance/approved_c0_representatives/ellipse_case_summary.csv",
+            "connected_c0_case_summary",
+            snapshot_artifacts,
+        )
+        _copy_manifest(
+            connected_out / "component_summary.csv",
+            staging,
+            "provenance/approved_c0_representatives/ellipse_component_summary.csv",
+            "connected_c0_component_summary",
+            snapshot_artifacts,
+        )
+        connected_run_root = plots_root / connected_run_name
+        _copy_manifest(
+            connected_run_root / "run_manifest.json",
+            staging,
+            "provenance/approved_c0_representatives/ellipse_connected_run_manifest.json",
+            "connected_c0_run_manifest",
+            snapshot_artifacts,
+        )
+        for input_path, role in representative_geometry_input_paths(
+            connected_run_root, case_index=9
+        ):
+            relative = input_path.relative_to(connected_run_root)
+            _copy_manifest(
+                input_path,
+                staging,
+                (
+                    "provenance/approved_c0_representatives/"
+                    f"ellipse_connected_inputs/{relative.as_posix()}"
+                ),
+                f"connected_c0_{role}",
+                snapshot_artifacts,
+            )
+        _copy_manifest(
+            connected_run_root / "metrics" / "case_metrics.csv",
+            staging,
+            "provenance/approved_c0_representatives/ellipse_case_metrics.csv",
+            "connected_c0_case_metrics",
+            snapshot_artifacts,
+        )
+        _copy_manifest(
+            _write_command_record(
+                execution / "approved_c0_representatives_command.json",
+                replacement_cmd,
+                approved_generator_commit,
+                staging_root=staging,
+                execution_root=execution,
+            ),
+            staging,
+            "provenance/approved_c0_representatives/command.json",
+            "generator_command",
+            snapshot_artifacts,
+        )
+        _copy_manifest(
+            replacement_out / "manifest.json",
+            staging,
+            "provenance/approved_c0_representatives/manifest.json",
+            "approved_c0_representative_manifest",
+            snapshot_artifacts,
+        )
         for index, run_manifest in enumerate(sorted(c0_run_manifests)):
             _copy_manifest(
                 run_manifest,
@@ -1579,6 +1751,15 @@ def orchestrate_final_figures(
             "guarded_c0_representative_mesh_geometry": 6,
             "guarded_c0_representative_reconstructed_geometry": 6,
             "guarded_c0_representative_facet_metadata": 6,
+            "connected_c0_case_summary": 1,
+            "connected_c0_component_summary": 1,
+            "connected_c0_run_manifest": 1,
+            "connected_c0_case_metrics": 1,
+            "connected_c0_representative_case_geometry": 1,
+            "connected_c0_representative_mesh_geometry": 1,
+            "connected_c0_representative_reconstructed_geometry": 1,
+            "connected_c0_representative_facet_metadata": 1,
+            "approved_c0_representative_manifest": 1,
         }.items():
             actual_count = sum(row["role"] == role for row in snapshot_artifacts)
             _require(

@@ -31,7 +31,7 @@ paths and file digests. Until then, no candidate is promoted automatically.
 | Main-text quantitative and representative | 15 | Audited final release plus exact representative run bundles |
 | All-method appendix summaries | 5 | Audited final release aggregate CSV |
 | Resolution appendix | 13 | 30 fresh companion runs: six per benchmark |
-| Guarded-C0 appendix | 6 | 165 fresh settings across ellipses and Zalesak |
+| Guarded-C0 appendix | 6 | 165 fresh settings, connected ellipse case 9 replay, and continuous Zalesak case 22 |
 | **Total** | **41** | Sealed orchestration snapshot |
 
 ## Promotion Rule

@@ -169,7 +169,13 @@ The fixed contracts are:
   metric keys (1,800 rows); Zalesak must contain exactly 75 settings x 12 metric
   keys (900 rows). Missing, duplicate, extra, non-finite, partial, planned,
   collected, or plot-only evidence fails. Representative geometry inputs are
-  also snapshotted.
+  also snapshotted. The final representative slots are then generated through
+  a second fail-closed contract: ellipse case 9 reruns the connected-component
+  joint-C0 postprocessor and must close every eligible join, solve every joint
+  component, and conserve each merged zone to `1e-10`; Zalesak case 22 must be
+  globally continuous after the guarded pass and conserve globally to `1e-10`.
+  Both panels bind all three displayed source runs, their exact case geometry,
+  metrics, mesh, reconstructed VTP, facet metadata, and producer checksums.
 - Deterministic PLIC and staged reconstruction parameters are pinned to the
   reviewed cases, cells, mesh settings, seed, and Zalesak dimensions.
 

@@ -155,8 +155,8 @@ C0_VARIANTS = {
 }
 C0_WIGGLES = (0.0, 0.05, 0.1, 0.2, 0.3)
 C0_REPRESENTATIVES = {
-    "ellipses": {"resolution": 0.32, "wiggle": 0.1, "seed": 0, "case_index": 12},
-    "zalesak": {"resolution": 1.0, "wiggle": 0.1, "seed": 0, "case_index": 12},
+    "ellipses": {"resolution": 0.32, "wiggle": 0.1, "seed": 0, "case_index": 9},
+    "zalesak": {"resolution": 1.0, "wiggle": 0.1, "seed": 0, "case_index": 22},
 }
 ALL_METHOD_FILES = {
     "lines": "lines_all_methods_2x2.pdf",
@@ -1313,6 +1313,202 @@ def validate_c0_manifests(
         "Guarded-C0 contract must contain exactly 165 settings",
     )
     return run_manifests
+
+
+def validate_c0_replacement_manifest(
+    path: Path,
+    *,
+    plots_root: Path,
+    ellipse_summary: Path,
+    commit: str,
+    ellipse_runs: Mapping[str, str],
+    zalesak_runs: Mapping[str, str],
+) -> dict:
+    """Validate the two approved globally continuous representative panels."""
+
+    payload = load_json_object(path)
+    _validate_generation(payload, commit, "C0 replacement representative manifest")
+    _require(
+        payload.get("status") == "completed",
+        "C0 replacement representative generation is incomplete",
+    )
+    _require(
+        payload.get("criteria")
+        == {
+            "maximum_endpoint_gap": 1.0e-8,
+            "maximum_relative_conservation_residual": 1.0e-10,
+        },
+        "C0 replacement acceptance criteria differ",
+    )
+    expected = {
+        "ellipse": {
+            "case_index": 9,
+            "N": 32,
+            "perturbation": 0.1,
+            "mesh_seed": 0,
+            "correction": "connected-component joint C0 postprocessor",
+            "runs": ellipse_runs,
+            "methods": {
+                "linear": ("linear", False, None),
+                "linear+C0": ("linear", True, 9),
+                "circular": ("circular", False, None),
+            },
+            "area_key": "max_relative_zone_area_residual",
+        },
+        "zalesak": {
+            "case_index": 22,
+            "N": 100,
+            "perturbation": 0.1,
+            "mesh_seed": 0,
+            "correction": "one-pass guarded C0 correction",
+            "runs": zalesak_runs,
+            "methods": {
+                "circular": ("circular", False, None),
+                "circular+C0": ("circular", True, None),
+                "circular+corner": ("circular+corner", False, None),
+            },
+            "area_key": "global_relative_area_error",
+        },
+    }
+    contracts = {}
+    for output_key, experiment in (("ellipse", "ellipses"), ("zalesak", "zalesak")):
+        record = payload.get(output_key)
+        contract = expected[output_key]
+        _require(isinstance(record, dict), f"C0 replacement lacks {output_key}")
+        for key in (
+            "case_index",
+            "N",
+            "perturbation",
+            "mesh_seed",
+            "correction",
+        ):
+            _require(
+                record.get(key) == contract[key],
+                f"C0 replacement {output_key} {key} differs",
+            )
+        sources = record.get("sources")
+        _require(
+            isinstance(sources, dict) and set(sources) == set(contract["methods"]),
+            f"C0 replacement {output_key} sources differ",
+        )
+        for label, (method, do_c0, filtered_case) in contract["methods"].items():
+            source = sources[label]
+            run_name = contract["runs"][label]
+            _require(
+                isinstance(source, dict)
+                and source.get("run_name") == run_name
+                and source.get("source_commit") == commit,
+                f"C0 replacement {output_key}/{label} source authority differs",
+            )
+            run_root = Path(plots_root) / run_name
+            run_manifest = run_root / "run_manifest.json"
+            _validate_run_manifest(
+                run_manifest,
+                commit=commit,
+                experiment=experiment,
+                method=method,
+                resolution=float(contract["N"]) / 100.0,
+                wiggle=float(contract["perturbation"]),
+                seed=0,
+                case_index=filtered_case,
+                do_c0=do_c0,
+            )
+            manifest_payload = load_json_object(run_manifest)
+            _require(
+                source.get("parameters") == manifest_payload.get("parameters"),
+                f"C0 replacement {output_key}/{label} parameters differ",
+            )
+            input_paths = {
+                "run_manifest": run_manifest,
+                "case_metrics": run_root / "metrics" / "case_metrics.csv",
+                **{
+                    {
+                        "representative_case_geometry": "case_geometry",
+                        "representative_mesh_geometry": "mesh",
+                        "representative_reconstructed_geometry": "facet_vtp",
+                        "representative_facet_metadata": "facet_metadata",
+                    }[role]: input_path
+                    for input_path, role in representative_geometry_input_paths(
+                        run_root, case_index=int(contract["case_index"])
+                    )
+                },
+            }
+            files = source.get("files")
+            _require(
+                isinstance(files, dict) and set(files) == set(input_paths),
+                f"C0 replacement {output_key}/{label} input inventory differs",
+            )
+            for file_role, input_path in input_paths.items():
+                file_record = files[file_role]
+                _require(
+                    isinstance(file_record, dict)
+                    and set(file_record) == {"relative_path", "sha256"}
+                    and file_record.get("relative_path")
+                    == input_path.relative_to(run_root).as_posix()
+                    and file_record.get("sha256") == file_sha256(input_path),
+                    f"C0 replacement {output_key}/{label}/{file_role} differs",
+                )
+
+        audit = record.get("audit")
+        _require(isinstance(audit, dict), f"C0 replacement {output_key} lacks audit")
+        _require(
+            audit.get("globally_continuous") is True
+            and int(audit.get("endpoints_above_tolerance", -1)) == 0
+            and float(audit.get("max_endpoint_partner_gap", float("inf"))) <= 1.0e-8,
+            f"C0 replacement {output_key} is not globally continuous",
+        )
+        _require(
+            float(audit.get(contract["area_key"], float("inf"))) <= 1.0e-10,
+            f"C0 replacement {output_key} fails conservation",
+        )
+        if output_key == "ellipse":
+            _require(
+                audit.get("joint_components_failed") == 0
+                and audit.get("joint_components_solved", 0) > 0,
+                "Connected-C0 ellipse has an unsolved component",
+            )
+            _require(
+                record.get("postprocessor_case_summary_sha256")
+                == file_sha256(ellipse_summary),
+                "Connected-C0 ellipse case summary differs",
+            )
+        outputs = record.get("outputs")
+        _require(
+            isinstance(outputs, dict) and set(outputs) == {"with_endpoints", "clean"},
+            f"C0 replacement {output_key} paired outputs differ",
+        )
+        for variant, artifact in outputs.items():
+            expected_stem = f"{experiment}_appendix_c0_representative_{variant}"
+            _require(
+                isinstance(artifact, dict)
+                and set(artifact)
+                == {
+                    "pdf",
+                    "pdf_sha256",
+                    "png_review_300dpi",
+                    "png_review_300dpi_sha256",
+                },
+                f"C0 replacement {output_key}/{variant} output record differs",
+            )
+            for extension, path_key, digest_key in (
+                (".pdf", "pdf", "pdf_sha256"),
+                (".png", "png_review_300dpi", "png_review_300dpi_sha256"),
+            ):
+                output_path = Path(path).parent / str(artifact.get(path_key))
+                _require(
+                    output_path.name == expected_stem + extension
+                    and output_path.is_file()
+                    and not output_path.is_symlink()
+                    and artifact.get(digest_key) == file_sha256(output_path),
+                    f"C0 replacement {output_key}/{variant} {extension} differs",
+                )
+        contracts[output_key] = {
+            "case_index": contract["case_index"],
+            "correction": contract["correction"],
+            "max_endpoint_partner_gap": audit["max_endpoint_partner_gap"],
+            contract["area_key"]: audit[contract["area_key"]],
+        }
+    return {"status": "validated", "representatives": contracts}
 
 
 def validate_plic_metadata(path: Path, commit: str) -> dict:

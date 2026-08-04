@@ -1002,6 +1002,7 @@ def run(
     run_name: str,
     output_dir: Path,
     baseline_root: Path,
+    plots_root: Path,
     resolution: float,
     perturb_wiggle: float,
     perturb_seed: int,
@@ -1010,6 +1011,13 @@ def run(
 ) -> dict[str, Path]:
     output_dir = output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+    plots_root = plots_root.resolve()
+    expected_plots_root = (Path.cwd() / "plots").resolve()
+    if plots_root != expected_plots_root:
+        raise ValueError(
+            "ellipse reconstruction writes below the current working directory; "
+            f"--plots-root must be {expected_plots_root}, got {plots_root}"
+        )
     cases = list(case_indices) if case_indices is not None else list(range(25))
     case_iterator = iter(cases)
     case_rows = []
@@ -1062,7 +1070,7 @@ def run(
         baseline_root / "metrics" / "case_metrics.csv"
     )
     after_metrics = _read_case_metrics(
-        REPO_ROOT / "plots" / run_name / "metrics" / "case_metrics.csv"
+        plots_root / run_name / "metrics" / "case_metrics.csv"
     )
     for row in case_rows:
         case_index = int(row["case_index"])
@@ -1092,7 +1100,7 @@ def run(
         representative_pdf,
         geometries,
         case_rows,
-        REPO_ROOT / "plots" / run_name / "vtk" / "mesh.vtk",
+        plots_root / run_name / "vtk" / "mesh.vtk",
     )
     readme = output_dir / "README.md"
     _write_readme(
@@ -1125,6 +1133,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--run-name", default=DEFAULT_RUN_NAME)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--baseline-root", type=Path, default=DEFAULT_BASELINE_ROOT)
+    parser.add_argument(
+        "--plots-root",
+        type=Path,
+        default=REPO_ROOT / "plots",
+        help="run-artifact root; must equal <current working directory>/plots",
+    )
     parser.add_argument("--resolution", type=float, default=0.32)
     parser.add_argument("--perturb-wiggle", type=float, default=0.0)
     parser.add_argument("--perturb-seed", type=int, default=0)
@@ -1135,6 +1149,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         run_name=args.run_name,
         output_dir=args.output_dir,
         baseline_root=args.baseline_root.resolve(),
+        plots_root=args.plots_root,
         resolution=args.resolution,
         perturb_wiggle=args.perturb_wiggle,
         perturb_seed=args.perturb_seed,
