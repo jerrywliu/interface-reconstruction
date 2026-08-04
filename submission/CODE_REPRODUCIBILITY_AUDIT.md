@@ -39,7 +39,7 @@ whole-release checksum snapshot after the approved figure packet is added.
 | Environment consistency | Accepted with limited scope | The sweep stack differs from the public pins, but three paper-facing smokes showed no reconstruction-decision change and only negligible roundoff differences. Preserve both records and do not claim bitwise or cross-platform identity. |
 | Test capture | Good for the declared target | `requirements-test.txt` and a CPython 3.9 GitHub Actions workflow run the source audit and full suite. A broader Python/platform matrix is not claimed. |
 | Generated-file hygiene | Good | `.gitignore` excludes scratch roots and raster previews while keeping release CSV/JSON/PDF/VTK/manifests visible; `docs/GENERATED_FILES.md` records the policy. |
-| Stale scripts | Isolated | `docs/ENTRY_POINTS.md` distinguishes canonical and supported research paths; pre-package code, dated ablations, and superseded wrappers are tracked under `archive/`. |
+| Stale scripts | Removed | `docs/ENTRY_POINTS.md` distinguishes canonical and supported research paths; pre-package code, dated ablations, and superseded wrappers were removed from the submission branch and remain in Git history. |
 
 ## Completed Low-Risk Cleanup
 
@@ -82,10 +82,9 @@ therefore does not share RNG state across cases, and controller collection order
 the precomputed specification order. Exact case geometry is saved, so a replay does
 not have to infer the sampled interfaces.
 
-The guarantee does not extend to every historical entry point. In particular,
-`archive/legacy_v1/source/main/algos/static_interface_reconstruction.py` uses the
-process-global `random` module without seeding. It is isolated from supported
-imports and retained only as a pre-package source snapshot.
+The guarantee does not extend to historical entry points removed from this
+submission branch. Some used unseeded process-global randomness and depended on
+obsolete layouts; Git history retains them for research provenance.
 
 Bitwise-identical output across different numerical stacks is not established.
 SciPy optimization, BLAS/LAPACK, GEOS/Shapely, VTK, Matplotlib, and font-library
@@ -257,10 +256,10 @@ record are final.
 The repository now ignores disposable scratch roots and raster previews while
 leaving release CSV, JSON, PDF, SVG, VTK, environment, checksum, and manifest files
 visible. `docs/GENERATED_FILES.md` records this policy. The 2026-08-03 structure
-pass moved the pre-package implementation, old initialization, historical
-camera-ready launchers, dated ablations, and hard-coded wrappers under `archive/`.
-No result or diagnostic artifact was deleted. `docs/CODE_STRUCTURE.md` records
-the supported tree and retention rationale.
+pass removed the pre-package implementation, old initialization, historical
+camera-ready launchers, dated ablations, and hard-coded wrappers from the
+submission branch. No paper result or diagnostic artifact was deleted.
+`docs/CODE_STRUCTURE.md` records the supported tree and retention rationale.
 
 ## Completed And Remaining Verification
 

@@ -4,26 +4,17 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_archived_shape_wrappers_keep_canonical_configs_and_lvira_fallback():
-    expected_configs = {
-        "run_lines.sh": "static/line",
-        "run_circles.sh": "static/circle",
-        "run_ellipses.sh": "static/ellipse",
-        "run_squares.sh": "static/square",
-        "run_zalesak.sh": "static/zalesak",
-    }
+def test_submission_tree_has_canonical_benchmarks_without_legacy_wrappers():
+    benchmarks = ("lines", "circles", "ellipses", "squares", "zalesak")
 
-    for name, config in expected_configs.items():
-        wrapper = REPO_ROOT / "archive" / "legacy_wrappers" / name
-        text = wrapper.read_text()
-        assert "Legacy convenience sweep" in text
-        assert f"--config {config}" in text
-        assert "--plic_fallback LVIRA" in text
-        assert "fallback is LVIRA" in text
-        assert "defaults to Youngs" not in text
+    for name in benchmarks:
+        assert (REPO_ROOT / "experiments" / "static" / f"{name}.py").is_file()
+
+    assert (REPO_ROOT / "submission" / "run_final_static_sweep.sh").is_file()
+    assert not (REPO_ROOT / "archive").exists()
 
 
-def test_prepackage_source_is_isolated_from_supported_module_tree():
+def test_prepackage_source_is_absent_from_submission_tree():
     retired_paths = (
         "facet.py",
         "run_old.py",
@@ -38,13 +29,7 @@ def test_prepackage_source_is_isolated_from_supported_module_tree():
     for relative in retired_paths:
         assert not (REPO_ROOT / relative).exists(), relative
 
-    archive = REPO_ROOT / "archive" / "legacy_v1"
-    assert (archive / "README.md").is_file()
-    assert (archive / "source" / "facet.py").is_file()
-    assert (archive / "source" / "run_old.py").is_file()
-
-
-def test_supported_source_does_not_import_from_archive():
+def test_supported_source_does_not_import_removed_archive():
     for root_name in ("main", "util", "experiments", "submission"):
         for path in (REPO_ROOT / root_name).rglob("*.py"):
             text = path.read_text(encoding="utf-8")

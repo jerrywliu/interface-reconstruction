@@ -24,12 +24,12 @@ configuration, and regression tests.
 | Map every paper result and figure to code | `docs/PAPER_EXPERIMENT_MAP.md` |
 | Regenerate final vector figures | `submission/run_final_figure_orchestrator` |
 | Build the submission package | `submission/package_submission.py` |
-| Inspect supported and archived entry points | `docs/ENTRY_POINTS.md` |
+| Inspect supported entry points | `docs/ENTRY_POINTS.md` |
 
 The five paper benchmarks are `lines`, `squares`, `circles`, `ellipses`, and
 `zalesak`. Historical implementations, wrappers, camera-ready scripts, and
-dated ablations are isolated under `archive/`; supported code does not import
-from that directory.
+dated ablations were removed from this submission branch; they remain available
+in Git history.
 
 ## Install And Test
 

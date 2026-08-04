@@ -1,8 +1,7 @@
 # Entry Point Status
 
-This repository distinguishes supported paper workflows, current research
-interfaces, and archived historical source. See `docs/CODE_STRUCTURE.md` for the
-module-level map.
+This repository distinguishes supported paper workflows from current research
+interfaces. See `docs/CODE_STRUCTURE.md` for the module-level map.
 
 ## Canonical Paper And Release Paths
 
@@ -33,25 +32,19 @@ launcher unless every recorded parameter is reproduced.
 | `experiments/submission/*.py` | Conservation, convergence, topology, continuity, ablation, and failure diagnostics used to validate manuscript claims. |
 | `experiments/static/{build_figure_review_pdf,prepare_figure_review,generate_figure_review_diagnostics}.py` | Author-review tooling; does not publish final candidates. |
 
-## Archived Paths
+## Removed Historical Paths
 
-Archived code is tracked for provenance but unsupported for new paper results.
-Supported source does not import from `archive/`.
-
-| Current archive path | Former path or role | Replacement |
-|---|---|---|
-| `archive/legacy_v1/` | Root `facet.py`, `run_old.py`, old `main/algos/` stack, old initialization, examples, and sample VTP | `main/structs/`, `main/geoms/`, and `util/reconstruction.py` |
-| `archive/legacy_wrappers/` | Root and per-shape hard-coded shell loops | Direct benchmark modules or the final sweep launcher |
-| `archive/march_2026_camera_ready/` | March mutable camera-ready scripts and notification helper | Final figure orchestrator and immutable publication workflow |
-| `archive/ablations/` | Dated corner/rescue/fallback analyses | Frozen `pre_f8_corner + exact_linear_support_only + LVIRA` profile |
-| `archive/historical_sweeps/` | Affected-row, parallel, and repair scripts | Canonical static controller and final sweep launcher |
-| `archive/historical_experiment_docs/` | Superseded algorithm and benchmark notes | Tested paper experiment map and static package README |
+The submission branch removes the legacy reconstruction stack, hard-coded shell
+wrappers, superseded March camera-ready tooling, dated ablations, metric-repair
+scripts, and stale experiment notes. Git history retains those materials. The
+supported replacements are the current `main/` and `util/` implementations, the
+benchmark modules and frozen sweep launcher, the final-figure orchestrator, and
+`docs/PAPER_EXPERIMENT_MAP.md`.
 
 Tracked `results/static/*_reconstruction_results.txt` files are small historical
 summary artifacts. They remain in place because supported benchmark CLIs still
 offer an explicit compatibility plot/replay mode, but they are not members of
 the audited final release.
 
-Archive status means "not supported for new submission results," not
-necessarily broken. Historical source may depend on layouts or artifacts that
-are absent from a fresh checkout.
+Historical commands may depend on layouts or artifacts that are absent from
+this submission branch and are not supported for reproduction.

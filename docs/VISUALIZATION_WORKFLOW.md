@@ -154,5 +154,5 @@ For fail-closed regeneration and publication of final paper candidates, see
 `submission/FINAL_FIGURE_REGENERATION.md`. This document covers day-to-day local
 inspection; manual outputs are not authoritative submission candidates.
 
-The superseded March 2026 mutable bundling workflow is preserved only at
-`archive/march_2026_camera_ready/README.md`.
+The superseded March 2026 mutable bundling workflow is retained in Git history,
+not in the supported submission tree.

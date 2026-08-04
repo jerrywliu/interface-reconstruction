@@ -3,8 +3,8 @@
 Updated: 2026-08-03
 
 This document defines the supported public tree for the paper submission. It
-separates the frozen reconstruction path from experiment orchestration,
-submission verification, and historical research material.
+separates the frozen reconstruction path from experiment orchestration and
+submission verification.
 
 ## Frozen Production Method
 
@@ -50,7 +50,6 @@ submission/                   freeze, audit, figure, and package gates
 test/                         unit, integration, release, and provenance tests
 config/static/                paper benchmark configurations
 docs/                         public navigation and reproduction maps
-archive/                      unsupported historical source and utilities
 ```
 
 `run.py`, `util/advection.py`, and `config/advection/` remain supported research
@@ -72,20 +71,13 @@ they are not sources for paper results.
 Every paper result and plot is mapped to its producer and run artifacts in
 `docs/PAPER_EXPERIMENT_MAP.md`.
 
-## Archive Policy
+## Historical Code Policy
 
-The cleanup moved five categories under `archive/`:
-
-- the pre-package reconstruction implementation and non-pytest examples;
-- hard-coded root and per-shape shell loops;
-- the superseded March 2026 camera-ready bundler;
-- dated corner, rescue, fallback, and tail ablations;
-- historical sweep and metric-repair utilities;
-- stale experiment notes superseded by the tested paper map.
-
-The files remain tracked because they explain earlier results and decisions.
-Supported code must not import them. Their prior paths and replacements are
-listed in `archive/README.md` and `docs/ENTRY_POINTS.md`.
+The submission branch removes the pre-package implementation, non-pytest
+examples, hard-coded wrappers, superseded March camera-ready bundler, dated
+ablations, historical sweep/metric-repair utilities, and stale experiment
+notes. Their history remains available through Git; none is required to run the
+submitted method, reproduce the paper experiments, or regenerate the figures.
 
 ## Deliberately Retained Material
 
@@ -98,11 +90,12 @@ The following items were not removed:
 - tracked historical static summary text files and all CSV/PDF/checksum audit
   evidence;
 - submission diagnostics, including negative and failure evidence;
-- result data and historical branches.
+- result data and compact audit evidence.
 
-No tracked result or diagnostic artifact was deleted. Two apparently redundant
-raster previews were considered, then retained because one is checksum-bound and
-the other is part of a documented before/after evidence packet.
+No tracked paper result or diagnostic artifact was deleted. Two apparently
+redundant raster previews were considered, then retained because one is
+checksum-bound and the other is part of a documented before/after evidence
+packet.
 
 ## Verification
 
