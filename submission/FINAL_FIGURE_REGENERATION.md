@@ -78,9 +78,11 @@ The wrapper performs, in order:
 6. main-text and all-method generation from that snapshot;
 7. 30 fresh resolution runs plus quantitative/geometry evidence capture;
 8. 165 fresh guarded-C0 runs plus exact 2,700-row metrics validation;
-9. deterministic PLIC and staged figures;
-10. internal 41-PDF vector/preview/44-page-map acceptance with absolute attested Poppler tools; and
-11. publication-root-relative path resolution for every wrapper-owned artifact,
+9. a fresh connected-component joint-C0 replay for ellipse case 9 and
+   fail-closed representative generation for ellipse case 9 and Zalesak case 22;
+10. deterministic PLIC and staged figures;
+11. internal 41-PDF vector/preview/44-page-map acceptance with absolute attested Poppler tools; and
+12. publication-root-relative path resolution for every wrapper-owned artifact,
     checksum-copy to a separate sealed publication tree, locked final rehash, and
     atomic no-replace publication.
 
@@ -103,6 +105,7 @@ $FINAL_FIGURE_ROOT/
   provenance/resolution/.../inputs/              # metrics + geometry
   provenance/guarded_c0/run_manifests/           # 165
   provenance/guarded_c0/{ellipses,zalesak}/metrics.csv
+  provenance/approved_c0_representatives/        # case 9/22 inputs and audits
   provenance/published_tree_sha256.json
   review/figure_candidate_review.pdf
   review/figure_candidate_source_map.json

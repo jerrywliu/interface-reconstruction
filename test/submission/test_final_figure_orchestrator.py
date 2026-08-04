@@ -17,6 +17,7 @@ from experiments.static import run_perturbed_sweeps
 import submission.final_figure_orchestration as orchestration
 from submission.final_figure_orchestration import (
     ALL_METHOD_FILES,
+    C0_REPRESENTATIVES,
     C0_RESOLUTIONS,
     C0_VARIANTS,
     C0_WIGGLES,
@@ -922,6 +923,11 @@ def _resolution_fixture(tmp_path, experiment="lines", status="completed"):
 
 def test_resolution_case_contract_uses_approved_zalesak_case():
     assert RESOLUTION_CASES["zalesak"] == (6, "circular+corner")
+
+
+def test_c0_representative_contract_uses_approved_global_cases():
+    assert C0_REPRESENTATIVES["ellipses"]["case_index"] == 9
+    assert C0_REPRESENTATIVES["zalesak"]["case_index"] == 22
 
 
 def test_resolution_rejects_planned_plot_only_runs(tmp_path):

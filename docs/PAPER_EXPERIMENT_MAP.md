@@ -236,7 +236,7 @@ python -m experiments.static.run_appendix_c0_study \
   --endpoint_variants paired
 ```
 
-The exact 75-run ellipse and 90-run Zalesak contracts are in the adjacent
+The exact 90-run ellipse and 75-run Zalesak contracts are in the adjacent
 `manifest.json` files. Recreating representative geometry requires either the
 selected compact run bundles described under "Compact Public Release" or a
 fresh P4 rerun; aggregate CSVs alone are insufficient. In plot-from-CSV mode,
@@ -244,6 +244,18 @@ the current script also attempts the representative panels. Without matching
 `--plots_root` bundles it can emit missing-VTK warnings and placeholder
 representative PDFs. Only the aggregate file under `summary_plots/` is eligible
 from the two commands above.
+
+| Figure slot | Generated vector candidate |
+| --- | --- |
+| `ellipses_appendix_c0_metrics` | `$FIGURE_PUBLICATION/candidates/c0_root/summary_plots/ellipses_appendix_c0_2x2.pdf` |
+| `ellipses_appendix_c0_representative` | Connected-component case 9 candidates under `$FIGURE_PUBLICATION/candidates/c0_root/representative_cases/ellipses_appendix_c0_representative_{with_endpoints,clean}.pdf` |
+| `zalesak_appendix_c0_metrics` | `$FIGURE_PUBLICATION/candidates/c0_root/summary_plots/zalesak_appendix_c0_2x2.pdf` |
+| `zalesak_appendix_c0_representative` | Globally continuous guarded case 22 candidates under `$FIGURE_PUBLICATION/candidates/c0_root/representative_cases/zalesak_appendix_c0_representative_{with_endpoints,clean}.pdf` |
+
+The author selected the clean connected-component ellipse case 9 and clean
+globally continuous Zalesak case 22 representatives on 2026-08-03. Their final
+promotion still requires the new immutable orchestrator publication and exact
+published checksums. Historical pre-guard `C0` assets are ineligible.
 
 ### P5: Deterministic Explanatory Figures
 
@@ -472,6 +484,31 @@ benchmark-definition table. Before submission, also verify that every promoted
 PDF has zero raster image objects and no unembedded fonts.
 
 ## Remaining Mapping Gates
+
+- **Broad third-order wording is unresolved.** The current mapped evidence is the
+  ellipse convergence analysis. It supports robust third-order behavior for
+  facet-gap error, while prior final-data analysis found lower empirical orders
+  for Hausdorff and tangent errors. Before submission, the authors must either
+  narrow the abstract/introduction/method-overview wording to the demonstrated
+  metric and benchmark or add separately mapped evidence for a broader claim.
+  Any manuscript change remains blue until approved.
+- **Guarded-`C0` representative publication is in progress.** The author chose
+  connected-component ellipse case 9 and guarded Zalesak case 22. Publish the
+  fresh attested candidates, promote their exact bytes, and reconcile the
+  captions with the two distinct correction procedures. Any manuscript change
+  remains blue until approved.
+- **The reproducibility seed sentence is ambiguous.** It currently says only
+  that the perturbed-mesh experiments use seed `0`. A blue revision should state
+  that `0` is the mesh-perturbation seed and separately report geometry-stream
+  seeds `42` (lines/squares/ellipses), `41` (circles), and `43` (Zalesak).
+- **Author-drawn figure approval is open.** Explicitly approve the captions and
+  visual content of the seven TikZ figures inventoried above. The four appendix
+  captions are already blue; any needed changes to the three topology captions
+  must also remain blue until approved.
+- Record the exact paper commit audited for figures, tables, and prose in the
+  review packet or approval ledger at review time using
+  `git -C <paper-worktree> rev-parse HEAD`. Durable documentation must not pin a
+  paper commit that becomes stale on the next writing edit.
 
 - Publish the approved ellipse case-9 and Zalesak case-22 C0 representatives in
   a new immutable figure publication, then update the 26-row approval ledger.
