@@ -3,6 +3,25 @@
 This package contains the five benchmark drivers and shared plotting tools used
 for the paper's static reconstruction study.
 
+> **Paper entry point:** Read `docs/PAPER_EXPERIMENT_MAP.md` before running
+> anything. It maps every current paper figure to its exact saved input,
+> manifest, command, and vector output. Use `submission/run_final_static_sweep.sh`
+> only when the scientific results themselves must be recomputed.
+
+## Current Paper Contract
+
+The frozen production profile is:
+
+```text
+corner behavior: pre_f8_corner
+rescue behavior: exact_linear_support_only
+unresolved PLIC fallback: LVIRA
+```
+
+Use saved paper inputs for a plotting-only refresh. Use the full launcher only
+for a new scientific release. Historical workflows under `archive/` do not
+define the submitted result set.
+
 ## Supported Drivers
 
 | Benchmark | Module | Config | Paper role |
@@ -17,6 +36,12 @@ Paper-facing oriented reconstruction uses `LVIRA` as the unresolved PLIC
 fallback. The frozen corner method uses
 `--corner_behavior_profile pre_f8_corner` and
 `--rescue_profile exact_linear_support_only`.
+
+The benchmarks use a fixed domain with a variable number of cells per side.
+Mesh perturbations use seed `0`. The independent geometry streams use seed `42`
+for lines, squares, and ellipses, seed `41` for circles, and seed `43` for
+Zalesak. Exact geometry and sampling ranges are recorded in the resolved final
+configuration and each run's `run_manifest.json`.
 
 ## Targeted Run
 

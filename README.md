@@ -102,3 +102,7 @@ policy and `submission/CODE_REPRODUCIBILITY_AUDIT.md` for the trust model.
 The repository preserves compact audit evidence and the code needed to
 reproduce paper outputs. Large sealed releases and raw cell-level bundles are
 managed as external immutable artifacts rather than committed source files.
+The intended public archive contains code, aggregate results, paper-facing
+figure inputs, manifests, and checksums; full raw run trees and large cell/merge
+diagnostics remain available from the corresponding author on reasonable
+request.
