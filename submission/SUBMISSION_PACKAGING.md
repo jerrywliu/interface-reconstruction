@@ -12,7 +12,8 @@ It does not modify the release, the paper source, or Overleaf.
 4. A clean generator Git worktree pinned to the exact full commit that produced
    the approved figure packet.
 5. An explicit documentation commit, descending from the generator commit, that
-   contains the reviewed `docs/PAPER_EXPERIMENT_MAP.md`.
+   contains the reviewed `docs/PAPER_EXPERIMENT_MAP.md`, `LICENSE`,
+   `DATA_LICENSE`, `CITATION.cff`, and `NOTICE`.
 6. The sealed, read-only final-figure publication root. It must contain the
    canonical orchestration manifest, JSON/CSV candidate source maps, private
    allowlist and external-approval snapshots, 41 candidate PDFs, and full
@@ -21,19 +22,25 @@ It does not modify the release, the paper source, or Overleaf.
    contain `interface-reconstruction-paper/`.
 8. A 26-row approval manifest selecting exactly one published candidate for each
    manuscript figure slot.
-9. A non-placeholder DOI or URL for the complete raw-data deposit.
-10. A `sha256:<digest>` identifier for the exact `SHA256SUMS` deposited with the
-   complete release.
-11. Either a locally downloaded/fetched copy of the deposited `SHA256SUMS`, or an
-   explicit acknowledgment that remote deposit contents remain a manual gate.
-12. A pre-existing output parent owned by the current user, represented by a real
+9. A non-placeholder DOI or URL for the compact archival data/code deposit.
+10. The compact deposit's dedicated, approved `SHA256SUMS` plus its
+    `sha256:<digest>` identifier. This manifest must not be the complete-release
+    manifest.
+11. A fresh local download of the complete compact deposit. Its `SHA256SUMS` must
+    be byte-identical to the approved compact manifest, and every downloaded file
+    must verify against it.
+12. A compact-deposit `provenance/COMPLETE_RELEASE_AUTHORITY.json` binding the
+    processed deposit to the complete-release name, complete-release manifest
+    digest, and scientific commit.
+13. A pre-existing output parent owned by the current user, represented by a real
    directory, and not writable by group or other users.
 
 The packager reruns the full release audit and verifies every entry in the release
 checksum manifest. A stale audit claim, incomplete sweep, failed run, changed raw
 file, missing checksum, dirty or mismatched paper worktree, failed manuscript
 compile, rasterized figure, unembedded figure font, unapproved
-`\includegraphics` target, or mismatched deposit-manifest digest stops packaging.
+`\includegraphics` target, mismatched compact-deposit manifest, incomplete
+downloaded compact tree, or incorrect complete-release binding stops packaging.
 The packager also verifies the complete sealed final-figure tree and requires the
 orchestration manifest, both source maps, allowlist, selected candidate PDFs, and
 approval CSV to agree on candidate ID, slot, variant, path, and SHA-256. Those
@@ -161,38 +168,54 @@ exactly once in the approval manifest. Poppler's `pdfimages` and `pdffonts` are
 used to require zero raster image objects and embedded fonts whenever fonts are
 present.
 
-## Raw-Data Binding
+## Dual-Ledger Data Binding
 
-The deposition URL alone is not accepted. Compute the SHA-256 of the final release
-checksum manifest and pass it as an explicit manifest identifier:
+The complete local release and compact public deposit are separate authorities.
+The packager first audits the complete sealed release and verifies every file
+against its full `SHA256SUMS`. That ledger remains in
+`provenance/release/SHA256SUMS` and is not presented as the public-deposit ledger.
 
-```sh
-export RAW_DATA_MANIFEST_ID="sha256:$(shasum -a 256 "$SEALED_RELEASE/SHA256SUMS" | awk '{print $1}')"
+Prepare a separate compact tree containing processed paper-facing results, code,
+scripts, manifests, and selected project-authored artifacts. Do not include
+`raw_runs/`, complete case/cell/merge/fallback diagnostics, or raw VTK/VTP files.
+At minimum, add this binding record:
+
+```json
+{
+  "schema_version": 1,
+  "deposit_scope": "compact_processed_results_and_reproducibility_materials",
+  "complete_release_name": "<sealed-release-directory-name>",
+  "complete_release_sha256sums_sha256": "<64-hex-digest>",
+  "scientific_commit": "<40-hex-commit>",
+  "complete_diagnostics_policy": "available_from_corresponding_author_on_request"
+}
 ```
 
-The packager recomputes this digest from the already audited local release and
-fails on any mismatch. The normalized deposit record in the package binds together
-the deposition location, release directory name, `SHA256SUMS` filename, and exact
-manifest digest. The external deposit must expose the same `SHA256SUMS` bytes.
-
-Preferred verification supplies a copy downloaded or fetched from the deposit:
+Save it as `provenance/COMPLETE_RELEASE_AUTHORITY.json`. Generate a sorted
+`SHA256SUMS` covering every other file in the compact tree, then compute the compact
+manifest's own identifier:
 
 ```sh
-export DEPOSITED_MANIFEST=/path/to/downloaded/SHA256SUMS
-cmp "$SEALED_RELEASE/SHA256SUMS" "$DEPOSITED_MANIFEST"
+export COMPACT_DEPOSIT_MANIFEST=/path/to/approved-compact-tree/SHA256SUMS
+export COMPACT_DEPOSIT_MANIFEST_ID="sha256:$(shasum -a 256 "$COMPACT_DEPOSIT_MANIFEST" | awk '{print $1}')"
 ```
 
-Pass it with `--deposited-release-manifest "$DEPOSITED_MANIFEST"`. The packager
-requires exact byte equality, rechecks the staged evidence digest, and includes it
-as `provenance/deposit/SHA256SUMS.downloaded`.
+After upload, download the complete compact deposit to a fresh directory and
+verify it independently:
 
-When the deposited manifest cannot yet be fetched, omit that file and pass
-`--acknowledge-unverified-remote-deposit`. The package then records
-`manual_acknowledgment_remote_contents_unverified`. This is an explicit manual
-submission gate, not a remote verification claim. The packager performs no network
-request and never claims that a DOI/URL was reachable or that its contents matched.
-Values such as `10.xxxx/record`, `10.0000/...`, `10.1234/xxxx`, `/record`, `pending`, or
-`placeholder` are rejected rather than accepted as deposit identifiers.
+```sh
+export DOWNLOADED_COMPACT_DEPOSIT=/path/to/fresh-download
+cmp "$COMPACT_DEPOSIT_MANIFEST" "$DOWNLOADED_COMPACT_DEPOSIT/SHA256SUMS"
+(cd "$DOWNLOADED_COMPACT_DEPOSIT" && shasum -a 256 -c SHA256SUMS)
+```
+
+The packager repeats both checks, verifies complete file coverage, and validates
+the binding record against the already audited sealed release. It retains the
+approved and downloaded compact ledgers separately under `provenance/deposit/`.
+There is no manual bypass for an absent or partial download. The packager performs
+no network request and never claims that a DOI/URL was reachable; it reports only
+the local downloaded-tree verification. Values such as `10.xxxx/record`,
+`10.0000/...`, `10.1234/xxxx`, `/record`, `pending`, or `placeholder` are rejected.
 
 ## Public-Package Privacy
 
@@ -208,8 +231,9 @@ This does not weaken the scientific authority. For every sanitized payload,
 the public-byte SHA-256, format, and replacement count. The scientific snapshot
 also records its explicit Git commit/tree and original release-archive digest; the
 generator snapshot records its Git commit/tree and original deterministic archive
-digest. The complete original scientific release remains checksum-bound in the
-external deposit. A final recursive privacy audit, including both tar archives,
+digest. The complete original scientific release remains a local checksum-bound
+authority; the compact public deposit carries a separate binding back to it. A
+final recursive privacy audit, including both tar archives,
 rejects any remaining captured hostname or `/Users/<name>`, `/home/<name>`, or
 Windows user-home marker before package checksums are written.
 
@@ -224,7 +248,9 @@ export PACKAGE_PARENT=/path/to/private-submission-output
 install -d -m 700 "$PACKAGE_PARENT"
 export PACKAGE="$PACKAGE_PARENT/interface-reconstruction-submission"
 : "${FINAL_FIGURE_ROOT:?set the sealed approved figure publication root}"
-: "${RAW_DATA_DOI_OR_URL:?set the actual deposited-release DOI or URL}"
+: "${COMPACT_DATA_DOI_OR_URL:?set the actual compact-deposit DOI or URL}"
+: "${COMPACT_DEPOSIT_MANIFEST:?set the approved compact SHA256SUMS}"
+: "${DOWNLOADED_COMPACT_DEPOSIT:?set the fresh downloaded compact tree}"
 ```
 
 The exact parent must exist before planning; the packager never creates it.
@@ -240,9 +266,10 @@ python submission/package_submission.py \
   --paper-commit "$PAPER_COMMIT" \
   --approved-figures-manifest "$APPROVAL_CSV" \
   --review-bundle "$REVIEW_PDF" \
-  --raw-data-deposition "$RAW_DATA_DOI_OR_URL" \
-  --raw-data-manifest-id "$RAW_DATA_MANIFEST_ID" \
-  --deposited-release-manifest "$DEPOSITED_MANIFEST" \
+  --compact-data-deposition "$COMPACT_DATA_DOI_OR_URL" \
+  --compact-deposit-manifest "$COMPACT_DEPOSIT_MANIFEST" \
+  --compact-deposit-manifest-id "$COMPACT_DEPOSIT_MANIFEST_ID" \
+  --downloaded-compact-deposit-root "$DOWNLOADED_COMPACT_DEPOSIT" \
   --output-dir "$PACKAGE" \
   --dry-run
 ```
@@ -310,6 +337,10 @@ README.md
 INVENTORY.csv
 INVENTORY.json
 SHA256SUMS
+LICENSE
+DATA_LICENSE
+CITATION.cff
+NOTICE
 code/scientific_source_snapshot.tar.gz
 code/figure_generator_snapshot.tar.gz
 docs/PAPER_EXPERIMENT_MAP.md
@@ -328,8 +359,10 @@ provenance/figures/figure_candidate_source_map.json
 provenance/figures/figure_candidate_source_map.csv
 provenance/figures/approved_candidate_allowlist.json
 provenance/figures/published_tree_sha256.json
-provenance/RAW_DATA_DEPOSITION.md
-provenance/deposit/SHA256SUMS.downloaded  # only when supplied
+provenance/COMPACT_DATA_DEPOSITION.md
+provenance/deposit/COMPACT_DEPOSIT_SHA256SUMS.authority
+provenance/deposit/COMPACT_DEPOSIT_SHA256SUMS.downloaded
+provenance/deposit/COMPLETE_RELEASE_AUTHORITY.json.downloaded
 provenance/release/...
 ```
 
@@ -342,15 +375,15 @@ recorded beside the public-copy digest. The orchestration and external approval
 records likewise retain their original sealed-publication authority hashes beside
 the hashes of their sanitized public copies.
 
-## Raw-Data Boundary
+## Data Boundary
 
 The compact package deliberately excludes `raw_runs/` and the large case-, cell-,
-merge-, and fallback-indexed tables. It retains the aggregate result table, run
-inventory, full-release checksum manifest, and deposition record. The external
-deposit must contain the complete audited release and the exact checksum manifest
-identified by `--raw-data-manifest-id`, so each paper result can be traced back to
-its raw bundle. Without a supplied deposited manifest, remote-content verification
-remains a separately recorded manual gate.
+merge-, and fallback-indexed tables, plus raw VTK/VTP files. It retains the aggregate
+result table, run inventory, full-release checksum manifest, and deposition record.
+The compact external deposit is authenticated by its own manifest and ties back to
+the complete local release through `COMPLETE_RELEASE_AUTHORITY.json`. Complete
+diagnostics are available from the corresponding author on request; the package
+does not claim that they are publicly deposited.
 
 The package's own `SHA256SUMS` covers every staged file except itself. Verify it with:
 

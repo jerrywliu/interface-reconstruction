@@ -1,0 +1,30 @@
+cff-version: 1.2.0
+message: "Please cite the associated article and archival software release."
+title: "Interface reconstruction with piecewise circular facets and cusps"
+type: software
+authors:
+  - family-names: Liu
+    given-names: Jerry
+    email: jwl50@stanford.edu
+  - family-names: Weiss
+    given-names: Kenneth
+  - family-names: Yao
+    given-names: Jin
+repository-code: "https://github.com/jerrywliu/interface-reconstruction"
+license: BSD-3-Clause
+
+# ARCHIVAL_DOI_PLACEHOLDER: add the final code/data DOI as an identifier.
+# ARTICLE_CITATION_PLACEHOLDER: add the final journal DOI, volume, issue, and
+# page or article number after publication.
+preferred-citation:
+  type: article
+  title: "Feature-preserving local interface reconstruction using piecewise circular facets with cusps"
+  authors:
+    - family-names: Liu
+      given-names: Jerry
+    - family-names: Weiss
+      given-names: Kenneth
+    - family-names: Yao
+      given-names: Jin
+  journal: "Journal of Computational Physics"
+  year: 2026

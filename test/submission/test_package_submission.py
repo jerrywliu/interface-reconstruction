@@ -19,9 +19,14 @@ import pytest
 import submission.package_submission as package_submission
 from submission.audit_final_release import AuditReport
 from submission.package_submission import (
+    COMPACT_DEPOSIT_AUTHORITY_SCHEMA_VERSION,
+    COMPACT_DEPOSIT_RELEASE_AUTHORITY,
+    COMPACT_DEPOSIT_SCOPE,
+    COMPLETE_DIAGNOSTICS_POLICY,
     DEFAULT_PAPER_ENTRYPOINT,
     GENERATOR_EXPERIMENT_MAP,
     RELEASE_PAYLOADS,
+    RELEASE_METADATA_PATHS,
     SubmissionPackagingError,
     _extract_archive_safely,
     _safe_relative_path,
@@ -42,8 +47,35 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _manifest_identifier(release: Path) -> str:
+def _release_manifest_identifier(release: Path) -> str:
     return f"sha256:{_sha256(release / 'SHA256SUMS')}"
+
+
+def _compact_deposit_root(release: Path) -> Path:
+    return release.parent / "downloaded-compact-deposit"
+
+
+def _compact_manifest(release: Path) -> Path:
+    return release.parent / "compact-deposit-authority.SHA256SUMS"
+
+
+def _compact_manifest_identifier(release: Path) -> str:
+    return f"sha256:{_sha256(_compact_manifest(release))}"
+
+
+def _rewrite_compact_manifests(release: Path) -> None:
+    compact_root = _compact_deposit_root(release)
+    compact_files = sorted(
+        path
+        for path in compact_root.rglob("*")
+        if path.is_file() and path.name != "SHA256SUMS"
+    )
+    manifest_text = "".join(
+        f"{_sha256(path)}  {path.relative_to(compact_root).as_posix()}\n"
+        for path in compact_files
+    )
+    _compact_manifest(release).write_text(manifest_text, encoding="utf-8")
+    (compact_root / "SHA256SUMS").write_text(manifest_text, encoding="utf-8")
 
 
 def _tree_snapshot(root: Path) -> dict[str, str]:
@@ -673,6 +705,10 @@ def _make_inputs(tmp_path: Path) -> tuple[Path, Path, Path, str, Path]:
         json.dumps(_allowlist_payload(), indent=2) + "\n", encoding="utf-8"
     )
     (paper / ".gitignore").write_text("*.aux\n", encoding="utf-8")
+    for metadata_path in RELEASE_METADATA_PATHS:
+        (paper / metadata_path).write_text(
+            f"synthetic release metadata: {metadata_path}\n", encoding="utf-8"
+        )
     (source / "interface-reconstruction.aux").write_text(
         "generated\n", encoding="utf-8"
     )
@@ -760,6 +796,30 @@ def _make_inputs(tmp_path: Path) -> tuple[Path, Path, Path, str, Path]:
         encoding="utf-8",
     )
 
+    compact_root = _compact_deposit_root(release)
+    compact_results = compact_root / "results" / "perturbed_sweep.csv"
+    compact_results.parent.mkdir(parents=True)
+    compact_results.write_bytes((release / "perturbed_sweep.csv").read_bytes())
+    compact_authority = compact_root / COMPACT_DEPOSIT_RELEASE_AUTHORITY
+    compact_authority.parent.mkdir(parents=True)
+    compact_authority.write_text(
+        json.dumps(
+            {
+                "schema_version": COMPACT_DEPOSIT_AUTHORITY_SCHEMA_VERSION,
+                "deposit_scope": COMPACT_DEPOSIT_SCOPE,
+                "complete_release_name": release.name,
+                "complete_release_sha256sums_sha256": _sha256(release_manifest),
+                "scientific_commit": paper_commit,
+                "complete_diagnostics_policy": COMPLETE_DIAGNOSTICS_POLICY,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _rewrite_compact_manifests(release)
+
     approvals = _write_final_figure_publication(
         tmp_path / "final-figures",
         generator_commit=paper_commit,
@@ -812,9 +872,10 @@ def _plan(tmp_path: Path, output: Path):
         paper_worktree_root=paper,
         paper_commit=paper_commit,
         approved_figures_manifest=manifest,
-        raw_data_deposition="https://doi.org/10.1234/interface.release",
-        raw_data_manifest_identifier=_manifest_identifier(release),
-        acknowledge_unverified_remote_deposit=True,
+        compact_data_deposition="https://doi.org/10.1234/interface.release",
+        compact_deposit_manifest=_compact_manifest(release),
+        compact_deposit_manifest_identifier=_compact_manifest_identifier(release),
+        downloaded_compact_deposit_root=_compact_deposit_root(release),
         latexmk_executable=str(latexmk),
         output_dir=output,
         audit_runner=_passing_audit,
@@ -875,9 +936,10 @@ def test_committed_excluded_build_directory_is_not_packaged(tmp_path):
         paper_worktree_root=paper,
         paper_commit=paper_commit,
         approved_figures_manifest=manifest,
-        raw_data_deposition="https://doi.org/10.1234/interface.release",
-        raw_data_manifest_identifier=_manifest_identifier(release),
-        acknowledge_unverified_remote_deposit=True,
+        compact_data_deposition="https://doi.org/10.1234/interface.release",
+        compact_deposit_manifest=_compact_manifest(release),
+        compact_deposit_manifest_identifier=_compact_manifest_identifier(release),
+        downloaded_compact_deposit_root=_compact_deposit_root(release),
         latexmk_executable=str(latexmk),
         output_dir=tmp_path / "package",
         audit_runner=_passing_audit,
@@ -925,9 +987,10 @@ def test_plan_rejects_existing_package_namespace_overlap(tmp_path, relationship)
             paper_worktree_root=paper,
             paper_commit=paper_commit,
             approved_figures_manifest=manifest,
-            raw_data_deposition="https://doi.org/10.1234/interface.release",
-            raw_data_manifest_identifier=_manifest_identifier(release),
-            acknowledge_unverified_remote_deposit=True,
+            compact_data_deposition="https://doi.org/10.1234/interface.release",
+            compact_deposit_manifest=_compact_manifest(release),
+            compact_deposit_manifest_identifier=_compact_manifest_identifier(release),
+            downloaded_compact_deposit_root=_compact_deposit_root(release),
             latexmk_executable=str(latexmk),
             output_dir=output,
             audit_runner=_passing_audit,
@@ -1030,9 +1093,10 @@ def test_approved_figures_require_exactly_one_candidate_per_slot(tmp_path):
             paper_worktree_root=paper,
             paper_commit=paper_commit,
             approved_figures_manifest=manifest,
-            raw_data_deposition="https://doi.org/10.1234/interface.release",
-            raw_data_manifest_identifier=_manifest_identifier(release),
-            acknowledge_unverified_remote_deposit=True,
+            compact_data_deposition="https://doi.org/10.1234/interface.release",
+            compact_deposit_manifest=_compact_manifest(release),
+            compact_deposit_manifest_identifier=_compact_manifest_identifier(release),
+            downloaded_compact_deposit_root=_compact_deposit_root(release),
             latexmk_executable=str(latexmk),
             output_dir=tmp_path / "package",
             audit_runner=_passing_audit,
@@ -1091,9 +1155,10 @@ def test_plan_rejects_final_figure_authority_mismatch(tmp_path, mismatch, messag
             paper_worktree_root=paper,
             paper_commit=paper_commit,
             approved_figures_manifest=manifest,
-            raw_data_deposition="https://doi.org/10.1234/interface.release",
-            raw_data_manifest_identifier=_manifest_identifier(release),
-            acknowledge_unverified_remote_deposit=True,
+            compact_data_deposition="https://doi.org/10.1234/interface.release",
+            compact_deposit_manifest=_compact_manifest(release),
+            compact_deposit_manifest_identifier=_compact_manifest_identifier(release),
+            downloaded_compact_deposit_root=_compact_deposit_root(release),
             latexmk_executable=str(latexmk),
             output_dir=tmp_path / "package",
             audit_runner=_passing_audit,
@@ -1141,9 +1206,10 @@ def test_plan_validates_complete_external_approval_snapshot(
             paper_worktree_root=paper,
             paper_commit=paper_commit,
             approved_figures_manifest=manifest,
-            raw_data_deposition="https://doi.org/10.1234/interface.release",
-            raw_data_manifest_identifier=_manifest_identifier(release),
-            acknowledge_unverified_remote_deposit=True,
+            compact_data_deposition="https://doi.org/10.1234/interface.release",
+            compact_deposit_manifest=_compact_manifest(release),
+            compact_deposit_manifest_identifier=_compact_manifest_identifier(release),
+            downloaded_compact_deposit_root=_compact_deposit_root(release),
             latexmk_executable=str(latexmk),
             output_dir=tmp_path / "package",
             audit_runner=_passing_audit,
@@ -1192,9 +1258,10 @@ def test_plan_rejects_candidate_hash_changed_in_published_source_map(tmp_path):
             paper_worktree_root=paper,
             paper_commit=paper_commit,
             approved_figures_manifest=manifest,
-            raw_data_deposition="https://doi.org/10.1234/interface.release",
-            raw_data_manifest_identifier=_manifest_identifier(release),
-            acknowledge_unverified_remote_deposit=True,
+            compact_data_deposition="https://doi.org/10.1234/interface.release",
+            compact_deposit_manifest=_compact_manifest(release),
+            compact_deposit_manifest_identifier=_compact_manifest_identifier(release),
+            downloaded_compact_deposit_root=_compact_deposit_root(release),
             latexmk_executable=str(latexmk),
             output_dir=tmp_path / "package",
             audit_runner=_passing_audit,
@@ -1227,9 +1294,10 @@ def test_plan_rejects_placeholder_doi_patterns(tmp_path, location):
             paper_worktree_root=paper,
             paper_commit=paper_commit,
             approved_figures_manifest=manifest,
-            raw_data_deposition=location,
-            raw_data_manifest_identifier=_manifest_identifier(release),
-            acknowledge_unverified_remote_deposit=True,
+            compact_data_deposition=location,
+            compact_deposit_manifest=_compact_manifest(release),
+            compact_deposit_manifest_identifier=_compact_manifest_identifier(release),
+            downloaded_compact_deposit_root=_compact_deposit_root(release),
             latexmk_executable=str(latexmk),
             output_dir=tmp_path / "package",
             audit_runner=_passing_audit,
@@ -1263,9 +1331,10 @@ def test_plan_fails_closed_when_release_audit_fails(tmp_path):
             paper_worktree_root=paper,
             paper_commit=paper_commit,
             approved_figures_manifest=manifest,
-            raw_data_deposition="https://doi.org/10.1234/interface.release",
-            raw_data_manifest_identifier=_manifest_identifier(release),
-            acknowledge_unverified_remote_deposit=True,
+            compact_data_deposition="https://doi.org/10.1234/interface.release",
+            compact_deposit_manifest=_compact_manifest(release),
+            compact_deposit_manifest_identifier=_compact_manifest_identifier(release),
+            downloaded_compact_deposit_root=_compact_deposit_root(release),
             latexmk_executable=str(latexmk),
             output_dir=output,
             audit_runner=_failed_audit,
@@ -1287,9 +1356,10 @@ def test_plan_requires_existing_private_output_parent(tmp_path):
         "paper_worktree_root": paper,
         "paper_commit": paper_commit,
         "approved_figures_manifest": manifest,
-        "raw_data_deposition": "https://doi.org/10.1234/interface.release",
-        "raw_data_manifest_identifier": _manifest_identifier(release),
-        "acknowledge_unverified_remote_deposit": True,
+        "compact_data_deposition": "https://doi.org/10.1234/interface.release",
+        "compact_deposit_manifest": _compact_manifest(release),
+        "compact_deposit_manifest_identifier": _compact_manifest_identifier(release),
+        "downloaded_compact_deposit_root": _compact_deposit_root(release),
         "latexmk_executable": str(latexmk),
         "audit_runner": _passing_audit,
         "checksum_verifier": _checksums_pass,
@@ -1345,9 +1415,10 @@ def test_plan_rejects_unapproved_manuscript_graphic(tmp_path):
             paper_worktree_root=paper,
             paper_commit=paper_commit,
             approved_figures_manifest=manifest,
-            raw_data_deposition="https://doi.org/10.1234/interface.release",
-            raw_data_manifest_identifier=_manifest_identifier(release),
-            acknowledge_unverified_remote_deposit=True,
+            compact_data_deposition="https://doi.org/10.1234/interface.release",
+            compact_deposit_manifest=_compact_manifest(release),
+            compact_deposit_manifest_identifier=_compact_manifest_identifier(release),
+            downloaded_compact_deposit_root=_compact_deposit_root(release),
             latexmk_executable=str(latexmk),
             output_dir=tmp_path / "package",
             audit_runner=_passing_audit,
@@ -1388,6 +1459,8 @@ def test_build_stages_compact_payload_and_valid_checksums(tmp_path):
         in names
     )
     assert "interface-reconstruction-generator/docs/PAPER_EXPERIMENT_MAP.md" in names
+    for metadata_path in RELEASE_METADATA_PATHS:
+        assert (package / metadata_path).is_file()
     assert (
         package
         / "manuscript"
@@ -1403,16 +1476,21 @@ def test_build_stages_compact_payload_and_valid_checksums(tmp_path):
     assert verify_package_checksums(package) == []
 
     inventory = json.loads((package / "INVENTORY.json").read_text(encoding="utf-8"))
-    assert inventory["raw_data"]["included"] is False
-    assert inventory["raw_data"]["deposition"]["manifest_identifier"].startswith(
-        "sha256:"
-    )
+    complete_release = inventory["data"]["complete_sealed_release"]
+    assert complete_release["included"] is False
+    assert complete_release["independently_audited"] is True
+    assert complete_release["externally_deposited"] is False
+    deposition = inventory["data"]["compact_archival_deposit"]
+    assert deposition["manifest_identifier"].startswith("sha256:")
     assert (
-        inventory["raw_data"]["deposition"]["verification_status"]
-        == "manual_acknowledgment_remote_contents_unverified"
+        deposition["verification_status"]
+        == "downloaded_deposit_contents_verified"
     )
-    assert inventory["raw_data"]["deposition"]["network_assertion_made"] is False
-    assert not (package / "provenance" / "deposit").exists()
+    assert deposition["network_assertion_made"] is False
+    assert (package / "provenance" / "deposit").is_dir()
+    assert (
+        package / "provenance" / "COMPACT_DATA_DEPOSITION.md"
+    ).is_file()
     assert inventory["release"]["audit_passed"] is True
     assert inventory["release"]["source_payloads_verified_against_release_manifest"]
     assert inventory["release"]["packaged_presentation_metadata_privacy_sanitized"]
@@ -1688,9 +1766,10 @@ def test_plan_requires_exact_clean_paper_commit(tmp_path):
         "documentation_commit": paper_commit,
         "paper_worktree_root": paper,
         "approved_figures_manifest": manifest,
-        "raw_data_deposition": "https://doi.org/10.1234/interface.release",
-        "raw_data_manifest_identifier": _manifest_identifier(release),
-        "acknowledge_unverified_remote_deposit": True,
+        "compact_data_deposition": "https://doi.org/10.1234/interface.release",
+        "compact_deposit_manifest": _compact_manifest(release),
+        "compact_deposit_manifest_identifier": _compact_manifest_identifier(release),
+        "downloaded_compact_deposit_root": _compact_deposit_root(release),
         "latexmk_executable": str(latexmk),
         "output_dir": tmp_path / "package",
         "audit_runner": _passing_audit,
@@ -1716,9 +1795,10 @@ def test_plan_requires_exact_clean_generator_commit(tmp_path):
         "paper_worktree_root": paper,
         "paper_commit": paper_commit,
         "approved_figures_manifest": manifest,
-        "raw_data_deposition": "https://doi.org/10.1234/interface.release",
-        "raw_data_manifest_identifier": _manifest_identifier(release),
-        "acknowledge_unverified_remote_deposit": True,
+        "compact_data_deposition": "https://doi.org/10.1234/interface.release",
+        "compact_deposit_manifest": _compact_manifest(release),
+        "compact_deposit_manifest_identifier": _compact_manifest_identifier(release),
+        "downloaded_compact_deposit_root": _compact_deposit_root(release),
         "latexmk_executable": str(latexmk),
         "output_dir": tmp_path / "package",
         "audit_runner": _passing_audit,
@@ -1757,9 +1837,10 @@ def test_plan_requires_explicit_non_none_documentation_commit(tmp_path):
             paper_worktree_root=paper,
             paper_commit=paper_commit,
             approved_figures_manifest=manifest,
-            raw_data_deposition="https://doi.org/10.1234/interface.release",
-            raw_data_manifest_identifier=_manifest_identifier(release),
-            acknowledge_unverified_remote_deposit=True,
+            compact_data_deposition="https://doi.org/10.1234/interface.release",
+            compact_deposit_manifest=_compact_manifest(release),
+            compact_deposit_manifest_identifier=_compact_manifest_identifier(release),
+            downloaded_compact_deposit_root=_compact_deposit_root(release),
             latexmk_executable=str(latexmk),
             output_dir=tmp_path / "package",
             audit_runner=_passing_audit,
@@ -1807,9 +1888,10 @@ def test_generator_bytes_come_from_commit_despite_hidden_worktree_edit(tmp_path)
         paper_worktree_root=paper,
         paper_commit=paper_commit,
         approved_figures_manifest=manifest,
-        raw_data_deposition="https://doi.org/10.1234/interface.release",
-        raw_data_manifest_identifier=_manifest_identifier(release),
-        acknowledge_unverified_remote_deposit=True,
+        compact_data_deposition="https://doi.org/10.1234/interface.release",
+        compact_deposit_manifest=_compact_manifest(release),
+        compact_deposit_manifest_identifier=_compact_manifest_identifier(release),
+        downloaded_compact_deposit_root=_compact_deposit_root(release),
         latexmk_executable=str(latexmk),
         output_dir=output,
         audit_runner=_passing_audit,
@@ -1870,9 +1952,10 @@ def test_experiment_map_uses_independent_pinned_documentation_commit(tmp_path):
         paper_worktree_root=paper,
         paper_commit=documentation_commit,
         approved_figures_manifest=manifest,
-        raw_data_deposition="https://doi.org/10.1234/interface.release",
-        raw_data_manifest_identifier=_manifest_identifier(release),
-        acknowledge_unverified_remote_deposit=True,
+        compact_data_deposition="https://doi.org/10.1234/interface.release",
+        compact_deposit_manifest=_compact_manifest(release),
+        compact_deposit_manifest_identifier=_compact_manifest_identifier(release),
+        downloaded_compact_deposit_root=_compact_deposit_root(release),
         latexmk_executable=str(latexmk),
         output_dir=output,
         audit_runner=_passing_audit,
@@ -1892,6 +1975,44 @@ def test_experiment_map_uses_independent_pinned_documentation_commit(tmp_path):
     )
     assert code_record["figure_generator_snapshot"]["git_commit"] == generator_commit
     assert code_record["paper_experiment_map"]["git_commit"] == documentation_commit
+
+
+def test_documentation_commit_must_contain_release_metadata(tmp_path):
+    release, paper, manifest, generator_commit, latexmk = _make_inputs(tmp_path)
+    _git(paper, "rm", "NOTICE")
+    _git(paper, "commit", "-q", "-m", "Remove release notice")
+    documentation_commit = _git(paper, "rev-parse", "HEAD")
+    generator_worktree = tmp_path / "approved-generator-worktree"
+    _git(
+        paper,
+        "worktree",
+        "add",
+        "-q",
+        "--detach",
+        str(generator_worktree),
+        generator_commit,
+    )
+
+    with pytest.raises(SubmissionPackagingError, match="release metadata: NOTICE"):
+        plan_submission_package(
+            release_root=release,
+            final_figure_root=release.parent / "final-figures",
+            generator_worktree_root=generator_worktree,
+            generator_commit=generator_commit,
+            documentation_commit=documentation_commit,
+            paper_worktree_root=paper,
+            paper_commit=documentation_commit,
+            approved_figures_manifest=manifest,
+            compact_data_deposition="https://doi.org/10.1234/interface.release",
+            compact_deposit_manifest=_compact_manifest(release),
+            compact_deposit_manifest_identifier=_compact_manifest_identifier(release),
+            downloaded_compact_deposit_root=_compact_deposit_root(release),
+            latexmk_executable=str(latexmk),
+            output_dir=tmp_path / "bundle",
+            audit_runner=_passing_audit,
+            checksum_verifier=_checksums_pass,
+            pdf_inspector=_vector_pdf,
+        )
 
 
 def test_generator_object_substitution_fails_closed(tmp_path, monkeypatch):
@@ -1924,9 +2045,10 @@ def test_plan_rejects_inner_paper_directory_as_worktree_root(tmp_path):
             paper_worktree_root=paper / "interface-reconstruction-paper",
             paper_commit=paper_commit,
             approved_figures_manifest=manifest,
-            raw_data_deposition="https://doi.org/10.1234/interface.release",
-            raw_data_manifest_identifier=_manifest_identifier(release),
-            acknowledge_unverified_remote_deposit=True,
+            compact_data_deposition="https://doi.org/10.1234/interface.release",
+            compact_deposit_manifest=_compact_manifest(release),
+            compact_deposit_manifest_identifier=_compact_manifest_identifier(release),
+            downloaded_compact_deposit_root=_compact_deposit_root(release),
             latexmk_executable=str(latexmk),
             output_dir=tmp_path / "package",
             audit_runner=_passing_audit,
@@ -1935,7 +2057,7 @@ def test_plan_rejects_inner_paper_directory_as_worktree_root(tmp_path):
         )
 
 
-def test_plan_binds_deposit_to_exact_release_manifest(tmp_path):
+def test_plan_binds_deposit_to_exact_compact_manifest(tmp_path):
     release, paper, manifest, paper_commit, latexmk = _make_inputs(tmp_path)
     with pytest.raises(SubmissionPackagingError, match="does not match"):
         plan_submission_package(
@@ -1947,8 +2069,10 @@ def test_plan_binds_deposit_to_exact_release_manifest(tmp_path):
             paper_worktree_root=paper,
             paper_commit=paper_commit,
             approved_figures_manifest=manifest,
-            raw_data_deposition="https://doi.org/10.1234/interface.release",
-            raw_data_manifest_identifier=f"sha256:{'0' * 64}",
+            compact_data_deposition="https://doi.org/10.1234/interface.release",
+            compact_deposit_manifest=_compact_manifest(release),
+            compact_deposit_manifest_identifier=f"sha256:{'0' * 64}",
+            downloaded_compact_deposit_root=_compact_deposit_root(release),
             latexmk_executable=str(latexmk),
             output_dir=tmp_path / "package",
             audit_runner=_passing_audit,
@@ -1970,9 +2094,10 @@ def test_plan_fails_when_disposable_manuscript_compile_fails(tmp_path):
             paper_worktree_root=paper,
             paper_commit=paper_commit,
             approved_figures_manifest=manifest,
-            raw_data_deposition="https://doi.org/10.1234/interface.release",
-            raw_data_manifest_identifier=_manifest_identifier(release),
-            acknowledge_unverified_remote_deposit=True,
+            compact_data_deposition="https://doi.org/10.1234/interface.release",
+            compact_deposit_manifest=_compact_manifest(release),
+            compact_deposit_manifest_identifier=_compact_manifest_identifier(release),
+            downloaded_compact_deposit_root=_compact_deposit_root(release),
             latexmk_executable=str(latexmk),
             output_dir=tmp_path / "package",
             audit_runner=_passing_audit,
@@ -1996,9 +2121,10 @@ def test_build_fails_closed_when_extracted_manuscript_compile_fails(tmp_path):
         paper_worktree_root=paper,
         paper_commit=paper_commit,
         approved_figures_manifest=manifest,
-        raw_data_deposition="https://doi.org/10.1234/interface.release",
-        raw_data_manifest_identifier=_manifest_identifier(release),
-        acknowledge_unverified_remote_deposit=True,
+        compact_data_deposition="https://doi.org/10.1234/interface.release",
+        compact_deposit_manifest=_compact_manifest(release),
+        compact_deposit_manifest_identifier=_compact_manifest_identifier(release),
+        downloaded_compact_deposit_root=_compact_deposit_root(release),
         latexmk_executable=str(latexmk),
         output_dir=output,
         audit_runner=_passing_audit,
@@ -2045,6 +2171,26 @@ def test_build_rejects_release_payload_mutated_after_planning(tmp_path, relative
     assert not output.with_suffix(".tar.gz").exists()
 
 
+def test_build_rejects_compact_deposit_mutated_after_planning(tmp_path):
+    output = tmp_path / "deliverable" / "bundle"
+    plan = _plan(tmp_path / "inputs", output)
+    payload = (
+        plan.downloaded_compact_deposit_root
+        / "results"
+        / "perturbed_sweep.csv"
+    )
+    payload.write_text("mutated after planning\n", encoding="utf-8")
+
+    with pytest.raises(
+        SubmissionPackagingError,
+        match="compact-deposit checksum verification failed",
+    ):
+        build_submission_package(plan)
+
+    assert not output.exists()
+    assert not output.with_suffix(".tar.gz").exists()
+
+
 @pytest.mark.parametrize("index_flag", ("--assume-unchanged", "--skip-worktree"))
 def test_paper_bytes_come_from_commit_despite_hidden_worktree_edit(
     tmp_path, index_flag
@@ -2084,9 +2230,10 @@ def test_paper_bytes_come_from_commit_despite_hidden_worktree_edit(
         paper_worktree_root=paper,
         paper_commit=paper_commit,
         approved_figures_manifest=manifest,
-        raw_data_deposition="https://doi.org/10.1234/interface.release",
-        raw_data_manifest_identifier=_manifest_identifier(release),
-        acknowledge_unverified_remote_deposit=True,
+        compact_data_deposition="https://doi.org/10.1234/interface.release",
+        compact_deposit_manifest=_compact_manifest(release),
+        compact_deposit_manifest_identifier=_compact_manifest_identifier(release),
+        downloaded_compact_deposit_root=_compact_deposit_root(release),
         latexmk_executable=str(latexmk),
         output_dir=output,
         audit_runner=_passing_audit,
@@ -2132,7 +2279,7 @@ def test_compile_environment_discards_hostile_tex_configuration(tmp_path, monkey
     assert not output.exists()
 
 
-def test_remote_deposit_requires_evidence_or_explicit_manual_acknowledgment(tmp_path):
+def test_compact_deposit_requires_a_downloaded_root(tmp_path):
     release, paper, manifest, paper_commit, latexmk = _make_inputs(tmp_path)
     common = {
         "release_root": release,
@@ -2143,30 +2290,50 @@ def test_remote_deposit_requires_evidence_or_explicit_manual_acknowledgment(tmp_
         "paper_worktree_root": paper,
         "paper_commit": paper_commit,
         "approved_figures_manifest": manifest,
-        "raw_data_deposition": "https://doi.org/10.1234/interface.release",
-        "raw_data_manifest_identifier": _manifest_identifier(release),
+        "compact_data_deposition": "https://doi.org/10.1234/interface.release",
+        "compact_deposit_manifest": _compact_manifest(release),
+        "compact_deposit_manifest_identifier": _compact_manifest_identifier(release),
+        "downloaded_compact_deposit_root": tmp_path / "missing-download",
         "latexmk_executable": str(latexmk),
         "output_dir": tmp_path / "bundle",
         "audit_runner": _passing_audit,
         "checksum_verifier": _checksums_pass,
         "pdf_inspector": _vector_pdf,
     }
-    with pytest.raises(SubmissionPackagingError, match="remote deposit contents"):
+    with pytest.raises(SubmissionPackagingError, match="is not a directory"):
         plan_submission_package(**common)
 
-    bad_manifest = tmp_path / "bad-downloaded-SHA256SUMS"
-    bad_manifest.write_text("different bytes\n", encoding="utf-8")
+
+def test_compact_deposit_rejects_a_changed_downloaded_manifest(tmp_path):
+    release, paper, manifest, paper_commit, latexmk = _make_inputs(tmp_path)
+    downloaded_root = _compact_deposit_root(release)
+    (downloaded_root / "SHA256SUMS").write_text(
+        "different bytes\n", encoding="utf-8"
+    )
     with pytest.raises(SubmissionPackagingError, match="bytes do not match"):
         plan_submission_package(
-            deposited_release_manifest=bad_manifest,
-            **common,
+            release_root=release,
+            final_figure_root=release.parent / "final-figures",
+            generator_worktree_root=paper,
+            generator_commit=paper_commit,
+            documentation_commit=paper_commit,
+            paper_worktree_root=paper,
+            paper_commit=paper_commit,
+            approved_figures_manifest=manifest,
+            compact_data_deposition="https://doi.org/10.1234/interface.release",
+            compact_deposit_manifest=_compact_manifest(release),
+            compact_deposit_manifest_identifier=_compact_manifest_identifier(release),
+            downloaded_compact_deposit_root=downloaded_root,
+            latexmk_executable=str(latexmk),
+            output_dir=tmp_path / "bundle",
+            audit_runner=_passing_audit,
+            checksum_verifier=_checksums_pass,
+            pdf_inspector=_vector_pdf,
         )
 
 
-def test_supplied_deposit_manifest_is_checked_and_packaged(tmp_path):
+def test_downloaded_compact_deposit_is_checked_and_packaged(tmp_path):
     release, paper, manifest, paper_commit, latexmk = _make_inputs(tmp_path)
-    downloaded = tmp_path / "downloaded-SHA256SUMS"
-    downloaded.write_bytes((release / "SHA256SUMS").read_bytes())
     output = tmp_path / "bundle"
     plan = plan_submission_package(
         release_root=release,
@@ -2177,9 +2344,10 @@ def test_supplied_deposit_manifest_is_checked_and_packaged(tmp_path):
         paper_worktree_root=paper,
         paper_commit=paper_commit,
         approved_figures_manifest=manifest,
-        raw_data_deposition="https://doi.org/10.1234/interface.release",
-        raw_data_manifest_identifier=_manifest_identifier(release),
-        deposited_release_manifest=downloaded,
+        compact_data_deposition="https://doi.org/10.1234/interface.release",
+        compact_deposit_manifest=_compact_manifest(release),
+        compact_deposit_manifest_identifier=_compact_manifest_identifier(release),
+        downloaded_compact_deposit_root=_compact_deposit_root(release),
         latexmk_executable=str(latexmk),
         output_dir=output,
         audit_runner=_passing_audit,
@@ -2188,13 +2356,139 @@ def test_supplied_deposit_manifest_is_checked_and_packaged(tmp_path):
     )
     package, _ = build_submission_package(plan, create_archive=False)
 
-    evidence = package / "provenance" / "deposit" / "SHA256SUMS.downloaded"
-    assert evidence.read_bytes() == (release / "SHA256SUMS").read_bytes()
+    authority = (
+        package
+        / "provenance"
+        / "deposit"
+        / "COMPACT_DEPOSIT_SHA256SUMS.authority"
+    )
+    evidence = (
+        package
+        / "provenance"
+        / "deposit"
+        / "COMPACT_DEPOSIT_SHA256SUMS.downloaded"
+    )
+    assert authority.read_bytes() == _compact_manifest(release).read_bytes()
+    assert evidence.read_bytes() == _compact_manifest(release).read_bytes()
     inventory = json.loads((package / "INVENTORY.json").read_text(encoding="utf-8"))
-    deposition = inventory["raw_data"]["deposition"]
-    assert deposition["verification_status"] == "supplied_manifest_bytes_verified"
-    assert deposition["supplied_manifest_bytes_verified"] is True
+    deposition = inventory["data"]["compact_archival_deposit"]
+    assert deposition["verification_status"] == "downloaded_deposit_contents_verified"
+    assert deposition["authority_manifest_bytes_verified"] is True
+    assert deposition["downloaded_manifest_bytes_verified"] is True
+    assert deposition["downloaded_payload_checksums_verified"] is True
     assert deposition["network_assertion_made"] is False
+
+
+def test_compact_manifest_cannot_reuse_complete_release_ledger(tmp_path):
+    release, paper, manifest, paper_commit, latexmk = _make_inputs(tmp_path)
+    with pytest.raises(SubmissionPackagingError, match="must be distinct"):
+        plan_submission_package(
+            release_root=release,
+            final_figure_root=release.parent / "final-figures",
+            generator_worktree_root=paper,
+            generator_commit=paper_commit,
+            documentation_commit=paper_commit,
+            paper_worktree_root=paper,
+            paper_commit=paper_commit,
+            approved_figures_manifest=manifest,
+            compact_data_deposition="https://doi.org/10.1234/interface.release",
+            compact_deposit_manifest=release / "SHA256SUMS",
+            compact_deposit_manifest_identifier=_release_manifest_identifier(release),
+            downloaded_compact_deposit_root=_compact_deposit_root(release),
+            latexmk_executable=str(latexmk),
+            output_dir=tmp_path / "bundle",
+            audit_runner=_passing_audit,
+            checksum_verifier=_checksums_pass,
+            pdf_inspector=_vector_pdf,
+        )
+
+
+def test_compact_deposit_rejects_payload_checksum_mismatch(tmp_path):
+    release, paper, manifest, paper_commit, latexmk = _make_inputs(tmp_path)
+    compact_result = _compact_deposit_root(release) / "results" / "perturbed_sweep.csv"
+    compact_result.write_text("changed after upload\n", encoding="utf-8")
+    with pytest.raises(SubmissionPackagingError, match="checksum verification failed"):
+        plan_submission_package(
+            release_root=release,
+            final_figure_root=release.parent / "final-figures",
+            generator_worktree_root=paper,
+            generator_commit=paper_commit,
+            documentation_commit=paper_commit,
+            paper_worktree_root=paper,
+            paper_commit=paper_commit,
+            approved_figures_manifest=manifest,
+            compact_data_deposition="https://doi.org/10.1234/interface.release",
+            compact_deposit_manifest=_compact_manifest(release),
+            compact_deposit_manifest_identifier=_compact_manifest_identifier(release),
+            downloaded_compact_deposit_root=_compact_deposit_root(release),
+            latexmk_executable=str(latexmk),
+            output_dir=tmp_path / "bundle",
+            audit_runner=_passing_audit,
+            checksum_verifier=_checksums_pass,
+            pdf_inspector=_vector_pdf,
+        )
+
+
+def test_compact_deposit_rejects_wrong_complete_release_binding(tmp_path):
+    release, paper, manifest, paper_commit, latexmk = _make_inputs(tmp_path)
+    authority_path = _compact_deposit_root(release) / COMPACT_DEPOSIT_RELEASE_AUTHORITY
+    authority = json.loads(authority_path.read_text(encoding="utf-8"))
+    authority["complete_release_sha256sums_sha256"] = "0" * 64
+    authority_path.write_text(
+        json.dumps(authority, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    _rewrite_compact_manifests(release)
+    with pytest.raises(
+        SubmissionPackagingError,
+        match="complete_release_sha256sums_sha256",
+    ):
+        plan_submission_package(
+            release_root=release,
+            final_figure_root=release.parent / "final-figures",
+            generator_worktree_root=paper,
+            generator_commit=paper_commit,
+            documentation_commit=paper_commit,
+            paper_worktree_root=paper,
+            paper_commit=paper_commit,
+            approved_figures_manifest=manifest,
+            compact_data_deposition="https://doi.org/10.1234/interface.release",
+            compact_deposit_manifest=_compact_manifest(release),
+            compact_deposit_manifest_identifier=_compact_manifest_identifier(release),
+            downloaded_compact_deposit_root=_compact_deposit_root(release),
+            latexmk_executable=str(latexmk),
+            output_dir=tmp_path / "bundle",
+            audit_runner=_passing_audit,
+            checksum_verifier=_checksums_pass,
+            pdf_inspector=_vector_pdf,
+        )
+
+
+def test_compact_deposit_rejects_raw_vtk_payload(tmp_path):
+    release, paper, manifest, paper_commit, latexmk = _make_inputs(tmp_path)
+    raw_vtk = _compact_deposit_root(release) / "selected" / "case.vtp"
+    raw_vtk.parent.mkdir()
+    raw_vtk.write_text("raw geometry\n", encoding="utf-8")
+    _rewrite_compact_manifests(release)
+    with pytest.raises(SubmissionPackagingError, match="compact boundary"):
+        plan_submission_package(
+            release_root=release,
+            final_figure_root=release.parent / "final-figures",
+            generator_worktree_root=paper,
+            generator_commit=paper_commit,
+            documentation_commit=paper_commit,
+            paper_worktree_root=paper,
+            paper_commit=paper_commit,
+            approved_figures_manifest=manifest,
+            compact_data_deposition="https://doi.org/10.1234/interface.release",
+            compact_deposit_manifest=_compact_manifest(release),
+            compact_deposit_manifest_identifier=_compact_manifest_identifier(release),
+            downloaded_compact_deposit_root=_compact_deposit_root(release),
+            latexmk_executable=str(latexmk),
+            output_dir=tmp_path / "bundle",
+            audit_runner=_passing_audit,
+            checksum_verifier=_checksums_pass,
+            pdf_inspector=_vector_pdf,
+        )
 
 
 def test_dry_run_plan_does_not_mutate_release_paper_or_output(tmp_path):
@@ -2229,9 +2523,10 @@ def test_dry_run_plan_does_not_mutate_release_paper_or_output(tmp_path):
         paper_worktree_root=paper,
         paper_commit=paper_commit,
         approved_figures_manifest=manifest,
-        raw_data_deposition="https://doi.org/10.1234/interface.release",
-        raw_data_manifest_identifier=_manifest_identifier(release),
-        acknowledge_unverified_remote_deposit=True,
+        compact_data_deposition="https://doi.org/10.1234/interface.release",
+        compact_deposit_manifest=_compact_manifest(release),
+        compact_deposit_manifest_identifier=_compact_manifest_identifier(release),
+        downloaded_compact_deposit_root=_compact_deposit_root(release),
         latexmk_executable=str(latexmk),
         output_dir=output,
         audit_runner=_passing_audit,
@@ -2295,9 +2590,10 @@ def test_deterministic_archives_match_for_identical_inputs(tmp_path):
             paper_worktree_root=paper,
             paper_commit=paper_commit,
             approved_figures_manifest=manifest,
-            raw_data_deposition="https://doi.org/10.1234/interface.release",
-            raw_data_manifest_identifier=_manifest_identifier(release),
-            acknowledge_unverified_remote_deposit=True,
+            compact_data_deposition="https://doi.org/10.1234/interface.release",
+            compact_deposit_manifest=_compact_manifest(release),
+            compact_deposit_manifest_identifier=_compact_manifest_identifier(release),
+            downloaded_compact_deposit_root=_compact_deposit_root(release),
             latexmk_executable=str(latexmk),
             output_dir=output,
             audit_runner=_passing_audit,

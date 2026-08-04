@@ -39,14 +39,35 @@ from submission.generator_checkout import (
 from submission.pdf_vector_qa import PdfQaReport, inspect_pdf
 
 
-PACKAGE_SCHEMA_VERSION = 6
+PACKAGE_SCHEMA_VERSION = 7
 RELEASE_SHA256_MANIFEST = "SHA256SUMS"
+COMPACT_DEPOSIT_SHA256_MANIFEST = "SHA256SUMS"
+COMPACT_DEPOSIT_RELEASE_AUTHORITY = (
+    "provenance/COMPLETE_RELEASE_AUTHORITY.json"
+)
+COMPACT_DEPOSIT_AUTHORITY_SCHEMA_VERSION = 1
+COMPACT_DEPOSIT_SCOPE = "compact_processed_results_and_reproducibility_materials"
+COMPLETE_DIAGNOSTICS_POLICY = "available_from_corresponding_author_on_request"
+COMPACT_DEPOSIT_FORBIDDEN_PREFIXES = (
+    "raw_runs/",
+    "diagnostics/case_",
+    "diagnostics/cell_",
+    "diagnostics/merge_",
+    "diagnostics/fallback_",
+)
+COMPACT_DEPOSIT_FORBIDDEN_SUFFIXES = (".vtk", ".vtp")
 PACKAGE_ROOT_MARKERS = ("INVENTORY.json", "SHA256SUMS")
 DEFAULT_PAPER_SOURCE_SUBDIR = "interface-reconstruction-paper"
 DEFAULT_PAPER_ENTRYPOINT = "interface-reconstruction-paper/interface-reconstruction.tex"
 DEFAULT_MANUSCRIPT_COMPILE_TIMEOUT_SECONDS = 300
 GENERATOR_ARCHIVE_ROOT = "interface-reconstruction-generator"
 GENERATOR_EXPERIMENT_MAP = "docs/PAPER_EXPERIMENT_MAP.md"
+RELEASE_METADATA_PATHS = (
+    "LICENSE",
+    "DATA_LICENSE",
+    "CITATION.cff",
+    "NOTICE",
+)
 FINAL_FIGURE_ORCHESTRATION = "provenance/final_figure_orchestration.json"
 FINAL_FIGURE_SOURCE_MAP = "review/figure_candidate_source_map.json"
 FINAL_FIGURE_SOURCE_MAP_CSV = "review/figure_candidate_source_map.csv"
@@ -242,17 +263,23 @@ class DocumentationGitAuthority:
     commit: str
     tree_object_id: str
     experiment_map_entry: GitTreeEntry
+    release_metadata_entries: tuple[GitTreeEntry, ...]
 
 
 @dataclass(frozen=True)
-class RawDataDeposit:
+class CompactDataDeposit:
     location: str
-    release_name: str
+    deposit_name: str
     manifest_name: str
     manifest_identifier: str
     manifest_sha256: str
     verification_status: str
-    supplied_manifest_bytes_verified: bool
+    authority_manifest_bytes_verified: bool
+    downloaded_manifest_bytes_verified: bool
+    downloaded_payload_checksums_verified: bool
+    file_count: int
+    deposit_scope: str
+    complete_diagnostics_policy: str
     network_assertion_made: bool
 
 
@@ -312,7 +339,10 @@ class PackagePlan:
     figure_qa: tuple[PdfQaReport, ...]
     excluded_paper_files: tuple[str, ...]
     audit_summary: Mapping[str, int | str]
-    raw_data_deposit: RawDataDeposit
+    compact_data_deposit: CompactDataDeposit
+    compact_deposit_manifest_path: Path
+    downloaded_compact_deposit_root: Path
+    complete_release_manifest_sha256: str
     privacy_redactions: tuple[PrivacyRedaction, ...]
     private_hostnames: tuple[str, ...]
     review_bundle: Path | None
@@ -771,49 +801,53 @@ def _discover_private_hostnames(release_root: Path) -> tuple[str, ...]:
     return tuple(sorted(hostnames))
 
 
-def _load_release_sha256_manifest(path: Path) -> dict[str, str]:
-    path = _require_regular_file(path, "complete-release checksum manifest")
+def _load_sha256_manifest(path: Path, *, label: str) -> dict[str, str]:
+    path = _require_regular_file(path, label)
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except (OSError, UnicodeError) as exc:
-        raise SubmissionPackagingError(
-            f"could not read complete-release checksum manifest: {exc}"
-        ) from exc
+        raise SubmissionPackagingError(f"could not read {label}: {exc}") from exc
     records: dict[str, str] = {}
     ordered_paths: list[str] = []
     for line_number, line in enumerate(lines, start=1):
         if len(line) < 67 or line[64:66] != "  ":
             raise SubmissionPackagingError(
-                f"invalid complete-release checksum line {line_number}"
+                f"invalid {label} line {line_number}"
             )
         digest = line[:64].lower()
         relative = _safe_relative_path(
-            line[66:], f"complete-release checksum path on line {line_number}"
+            line[66:], f"{label} path on line {line_number}"
         )
         if any(character not in "0123456789abcdef" for character in digest):
             raise SubmissionPackagingError(
-                f"invalid complete-release SHA-256 on line {line_number}"
+                f"invalid {label} SHA-256 on line {line_number}"
             )
         if relative in records:
             raise SubmissionPackagingError(
-                f"duplicate complete-release checksum path: {relative}"
+                f"duplicate {label} path: {relative}"
             )
         records[relative] = digest
         ordered_paths.append(relative)
     if not records:
-        raise SubmissionPackagingError("complete-release checksum manifest is empty")
+        raise SubmissionPackagingError(f"{label} is empty")
     if ordered_paths != sorted(ordered_paths):
-        raise SubmissionPackagingError(
-            "complete-release checksum manifest paths are not sorted"
-        )
+        raise SubmissionPackagingError(f"{label} paths are not sorted")
     return records
+
+
+def _load_release_sha256_manifest(path: Path) -> dict[str, str]:
+    return _load_sha256_manifest(
+        path,
+        label="complete-release checksum manifest",
+    )
 
 
 def _validate_deposition_location(value: str) -> str:
     value = value.strip()
     if not DEPOSITION_PATTERN.match(value):
         raise SubmissionPackagingError(
-            "raw-data deposition must be an http(s) URL or a 'doi:10....' identifier"
+            "compact-data deposition must be an http(s) URL or a "
+            "'doi:10....' identifier"
         )
     lowered = value.lower()
     placeholder_doi = (
@@ -825,82 +859,189 @@ def _validate_deposition_location(value: str) -> str:
         any(token in lowered for token in ("pending", "placeholder", "example.com"))
         or placeholder_doi
     ):
-        raise SubmissionPackagingError("raw-data deposition contains a placeholder")
+        raise SubmissionPackagingError(
+            "compact-data deposition contains a placeholder"
+        )
     return value
 
 
-def _validate_deposition(
+def _validate_compact_deposition(
     location: str,
     manifest_identifier: str,
+    authority_manifest_file: Path,
+    downloaded_deposit_root: Path,
     release_root: Path,
     *,
-    deposited_manifest_file: Path | None,
-    acknowledge_unverified_remote_deposit: bool,
-) -> tuple[RawDataDeposit, ContentSource | None]:
+    complete_release_manifest_sha256: str,
+    scientific_commit: str,
+) -> tuple[CompactDataDeposit, tuple[tuple[str, ContentSource, str], ...]]:
     location = _validate_deposition_location(location)
     identifier = manifest_identifier.strip().lower()
     match = SHA256_IDENTIFIER_PATTERN.fullmatch(identifier)
     if match is None:
         raise SubmissionPackagingError(
-            "raw-data manifest identifier must have the form 'sha256:<64-hex-digest>'"
+            "compact-deposit manifest identifier must have the form "
+            "'sha256:<64-hex-digest>'"
         )
-    manifest = _require_regular_file(
-        release_root / RELEASE_SHA256_MANIFEST,
-        "complete-release checksum manifest",
+    complete_manifest = _require_regular_file(
+        release_root / RELEASE_SHA256_MANIFEST, "complete-release checksum manifest"
     )
-    manifest_bytes = manifest.read_bytes()
-    actual_digest = _sha256_bytes(manifest_bytes)
+    if _sha256(complete_manifest) != complete_release_manifest_sha256:
+        raise SubmissionPackagingError(
+            "complete-release checksum manifest changed before compact-deposit "
+            "validation"
+        )
+
+    authority_manifest = _require_regular_file(
+        authority_manifest_file,
+        "compact-deposit authority checksum manifest",
+    )
+    authority_bytes = authority_manifest.read_bytes()
+    actual_digest = _sha256_bytes(authority_bytes)
     expected_digest = match.group(1)
     if actual_digest != expected_digest:
         raise SubmissionPackagingError(
-            "raw-data manifest identifier does not match the audited release "
-            f"{RELEASE_SHA256_MANIFEST}: expected sha256:{actual_digest}"
+            "compact-deposit manifest identifier does not match the supplied "
+            f"authority manifest: expected sha256:{actual_digest}"
         )
-    if deposited_manifest_file is not None and acknowledge_unverified_remote_deposit:
+    if authority_bytes == complete_manifest.read_bytes():
         raise SubmissionPackagingError(
-            "provide either a deposited manifest file or the explicit manual "
-            "acknowledgment, not both"
+            "compact-deposit manifest must be distinct from the complete-release "
+            "SHA256SUMS"
         )
-    evidence: ContentSource | None = None
-    if deposited_manifest_file is not None:
-        supplied = _require_regular_file(
-            deposited_manifest_file,
-            "supplied deposited release manifest",
+
+    authority_records = _load_sha256_manifest(
+        authority_manifest,
+        label="compact-deposit authority checksum manifest",
+    )
+    forbidden_paths = sorted(
+        relative
+        for relative in authority_records
+        if relative.startswith(COMPACT_DEPOSIT_FORBIDDEN_PREFIXES)
+        or relative.lower().endswith(COMPACT_DEPOSIT_FORBIDDEN_SUFFIXES)
+    )
+    if forbidden_paths:
+        raise SubmissionPackagingError(
+            "compact deposit includes data outside the approved compact boundary: "
+            + ", ".join(forbidden_paths[:5])
         )
-        supplied_bytes = supplied.read_bytes()
-        if supplied_bytes != manifest_bytes:
+    if COMPACT_DEPOSIT_RELEASE_AUTHORITY not in authority_records:
+        raise SubmissionPackagingError(
+            "compact-deposit manifest is missing its complete-release authority "
+            f"record: {COMPACT_DEPOSIT_RELEASE_AUTHORITY}"
+        )
+
+    raw_downloaded_root = Path(downloaded_deposit_root)
+    if raw_downloaded_root.is_symlink():
+        raise SubmissionPackagingError(
+            "downloaded compact-deposit root cannot be a symbolic link: "
+            f"{raw_downloaded_root}"
+        )
+    downloaded_root = raw_downloaded_root.resolve()
+    if not downloaded_root.is_dir():
+        raise SubmissionPackagingError(
+            f"downloaded compact-deposit root is not a directory: {downloaded_root}"
+        )
+    if downloaded_root == release_root:
+        raise SubmissionPackagingError(
+            "downloaded compact deposit cannot be the complete sealed release"
+        )
+    downloaded_manifest = _require_regular_file(
+        downloaded_root / COMPACT_DEPOSIT_SHA256_MANIFEST,
+        "downloaded compact-deposit checksum manifest",
+    )
+    if downloaded_manifest.read_bytes() != authority_bytes:
+        raise SubmissionPackagingError(
+            "downloaded compact-deposit manifest bytes do not match the approved "
+            "authority manifest"
+        )
+    verification_errors = verify_sha256_manifest(
+        downloaded_root,
+        COMPACT_DEPOSIT_SHA256_MANIFEST,
+    )
+    if verification_errors:
+        raise SubmissionPackagingError(
+            "downloaded compact-deposit checksum verification failed: "
+            + "; ".join(verification_errors[:5])
+        )
+
+    release_authority_path = _require_regular_file(
+        downloaded_root.joinpath(
+            *PurePosixPath(COMPACT_DEPOSIT_RELEASE_AUTHORITY).parts
+        ),
+        "downloaded compact-deposit release authority record",
+    )
+    try:
+        release_authority = json.loads(
+            release_authority_path.read_text(encoding="utf-8")
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise SubmissionPackagingError(
+            f"could not read compact-deposit release authority record: {exc}"
+        ) from exc
+    expected_authority = {
+        "schema_version": COMPACT_DEPOSIT_AUTHORITY_SCHEMA_VERSION,
+        "deposit_scope": COMPACT_DEPOSIT_SCOPE,
+        "complete_release_name": release_root.name,
+        "complete_release_sha256sums_sha256": complete_release_manifest_sha256,
+        "scientific_commit": scientific_commit,
+        "complete_diagnostics_policy": COMPLETE_DIAGNOSTICS_POLICY,
+    }
+    for key, expected_value in expected_authority.items():
+        if release_authority.get(key) != expected_value:
             raise SubmissionPackagingError(
-                "supplied deposited release manifest bytes do not match the "
-                "audited release SHA256SUMS"
+                "compact-deposit release authority mismatch for "
+                f"{key}: expected {expected_value!r}"
             )
-        evidence = _filesystem_source(
-            supplied,
-            label="supplied deposited release manifest",
-            expected_sha256=actual_digest,
-        )
-        verification_status = "supplied_manifest_bytes_verified"
-        supplied_verified = True
-    else:
-        if not acknowledge_unverified_remote_deposit:
-            raise SubmissionPackagingError(
-                "remote deposit contents are unverified; supply "
-                "--deposited-release-manifest or explicitly acknowledge the "
-                "manual gate with --acknowledge-unverified-remote-deposit"
-            )
-        verification_status = "manual_acknowledgment_remote_contents_unverified"
-        supplied_verified = False
+
+    authority_source = _filesystem_source(
+        authority_manifest,
+        label="compact-deposit authority checksum manifest",
+        expected_sha256=actual_digest,
+    )
+    downloaded_source = _filesystem_source(
+        downloaded_manifest,
+        label="downloaded compact-deposit checksum manifest",
+        expected_sha256=actual_digest,
+    )
+    release_authority_source = _filesystem_source(
+        release_authority_path,
+        label="downloaded compact-deposit release authority record",
+        expected_sha256=authority_records[COMPACT_DEPOSIT_RELEASE_AUTHORITY],
+    )
     return (
-        RawDataDeposit(
+        CompactDataDeposit(
             location=location,
-            release_name=release_root.name,
-            manifest_name=RELEASE_SHA256_MANIFEST,
+            deposit_name=downloaded_root.name,
+            manifest_name=COMPACT_DEPOSIT_SHA256_MANIFEST,
             manifest_identifier=identifier,
             manifest_sha256=actual_digest,
-            verification_status=verification_status,
-            supplied_manifest_bytes_verified=supplied_verified,
+            verification_status="downloaded_deposit_contents_verified",
+            authority_manifest_bytes_verified=True,
+            downloaded_manifest_bytes_verified=True,
+            downloaded_payload_checksums_verified=True,
+            file_count=len(authority_records),
+            deposit_scope=COMPACT_DEPOSIT_SCOPE,
+            complete_diagnostics_policy=COMPLETE_DIAGNOSTICS_POLICY,
             network_assertion_made=False,
         ),
-        evidence,
+        (
+            (
+                "provenance/deposit/COMPACT_DEPOSIT_SHA256SUMS.authority",
+                authority_source,
+                "compact_deposit_manifest_authority",
+            ),
+            (
+                "provenance/deposit/COMPACT_DEPOSIT_SHA256SUMS.downloaded",
+                downloaded_source,
+                "downloaded_compact_deposit_manifest_evidence",
+            ),
+            (
+                "provenance/deposit/COMPLETE_RELEASE_AUTHORITY.json.downloaded",
+                release_authority_source,
+                "downloaded_compact_deposit_release_authority",
+            ),
+        ),
     )
 
 
@@ -1075,6 +1216,23 @@ def _privacy_git_content_source(
     )
 
 
+def _git_entry_content_source(
+    repository: Path,
+    commit: str,
+    entry: GitTreeEntry,
+    *,
+    label: str,
+) -> ContentSource:
+    data = _verified_git_blob(repository, entry)
+    return ContentSource(
+        kind="git_blob",
+        label=f"git:{commit}:{entry.path}:{label}",
+        expected_sha256=_sha256_bytes(data),
+        git_repository=repository,
+        git_object_id=entry.object_id,
+    )
+
+
 def _generator_archive_source(
     state: GeneratorGitState, *, private_hostnames: Sequence[str]
 ) -> ContentSource:
@@ -1228,19 +1386,32 @@ def inspect_documentation_authority(
         ),
         label="documentation",
     )
-    experiment_map_entry = {entry.path: entry for entry in entries}.get(
-        GENERATOR_EXPERIMENT_MAP
-    )
+    entry_map = {entry.path: entry for entry in entries}
+    experiment_map_entry = entry_map.get(GENERATOR_EXPERIMENT_MAP)
     if experiment_map_entry is None:
         raise SubmissionPackagingError(
             "documentation commit does not contain " + GENERATOR_EXPERIMENT_MAP
         )
     _verified_git_blob(repository, experiment_map_entry)
+    missing_metadata = [
+        path for path in RELEASE_METADATA_PATHS if path not in entry_map
+    ]
+    if missing_metadata:
+        raise SubmissionPackagingError(
+            "documentation commit is missing required release metadata: "
+            + ", ".join(missing_metadata)
+        )
+    release_metadata_entries = tuple(
+        entry_map[path] for path in RELEASE_METADATA_PATHS
+    )
+    for entry in release_metadata_entries:
+        _verified_git_blob(repository, entry)
     return DocumentationGitAuthority(
         repository=repository,
         commit=documentation_commit,
         tree_object_id=tree_object_id,
         experiment_map_entry=experiment_map_entry,
+        release_metadata_entries=release_metadata_entries,
     )
 
 
@@ -2431,11 +2602,11 @@ def plan_submission_package(
     paper_worktree_root: Path,
     paper_commit: str,
     approved_figures_manifest: Path,
-    raw_data_deposition: str,
-    raw_data_manifest_identifier: str,
+    compact_data_deposition: str,
+    compact_deposit_manifest: Path,
+    compact_deposit_manifest_identifier: str,
+    downloaded_compact_deposit_root: Path,
     output_dir: Path,
-    deposited_release_manifest: Path | None = None,
-    acknowledge_unverified_remote_deposit: bool = False,
     paper_source_subdir: str = DEFAULT_PAPER_SOURCE_SUBDIR,
     paper_entrypoint: str = DEFAULT_PAPER_ENTRYPOINT,
     latexmk_executable: str = "latexmk",
@@ -2469,13 +2640,6 @@ def plan_submission_package(
         source_subdir=paper_source_subdir,
         entrypoint=paper_entrypoint,
     )
-    deposition, deposit_evidence = _validate_deposition(
-        raw_data_deposition,
-        raw_data_manifest_identifier,
-        release_root,
-        deposited_manifest_file=deposited_release_manifest,
-        acknowledge_unverified_remote_deposit=(acknowledge_unverified_remote_deposit),
-    )
     archive_path = output_dir.with_suffix(output_dir.suffix + ".tar.gz")
     _reject_package_destination_conflicts((output_dir, archive_path))
     if os.path.lexists(output_dir):
@@ -2487,6 +2651,10 @@ def plan_submission_package(
         (Path(final_figure_root).expanduser().absolute(), "final-figure root"),
         (generator_state.worktree_root, "generator worktree root"),
         (paper_state.worktree_root, "paper worktree root"),
+        (
+            Path(downloaded_compact_deposit_root).expanduser().absolute(),
+            "downloaded compact-deposit root",
+        ),
     ):
         try:
             output_dir.relative_to(protected_root)
@@ -2504,6 +2672,15 @@ def plan_submission_package(
         release_root, generator_state
     )
     release_sha256sums_sha256 = _sha256(release_root / RELEASE_SHA256_MANIFEST)
+    deposition, deposit_evidence = _validate_compact_deposition(
+        compact_data_deposition,
+        compact_deposit_manifest_identifier,
+        compact_deposit_manifest,
+        downloaded_compact_deposit_root,
+        release_root,
+        complete_release_manifest_sha256=release_sha256sums_sha256,
+        scientific_commit=scientific_commit,
+    )
     final_figure_publication, candidate_records = inspect_final_figure_publication(
         final_figure_root,
         generator_state=generator_state,
@@ -2570,7 +2747,7 @@ def plan_submission_package(
 
     for source_relative, destination, role in RELEASE_PAYLOADS:
         if source_relative == RELEASE_SHA256_MANIFEST:
-            expected_digest = deposition.manifest_sha256
+            expected_digest = release_sha256sums_sha256
         else:
             expected_digest = release_manifest_records.get(source_relative)
             if expected_digest is None:
@@ -2615,6 +2792,17 @@ def plan_submission_package(
         experiment_map,
         "paper_experiment_map",
     )
+    for entry in documentation_state.release_metadata_entries:
+        add(
+            entry.path,
+            _git_entry_content_source(
+                documentation_state.repository,
+                documentation_state.commit,
+                entry,
+                label="release metadata",
+            ),
+            "release_metadata",
+        )
     for source_relative, destination, role, expected_digest in (
         (
             FINAL_FIGURE_ORCHESTRATION,
@@ -2698,12 +2886,8 @@ def plan_submission_package(
             _filesystem_source(source, label=f"review:{relative}"),
             "review_bundle",
         )
-    if deposit_evidence is not None:
-        add(
-            "provenance/deposit/SHA256SUMS.downloaded",
-            deposit_evidence,
-            "deposited_release_manifest_evidence",
-        )
+    for destination, source, role in deposit_evidence:
+        add(destination, source, role)
 
     planned_files = tuple(sorted(planned, key=lambda item: item.destination))
     privacy_redactions = tuple(
@@ -2756,7 +2940,12 @@ def plan_submission_package(
         figure_qa=tuple(figure_qa),
         excluded_paper_files=excluded,
         audit_summary=dict(audit_report.summaries),
-        raw_data_deposit=deposition,
+        compact_data_deposit=deposition,
+        compact_deposit_manifest_path=Path(compact_deposit_manifest).resolve(),
+        downloaded_compact_deposit_root=Path(
+            downloaded_compact_deposit_root
+        ).resolve(),
+        complete_release_manifest_sha256=release_sha256sums_sha256,
         privacy_redactions=privacy_redactions,
         private_hostnames=private_hostnames,
         review_bundle=Path(review_bundle).resolve() if review_bundle else None,
@@ -2995,14 +3184,24 @@ def _write_inventory(
                 "privacy_sanitized_public_copy": True,
             },
         },
-        "raw_data": {
-            "included": False,
-            "deposition": asdict(plan.raw_data_deposit),
-            "excluded_paths": [
+        "data": {
+            "complete_sealed_release": {
+                "included": False,
+                "name": plan.release_root.name,
+                "sha256_manifest": "provenance/release/SHA256SUMS",
+                "sha256_manifest_sha256": plan.complete_release_manifest_sha256,
+                "independently_audited": True,
+                "externally_deposited": False,
+            },
+            "compact_archival_deposit": asdict(plan.compact_data_deposit),
+            "excluded_from_compact_deposit": [
                 "raw_runs/",
-                "diagnostics/case_*",
-                "diagnostics/cell_metrics.csv",
-                "diagnostics/merge_events.csv",
+                "diagnostics/case_*/",
+                "diagnostics/cell_*",
+                "diagnostics/merge_*",
+                "diagnostics/fallback_*",
+                "*.vtk",
+                "*.vtp",
             ],
         },
         "paper": {
@@ -3107,20 +3306,31 @@ This package was assembled from the completed, programmatically audited release
 - `provenance/figures/approved_figure_bindings.json`: cryptographic binding from each promoted paper PDF to its published candidate ID, slot, variant, and packet authority.
 - `provenance/figures/external_approval_record.json`: privacy-sanitized copy of the complete nonrevoked external approval snapshot; its original authority digest is retained in the binding and privacy records.
 - `provenance/privacy_redactions.json`: public-package privacy policy plus original and public SHA-256 values for every sanitized payload.
+- `LICENSE`, `DATA_LICENSE`, `CITATION.cff`, and `NOTICE`: proposed source-code license, processed-data license, citation metadata, and attribution/release notices.
 - `INVENTORY.json` and `INVENTORY.csv`: machine- and human-readable payload inventories.
 
-## Raw Scientific Data
+## Scientific Data Boundary
 
-The 970 raw run bundles and large case/cell/merge diagnostic tables are deliberately
-excluded from this compact submission package. Their declared deposit location is:
+The complete 970-run release remains an independently audited local authority and
+is not the public archival deposit. Its full ledger is copied to
+`provenance/release/SHA256SUMS`, with digest
+`{plan.complete_release_manifest_sha256}`. That ledger authenticates the complete
+sealed release and is deliberately distinct from the compact-deposit ledger.
 
-{plan.raw_data_deposit.location}
+The public compact deposit contains processed paper-facing results and
+reproducibility material, while raw run bundles, complete case/cell/merge/fallback
+diagnostics, and raw VTK files are excluded. Its declared location is:
 
-`provenance/release/SHA256SUMS` identifies every file in the complete deposited
-release. Its deposit binding is `{plan.raw_data_deposit.manifest_identifier}`.
-Deposit verification status is `{plan.raw_data_deposit.verification_status}`.
-The packager makes no network-access assertion.
-`provenance/RAW_DATA_DEPOSITION.md` records the exclusion boundary.
+{plan.compact_data_deposit.location}
+
+`provenance/deposit/COMPACT_DEPOSIT_SHA256SUMS.authority` is the approved ledger
+for that compact deposit. The byte-identical downloaded ledger is retained as
+`provenance/deposit/COMPACT_DEPOSIT_SHA256SUMS.downloaded`; its binding is
+`{plan.compact_data_deposit.manifest_identifier}`. The downloaded deposit's full
+contents passed checksum verification with status
+`{plan.compact_data_deposit.verification_status}`. The packager makes no network-
+access assertion. `provenance/COMPACT_DATA_DEPOSITION.md` records the exclusion
+boundary and the cryptographic link back to the complete-release authority.
 
 ## Manuscript Provenance
 
@@ -3169,28 +3379,41 @@ On macOS, `shasum -a 256 -c SHA256SUMS` provides the equivalent check.
 
 
 def _write_deposition_record(root: Path, plan: PackagePlan) -> None:
-    text = f"""# Raw Data Deposition
+    deposit = plan.compact_data_deposit
+    text = f"""# Compact Data Deposition
 
-- Complete release identifier: `{plan.raw_data_deposit.release_name}`
-- Declared deposition: {plan.raw_data_deposit.location}
-- Raw data included in this compact package: no
-- Complete release checksum manifest: `provenance/release/SHA256SUMS`
-- Deposited release-manifest identifier: `{plan.raw_data_deposit.manifest_identifier}`
-- Release-manifest filename: `{plan.raw_data_deposit.manifest_name}`
-- Release-manifest SHA-256: `{plan.raw_data_deposit.manifest_sha256}`
-- Verification status: `{plan.raw_data_deposit.verification_status}`
-- Supplied manifest bytes verified: `{str(plan.raw_data_deposit.supplied_manifest_bytes_verified).lower()}`
-- Network assertion made by packager: `{str(plan.raw_data_deposit.network_assertion_made).lower()}`
+## Complete local authority
 
-The external deposit should contain the complete audited release, including
-`raw_runs/` and the case-, cell-, merge-, and fallback-indexed diagnostic tables.
-The compact package retains the aggregate results and run inventory needed to map
-paper results to those deposited bundles. When
-`provenance/deposit/SHA256SUMS.downloaded` is present, its bytes were supplied to
-the packager and matched exactly. Otherwise remote contents remain an explicit
-manual submission gate; this record does not claim that the DOI/URL was fetched.
+- Complete sealed release: `{plan.release_root.name}`
+- Complete-release checksum manifest: `provenance/release/SHA256SUMS`
+- Complete-release manifest SHA-256: `{plan.complete_release_manifest_sha256}`
+- Complete release independently audited: yes
+- Complete release externally deposited: no
+
+## Compact archival deposit
+
+- Declared deposition: {deposit.location}
+- Downloaded deposit directory: `{deposit.deposit_name}`
+- Deposit scope: `{deposit.deposit_scope}`
+- Compact manifest identifier: `{deposit.manifest_identifier}`
+- Compact manifest filename at the deposit: `{deposit.manifest_name}`
+- Compact manifest SHA-256: `{deposit.manifest_sha256}`
+- Compact manifest file count: `{deposit.file_count}`
+- Verification status: `{deposit.verification_status}`
+- Authority manifest bytes verified: `{str(deposit.authority_manifest_bytes_verified).lower()}`
+- Downloaded manifest bytes verified: `{str(deposit.downloaded_manifest_bytes_verified).lower()}`
+- Downloaded payload checksums verified: `{str(deposit.downloaded_payload_checksums_verified).lower()}`
+- Network assertion made by packager: `{str(deposit.network_assertion_made).lower()}`
+
+The compact deposit excludes `raw_runs/`, complete case-, cell-, merge-, and
+fallback-indexed diagnostics, and raw VTK/VTP files. Those complete diagnostics
+are `{deposit.complete_diagnostics_policy}`. The downloaded compact deposit must
+include `{COMPACT_DEPOSIT_RELEASE_AUTHORITY}`; that record binds its processed
+contents to the complete release name, full-release `SHA256SUMS` digest, and
+scientific Git commit. The two ledgers are separate authorities and are never
+treated as interchangeable.
 """
-    _write_text(root / "provenance" / "RAW_DATA_DEPOSITION.md", text)
+    _write_text(root / "provenance" / "COMPACT_DATA_DEPOSITION.md", text)
 
 
 def _write_manuscript_build_record(
@@ -3760,10 +3983,25 @@ def build_submission_package(
     )
     if (
         current_release_sha256sums_sha256
+        != plan.complete_release_manifest_sha256
+        or current_release_sha256sums_sha256
         != plan.final_figure_publication.release_sha256sums_sha256
     ):
         raise SubmissionPackagingError(
             "sealed release ledger digest changed after package planning"
+        )
+    current_deposit, _ = _validate_compact_deposition(
+        plan.compact_data_deposit.location,
+        plan.compact_data_deposit.manifest_identifier,
+        plan.compact_deposit_manifest_path,
+        plan.downloaded_compact_deposit_root,
+        plan.release_root,
+        complete_release_manifest_sha256=current_release_sha256sums_sha256,
+        scientific_commit=plan.scientific_commit,
+    )
+    if current_deposit != plan.compact_data_deposit:
+        raise SubmissionPackagingError(
+            "compact-deposit authority changed after package planning"
         )
     publication, _ = inspect_final_figure_publication(
         plan.final_figure_publication.root,
@@ -3851,8 +4089,8 @@ def build_submission_package(
                 + [
                     _generated_inventory_entry(
                         staging,
-                        "provenance/RAW_DATA_DEPOSITION.md",
-                        "raw_data_deposition",
+                        "provenance/COMPACT_DATA_DEPOSITION.md",
+                        "compact_data_deposition",
                     ),
                     _generated_inventory_entry(
                         staging,
@@ -3963,11 +4201,14 @@ def _plan_payload(plan: PackagePlan) -> dict:
         "output_parent_inode": plan.output_parent_inode,
         "private_output_parent_verified": True,
         "package_namespace_conflict_check_passed": True,
-        "raw_data_included": False,
-        "raw_data_deposition": plan.raw_data_deposit.location,
-        "raw_data_manifest_identifier": (plan.raw_data_deposit.manifest_identifier),
-        "raw_data_deposit_verification_status": (
-            plan.raw_data_deposit.verification_status
+        "complete_release_included": False,
+        "complete_release_manifest_sha256": plan.complete_release_manifest_sha256,
+        "compact_data_deposition": plan.compact_data_deposit.location,
+        "compact_deposit_manifest_identifier": (
+            plan.compact_data_deposit.manifest_identifier
+        ),
+        "compact_deposit_verification_status": (
+            plan.compact_data_deposit.verification_status
         ),
         "network_assertion_made": False,
         "scientific_commit": plan.scientific_commit,
@@ -4041,8 +4282,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--documentation-commit",
         required=True,
         help=(
-            "full Git commit containing the authoritative PAPER_EXPERIMENT_MAP.md; "
-            "must descend from the approved generator commit"
+            "full Git commit containing the authoritative PAPER_EXPERIMENT_MAP.md "
+            "and release metadata; must descend from the approved generator commit"
         ),
     )
     parser.add_argument(
@@ -4076,27 +4317,30 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--approved-figures-manifest", type=Path, required=True)
     parser.add_argument("--review-bundle", type=Path)
-    parser.add_argument("--raw-data-deposition", required=True)
     parser.add_argument(
-        "--raw-data-manifest-id",
-        dest="raw_data_manifest_identifier",
+        "--compact-data-deposition",
         required=True,
-        help="sha256:<digest> of the complete release SHA256SUMS file",
+        help="non-placeholder DOI or URL for the compact archival deposit",
     )
     parser.add_argument(
-        "--deposited-release-manifest",
+        "--compact-deposit-manifest",
         type=Path,
-        help=(
-            "optional locally downloaded/fetched SHA256SUMS from the deposit; "
-            "its bytes must exactly match the audited release manifest"
-        ),
+        required=True,
+        help="approved SHA256SUMS for the compact archival deposit",
     )
     parser.add_argument(
-        "--acknowledge-unverified-remote-deposit",
-        action="store_true",
+        "--compact-deposit-manifest-id",
+        dest="compact_deposit_manifest_identifier",
+        required=True,
+        help="sha256:<digest> of the compact deposit's dedicated SHA256SUMS",
+    )
+    parser.add_argument(
+        "--downloaded-compact-deposit-root",
+        type=Path,
+        required=True,
         help=(
-            "explicitly acknowledge that the packager did not verify remote "
-            "deposit contents; required when no deposited manifest is supplied"
+            "locally downloaded compact deposit; every payload is verified "
+            "against its SHA256SUMS before packaging"
         ),
     )
     parser.add_argument(
@@ -4137,11 +4381,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             latexmk_executable=args.latexmk_executable,
             approved_figures_manifest=args.approved_figures_manifest,
             review_bundle=args.review_bundle,
-            raw_data_deposition=args.raw_data_deposition,
-            raw_data_manifest_identifier=args.raw_data_manifest_identifier,
-            deposited_release_manifest=args.deposited_release_manifest,
-            acknowledge_unverified_remote_deposit=(
-                args.acknowledge_unverified_remote_deposit
+            compact_data_deposition=args.compact_data_deposition,
+            compact_deposit_manifest=args.compact_deposit_manifest,
+            compact_deposit_manifest_identifier=(
+                args.compact_deposit_manifest_identifier
+            ),
+            downloaded_compact_deposit_root=(
+                args.downloaded_compact_deposit_root
             ),
             output_dir=args.output_dir,
         )

@@ -106,3 +106,11 @@ The intended public archive contains code, aggregate results, paper-facing
 figure inputs, manifests, and checksums; full raw run trees and large cell/merge
 diagnostics remain available from the corresponding author on reasonable
 request.
+
+Source code is proposed for release under BSD-3-Clause; processed results and
+project-authored reproducibility metadata in the compact deposit are proposed
+for release under CC BY 4.0. See `LICENSE`, `DATA_LICENSE`, `CITATION.cff`,
+`NOTICE`, and `submission/RELEASE_METADATA.md` for scope, attribution,
+unresolved placeholders, and institutional approval gates. The compact deposit
+has its own checksum ledger and a cryptographic binding to the separately
+audited complete local release.
