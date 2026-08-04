@@ -55,6 +55,10 @@ release and scientific commit.
   number.
 - Confirm BSD-3-Clause and CC BY 4.0 with all authors and the applicable
   institutional technology-transfer or legal offices.
+- Review the repository's open dependency-security alerts and validate a
+  patched public-install environment. Preserve the accepted scientific
+  environment record as immutable provenance rather than silently rewriting
+  the environment associated with the frozen results.
 - Audit bundled and copied third-party material; retain its original license and
   attribution rather than applying the project licenses.
 - Replace only the three explicit unknowns in `NOTICE`: archival DOI, final article
