@@ -2,7 +2,7 @@
 
 ## Proposed Public Metadata
 
-- Source code: BSD 3-Clause (`LICENSE`).
+- Source code: Apache License 2.0 (`LICENSE`).
 - Deposited processed results, provenance manifests, checksum ledgers, and
   project-authored reproducibility documentation: CC BY 4.0 (`DATA_LICENSE`).
 - Citation metadata: `CITATION.cff`, with Jerry Liu, Kenneth Weiss, and Jin Yao
@@ -11,7 +11,7 @@
 - Repository: `https://github.com/jerrywliu/interface-reconstruction`.
 
 The article's publication license is separate from the code and data licenses.
-Do not use this repository's BSD or CC BY notices to relicense the publisher's
+Do not use this repository's Apache or CC BY notices to relicense the publisher's
 formatted article or third-party material.
 
 ## Compact Deposit Boundary
@@ -53,7 +53,7 @@ release and scientific commit.
   must replace or supplement the author copyright line.
 - Obtain LLNL release review, export-control review, and the final LLNL release
   number.
-- Confirm BSD-3-Clause and CC BY 4.0 with all authors and the applicable
+- Confirm Apache-2.0 and CC BY 4.0 with all authors and the applicable
   institutional technology-transfer or legal offices.
 - Review the repository's open dependency-security alerts and validate a
   patched public-install environment. Preserve the accepted scientific

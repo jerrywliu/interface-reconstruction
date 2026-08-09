@@ -107,7 +107,7 @@ figure inputs, manifests, and checksums; full raw run trees and large cell/merge
 diagnostics remain available from the corresponding author on reasonable
 request.
 
-Source code is proposed for release under BSD-3-Clause; processed results and
+Source code is proposed for release under Apache-2.0; processed results and
 project-authored reproducibility metadata in the compact deposit are proposed
 for release under CC BY 4.0. See `LICENSE`, `DATA_LICENSE`, `CITATION.cff`,
 `NOTICE`, and `submission/RELEASE_METADATA.md` for scope, attribution,
