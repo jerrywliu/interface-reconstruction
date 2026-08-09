@@ -3,7 +3,7 @@
 Generate the Section 6 main-text static figures.
 
 This script creates:
-- compact quantitative 2x2 panels for each static experiment
+- compact quantitative panels for each static experiment
 - representative reconstruction-comparison figures for each experiment
 
 It reuses the merged Section 6 CSV for summary metrics, with a small tangent-error
@@ -50,6 +50,7 @@ from experiments.static.run_perturbed_sweeps import (
     METHOD_STYLES,
     PERTURBATION_AXIS_LABEL,
     RESOLUTION_AXIS_LABEL,
+    STATIC_GRID_SIZE,
     _build_method_curves,
     _build_method_curves_by_resolution,
     _build_metric_index,
@@ -96,6 +97,7 @@ QUANT_SPECS = {
 
 RESOLUTION_QUANT_SPECS = {
     **QUANT_SPECS,
+    "circles": {"metrics": ("hausdorff", "facet_gap")},
     "ellipses": {"metrics": ("hausdorff", "facet_gap")},
 }
 
@@ -1290,6 +1292,8 @@ def _generate_resolution_quantitative_panel(
             x_mode="resolution",
             exp_name=exp_name,
         )
+        if exp_name == "ellipses" and metric == "facet_gap":
+            _add_power_law_fit(ax, curves, algo="circular")
         ax.set_title(
             f"{metric.replace('_', ' ').title()} vs cells per side",
             fontsize=11.5,
@@ -1320,6 +1324,37 @@ def _generate_resolution_quantitative_panel(
     fig.tight_layout(rect=[0, 0.12, 1, 1])
     _save_figure(fig, out_path)
     plt.close(fig)
+
+
+def _add_power_law_fit(ax, curves: dict, *, algo: str) -> float | None:
+    """Overlay a log-log fit for one method and return its positive order."""
+    series = curves.get(algo)
+    if not series:
+        return None
+
+    resolutions = np.asarray(series["x_values"], dtype=float)
+    values = np.asarray(series["median"], dtype=float)
+    valid = np.isfinite(resolutions) & np.isfinite(values) & (values > 0)
+    if np.count_nonzero(valid) < 2:
+        return None
+
+    cells_per_side = STATIC_GRID_SIZE * resolutions[valid]
+    slope, intercept = np.polyfit(
+        np.log(cells_per_side), np.log(values[valid]), 1
+    )
+    order = float(-slope)
+    fitted = np.exp(intercept) * cells_per_side**slope
+    style = METHOD_STYLES.get(algo, {})
+    ax.plot(
+        cells_per_side,
+        fitted,
+        color=style.get("color", None),
+        linestyle=":",
+        linewidth=2.0,
+        label=rf"circular fit: $N^{{-{order:.2f}}}$",
+        zorder=4,
+    )
+    return order
 
 
 def _inset_bounds(exp_name: str, spec: dict) -> tuple[float, float, float, float] | None:
