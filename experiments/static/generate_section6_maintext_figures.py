@@ -94,6 +94,11 @@ QUANT_SPECS = {
     "zalesak": {"metrics": ("hausdorff", "facet_gap")},
 }
 
+RESOLUTION_QUANT_SPECS = {
+    **QUANT_SPECS,
+    "ellipses": {"metrics": ("hausdorff", "facet_gap")},
+}
+
 REPRESENTATIVE_CASES = {
     "lines": {
         "resolution": 0.32,
@@ -250,6 +255,7 @@ SPYGLASS_OUTER_BOTTOM = 0.04
 SPYGLASS_FRAME_COLOR = "#7e22ce"
 FIGURE_GROUPS = {
     "quantitative",
+    "quantitative_resolution",
     "representative",
     "appendix_resolutions",
     "appendix_cartesian",
@@ -1255,6 +1261,67 @@ def _generate_quantitative_panel(exp_name: str, exp_data: dict, methods: list[st
     plt.close(fig)
 
 
+def _generate_resolution_quantitative_panel(
+    exp_name: str,
+    exp_data: dict,
+    methods: list[str],
+    metrics: tuple[str, str],
+    out_path: Path,
+):
+    filtered = {algo: exp_data[algo] for algo in methods if algo in exp_data}
+    resolution_curves = {
+        metric: curves
+        for metric in metrics
+        if (curves := _build_method_curves_by_resolution(filtered, metric))
+    }
+
+    fig, axes = plt.subplots(1, 2, figsize=(11.2, 4.25))
+    legend_entries = {}
+    for ax, metric in zip(axes, metrics):
+        curves = resolution_curves.get(metric)
+        if not curves:
+            ax.set_axis_off()
+            continue
+        _draw_method_curves(
+            ax,
+            curves,
+            metric,
+            x_label=RESOLUTION_AXIS_LABEL,
+            x_mode="resolution",
+            exp_name=exp_name,
+        )
+        ax.set_title(
+            f"{metric.replace('_', ' ').title()} vs cells per side",
+            fontsize=11.5,
+            fontweight="bold",
+        )
+        handles, labels = ax.get_legend_handles_labels()
+        for handle, label in zip(handles, labels):
+            if label and not label.startswith("_") and label not in legend_entries:
+                legend_entries[label] = handle
+
+    active_axes = [ax for ax in axes if ax.axison]
+    if active_axes:
+        xmin = min(ax.get_xlim()[0] for ax in active_axes)
+        xmax = max(ax.get_xlim()[1] for ax in active_axes)
+        for ax in active_axes:
+            ax.set_xlim(xmin, xmax)
+
+    if legend_entries:
+        fig.legend(
+            list(legend_entries.values()),
+            list(legend_entries.keys()),
+            loc="lower center",
+            ncol=min(5, len(legend_entries)),
+            fontsize=9.5,
+            frameon=True,
+            bbox_to_anchor=(0.5, -0.01),
+        )
+    fig.tight_layout(rect=[0, 0.12, 1, 1])
+    _save_figure(fig, out_path)
+    plt.close(fig)
+
+
 def _inset_bounds(exp_name: str, spec: dict) -> tuple[float, float, float, float] | None:
     override_bounds = spec.get("inset_bounds")
     if override_bounds is not None:
@@ -1705,8 +1772,9 @@ def main():
         type=str,
         default="all",
         help=(
-            "Comma-separated figure groups to regenerate: quantitative, representative, "
-            "appendix_resolutions, appendix_cartesian, or appendix/all."
+            "Comma-separated figure groups to regenerate: quantitative, "
+            "quantitative_resolution, representative, appendix_resolutions, "
+            "appendix_cartesian, or appendix/all."
         ),
     )
     parser.add_argument(
@@ -1729,7 +1797,7 @@ def main():
 
     figure_groups = _parse_figure_groups(args.figure_groups)
     case_overrides = _parse_case_overrides(args.case_overrides)
-    if "quantitative" in figure_groups:
+    if {"quantitative", "quantitative_resolution"} & figure_groups:
         rows = _load_sweep_rows(args.csv)
         rows = _backfill_circle_tangent_rows(rows)
         metric_index = _build_metric_index(rows)
@@ -1758,6 +1826,7 @@ def main():
 
     outputs = {
         "quantitative": {},
+        "quantitative_resolution": {},
         "representative": {},
         "appendix_resolutions": {},
         "appendix_cartesian": {},
@@ -1782,6 +1851,22 @@ def main():
             out_path=out_path,
         )
         outputs["quantitative"][exp_name] = str(out_path)
+
+    for exp_name, methods in MAINTEXT_METHODS.items():
+        if "quantitative_resolution" not in figure_groups:
+            continue
+        if exp_name not in selected_experiments:
+            continue
+        out_name = f"{exp_name}_maintext_resolution_metrics.png"
+        out_path = summary_dir / out_name
+        _generate_resolution_quantitative_panel(
+            exp_name=exp_name,
+            exp_data=metric_index.get(exp_name, {}),
+            methods=methods,
+            metrics=RESOLUTION_QUANT_SPECS[exp_name]["metrics"],
+            out_path=out_path,
+        )
+        outputs["quantitative_resolution"][exp_name] = str(out_path)
 
     for exp_name, spec in REPRESENTATIVE_CASES.items():
         if "representative" not in figure_groups:

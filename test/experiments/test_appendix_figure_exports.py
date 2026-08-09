@@ -128,6 +128,47 @@ def test_c0_runner_generates_paired_representatives(tmp_path, monkeypatch):
     )
 
 
+def test_resolution_maintext_panel_uses_two_resolution_axes(tmp_path, monkeypatch):
+    draw_calls = []
+    monkeypatch.setattr(
+        maintext_figs,
+        "_build_method_curves_by_resolution",
+        lambda _data, metric: {
+            "linear": {
+                "x_values": np.asarray([1.0, 0.5]),
+                "median": np.asarray([1e-2, 1e-3]),
+                "p25": np.asarray([8e-3, 8e-4]),
+                "p75": np.asarray([1.2e-2, 1.2e-3]),
+            }
+        },
+    )
+    monkeypatch.setattr(
+        maintext_figs,
+        "_draw_method_curves",
+        lambda ax, curves, metric, **kwargs: draw_calls.append(
+            (ax, curves, metric, kwargs)
+        ),
+    )
+    saved = []
+    monkeypatch.setattr(
+        maintext_figs,
+        "_save_figure",
+        lambda figure, out_path: saved.append((figure, Path(out_path))),
+    )
+
+    maintext_figs._generate_resolution_quantitative_panel(
+        exp_name="ellipses",
+        exp_data={"linear": {}},
+        methods=["linear"],
+        metrics=("hausdorff", "facet_gap"),
+        out_path=tmp_path / "ellipse.pdf",
+    )
+
+    assert [call[2] for call in draw_calls] == ["hausdorff", "facet_gap"]
+    assert all(call[3]["x_mode"] == "resolution" for call in draw_calls)
+    assert saved[0][1].name == "ellipse.pdf"
+
+
 def _scatter_collections(axis):
     return [collection for collection in axis.collections if isinstance(collection, PathCollection)]
 
