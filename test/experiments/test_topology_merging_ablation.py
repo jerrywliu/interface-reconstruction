@@ -20,8 +20,8 @@ def _write_csv(path, fieldnames, rows):
 
 def test_submission_labels_are_scoped_and_explicit():
     assert DISPLAY_LABELS == {
-        "safe_circle": "Ours (circular, independent cells)",
-        "circular": "Ours (circular, topology + merging)",
+        "safe_circle": "Ours (circular, per-cell)",
+        "circular": "Ours (circular, graph-coordinated)",
     }
 
 

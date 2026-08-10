@@ -16,8 +16,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ALGORITHMS = ("safe_circle", "circular")
 DISPLAY_LABELS = {
-    "safe_circle": "Ours (circular, independent cells)",
-    "circular": "Ours (circular, topology + merging)",
+    "safe_circle": "Ours (circular, per-cell)",
+    "circular": "Ours (circular, graph-coordinated)",
 }
 DEFAULT_RESOLUTIONS = (0.50, 0.64, 1.00, 1.28, 1.50)
 PLIC_NAMES = {"Youngs", "ELVIRA", "LVIRA"}
