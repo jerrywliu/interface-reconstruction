@@ -22,8 +22,10 @@ import argparse
 import json
 import subprocess
 import sys
+from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
+from typing import Union
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -44,6 +46,8 @@ from experiments.static import run_perturbed_sweeps as sweeps
 
 
 PLOTS_ROOT = REPO_ROOT / "plots"
+
+MainEndpointVisibility = Union[bool, Mapping[int, bool]]
 
 APPENDIX_RESOLUTION_EXPERIMENTS = [
     {
@@ -116,15 +120,16 @@ APPENDIX_RESOLUTION_EXPERIMENTS = [
         "config": "static/zalesak",
         "num_arg": "--num_cases",
         "num_default": 25,
-        "case_index": 12,
+        "case_index": 6,
         "algo": "circular+corner",
         "display": "Ours (circular+corner)",
-        "resolutions": [0.16, 0.32, 0.64],
+        "resolutions": [0.32, 0.64],
         "wiggles": [0.0, 0.1],
         "seed": 0,
         "min_span": 42.0,
         "margin_frac": 0.12,
         "inset": {"kind": "zalesak_corner", "zoom": 3.0},
+        "main_endpoint_visibility": {32: True, 64: False},
     },
 ]
 
@@ -412,13 +417,14 @@ def _generate_figure(
     exp_spec: dict,
     out_path: Path,
     *,
-    show_main_endpoints: bool = True,
+    show_main_endpoints: MainEndpointVisibility = True,
 ):
     nrows = len(exp_spec["resolutions"])
     ncols = len(exp_spec["wiggles"])
     has_spyglass = bool(exp_spec.get("inset"))
     fig_width = 9.2 if has_spyglass else 6.8
-    fig, axes = plt.subplots(nrows, ncols, figsize=(fig_width, 3.1 * nrows))
+    row_height = 3.4 if nrows == 2 else 3.1
+    fig, axes = plt.subplots(nrows, ncols, figsize=(fig_width, row_height * nrows))
     axes = np.atleast_2d(axes)
 
     base_save_name = _save_name(
@@ -463,6 +469,10 @@ def _generate_figure(
             )
             condition = "Cartesian" if wiggle == 0.0 else "Perturbed"
             title = f"{condition}, N={int(round(resolution * 100))}"
+            if isinstance(show_main_endpoints, bool):
+                panel_endpoints = show_main_endpoints
+            else:
+                panel_endpoints = show_main_endpoints[int(round(resolution * 100))]
             panel_spec = maintext_figs._endpoint_visibility_spec(
                 maintext_figs._panel_spyglass_spec({
                     "case_index": exp_spec["case_index"],
@@ -470,7 +480,7 @@ def _generate_figure(
                     "true_fill_vertices": true_fill_vertices,
                     "inset_bounds": inset_bounds,
                 }, col),
-                show_main_endpoints=show_main_endpoints,
+                show_main_endpoints=panel_endpoints,
             )
             maintext_figs._plot_panel(
                 ax,
@@ -493,7 +503,7 @@ def _generate_figure(
             left=0.16,
             right=0.84,
             bottom=0.04,
-            top=0.95,
+            top=0.90 if nrows == 2 else 0.95,
             wspace=0.24,
             hspace=0.24,
         )
@@ -519,7 +529,9 @@ def _generate_endpoint_variant_figures(
         _generate_figure(
             exp_spec,
             review_png,
-            show_main_endpoints=show_main_endpoints,
+            show_main_endpoints=exp_spec.get(
+                "main_endpoint_visibility", show_main_endpoints
+            ),
         )
         outputs[variant_name] = vector_figure_artifacts(review_png)
     return outputs
