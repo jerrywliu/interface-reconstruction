@@ -113,3 +113,16 @@ per-run manifests changed only revision-layout prototype files. Git tree IDs for
 the circle/ellipse drivers, `main/`, `util/reconstruction.py`, and static configs
 are identical across all three recorded commit IDs; the scientific source did
 not change during the run.
+
+## 2026-08-13 Follow-Up Gate
+
+The planned 25-case extension is paused after diagnosing a circular-fit
+straight-line precheck that normalizes line area by prescribed fluid area
+rather than cell area. This falsely accepts a nonconservative line in the
+nearly full `N=512`, `w=0`, ellipse case-2 cell and materially contaminates that
+case's facet-gap convergence tail. The existing smoke therefore remains a
+diagnostic result and should not be promoted as extended convergence evidence.
+
+See `docs/experiments/EXTENDED_CONVERGENCE_FOLLOWUP.md` and
+`experiments/static/diagnose_extended_convergence.py` for the full diagnosis,
+reproduction command, and required rerun gate.
