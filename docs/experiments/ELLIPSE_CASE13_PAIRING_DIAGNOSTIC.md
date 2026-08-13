@@ -74,8 +74,22 @@ Conservation is unaffected:
 4. Add one regression with an unresolved cell whose replacement ID is appended;
    require invariance under dictionary insertion order and metric recomputation
    from serialized active-ID geometry.
-5. Rerun the affected ellipse setting. This is the only completed full-sweep
-   case with a PLIC fallback, so the immediate numerical blast radius is one row.
+5. Rerun the affected ellipse setting and audit every other completed
+   full-sweep row containing a PLIC fallback.
+
+All five gate items are complete in commit `e108128`. The production drivers
+pair facets with the returned active polygons, validation rejects shifted
+pairs, and facet-gap construction excludes stale merge entries while splicing
+unresolved replacement cells into the active local topology. The clean
+provenance-tagged rerun reports:
+
+| Quantity | Corrected value |
+| --- | ---: |
+| Hausdorff | `8.2587909021e-5` |
+| Facet gap | `3.5767609436e-6` |
+
+The corrected derived sweep is
+`results/static/extended_convergence_corrected_e108128_20260813/`.
 
 ## Artifacts
 

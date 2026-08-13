@@ -104,6 +104,15 @@ reject the paper's prior aggregate `N^{-2.94}` claim.
 All five conditions are complete. The full extension output is
 `results/static/extended_convergence_smoke_full_cell_area_fix_20260813/`.
 
+Three rows containing unresolved-orientation fallbacks required a metric-only
+correction after the full run. Reconstruction geometry and conservation were
+unchanged. Commit `e108128` fixes active polygon/facet pairing and replacement
+topology; clean reruns patch those rows in the derived result set
+`results/static/extended_convergence_corrected_e108128_20260813/`. The
+corrected perturbed-ellipse all-case mean orders are `2.00` for Hausdorff and
+`2.91` for facet gap, while the previously reported median orders remain
+`2.02` and `2.93`.
+
 ## Reproduction
 
 The read-only diagnostic is:
