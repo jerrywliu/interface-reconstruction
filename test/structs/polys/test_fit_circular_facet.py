@@ -6,6 +6,7 @@ Integration-style test for NeighboredPolygon.fitCircularFacet().
 from main.geoms.circular_facet import getCircleIntersectArea
 from main.geoms.geoms import getArea, pointInPoly
 from main.structs.facets.circular_facet import ArcFacet
+from main.structs.facets.linear_facet import LinearFacet
 from main.structs.polys.base_polygon import BasePolygon
 from main.structs.polys.neighbored_polygon import NeighboredPolygon
 
@@ -39,6 +40,59 @@ def test_fit_circular_facet():
     )
     fit_fraction = fit_area / max_area
     assert abs(fit_fraction - mid.getFraction()) < 1e-6
+
+
+def _three_neighbored_polygons(fraction):
+    points = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
+    left = NeighboredPolygon(points)
+    mid = NeighboredPolygon(points)
+    right = NeighboredPolygon(points)
+    for poly in (left, mid, right):
+        poly.setFraction(fraction)
+    mid.setNeighbor(left, "left")
+    mid.setNeighbor(right, "right")
+    return mid
+
+
+def test_fit_circular_facet_rejects_false_near_full_line(monkeypatch):
+    mid = _three_neighbored_polygons(0.9998871334)
+    monkeypatch.setattr(
+        "main.structs.polys.neighbored_polygon.getLinearFacet",
+        lambda *args: ([0.0, 0.5], [1.0, 0.5]),
+    )
+    monkeypatch.setattr(
+        "main.structs.polys.neighbored_polygon.getPolyLineArea",
+        lambda *args: 0.9997752576,
+    )
+    monkeypatch.setattr(
+        mid,
+        "_run_arc_fit_with_timeout",
+        lambda *args: ([0.5, 0.5], 1.0, [[0.0, 0.5], [1.0, 0.5]]),
+    )
+
+    mid.fitCircularFacet()
+
+    assert isinstance(mid.getFacet(), ArcFacet)
+
+
+def test_fit_circular_facet_accepts_matching_near_empty_line(monkeypatch):
+    mid = _three_neighbored_polygons(1.0e-4)
+    monkeypatch.setattr(
+        "main.structs.polys.neighbored_polygon.getLinearFacet",
+        lambda *args: ([0.0, 0.5], [1.0, 0.5]),
+    )
+    monkeypatch.setattr(
+        "main.structs.polys.neighbored_polygon.getPolyLineArea",
+        lambda *args: 1.005e-4,
+    )
+    monkeypatch.setattr(
+        "main.structs.polys.neighbored_polygon.getPolyLineIntersects",
+        lambda *args: [[0.0, 0.5], [1.0, 0.5]],
+    )
+
+    mid.fitCircularFacet()
+
+    assert isinstance(mid.getFacet(), LinearFacet)
 
 
 def test_root_fallback_prefers_candidate_with_better_selection_key():

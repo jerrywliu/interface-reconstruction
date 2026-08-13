@@ -127,23 +127,15 @@ class NeighboredPolygon(BasePolygon):
                 )
                 self._set_default_plic_fallback()
                 return
+            line_area_fraction = (
+                getPolyLineArea(self.points, facetline1, facetline2)
+                / self.getMaxArea()
+            )
             if (
-                abs(
-                    self.getFraction()
-                    - getPolyLineArea(self.points, facetline1, facetline2)
-                    / self.getArea()
-                )
+                abs(self.getFraction() - line_area_fraction)
                 < NeighboredPolygon.linearity_threshold
-                and (
-                    getPolyLineArea(self.points, facetline1, facetline2)
-                    / self.getArea()
-                    > NeighboredPolygon.optimization_threshold
-                )
-                and (
-                    getPolyLineArea(self.points, facetline1, facetline2)
-                    / self.getArea()
-                    < 1 - NeighboredPolygon.optimization_threshold
-                )
+                and line_area_fraction > NeighboredPolygon.optimization_threshold
+                and line_area_fraction < 1 - NeighboredPolygon.optimization_threshold
             ):
                 intersects = getPolyLineIntersects(self.points, facetline1, facetline2)
                 self.setFacet(LinearFacet(intersects[0], intersects[-1]))

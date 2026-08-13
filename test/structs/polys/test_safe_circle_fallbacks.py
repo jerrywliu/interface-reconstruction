@@ -3,6 +3,7 @@ import pytest
 import main.structs.polys.base_polygon as base_polygon_module
 import main.structs.polys.neighbored_polygon as neighbored_polygon_module
 from main.structs.facets.linear_facet import LinearFacet
+from main.structs.facets.circular_facet import ArcFacet
 from main.structs.meshes.merge_mesh import MergeMesh
 from main.structs.polys.base_polygon import BasePolygon
 from main.structs.polys.neighbored_polygon import NeighboredPolygon
@@ -43,6 +44,46 @@ def test_safe_circle_preserves_explicit_elvira_override(monkeypatch):
 
     assert facet is elvira
     assert fallback["policy"] == "ELVIRA"
+
+
+@pytest.mark.parametrize(
+    ("fraction", "line_area", "expected_type"),
+    [
+        (0.9998871334, 0.9997752576, ArcFacet),
+        (1.0e-4, 1.005e-4, LinearFacet),
+    ],
+)
+def test_safe_circle_line_precheck_uses_cell_area(
+    monkeypatch, fraction, line_area, expected_type
+):
+    poly = _poly(fraction)
+    left = _poly(0.25)
+    right = _poly(0.75)
+    monkeypatch.setattr(
+        poly, "findSafeOrientation", lambda fit_1neighbor=False: [left, right]
+    )
+    monkeypatch.setattr(
+        base_polygon_module,
+        "getLinearFacet",
+        lambda *args: ([0.0, 0.5], [1.0, 0.5]),
+    )
+    monkeypatch.setattr(
+        base_polygon_module, "getPolyLineArea", lambda *args: line_area
+    )
+    monkeypatch.setattr(
+        base_polygon_module,
+        "getPolyLineIntersects",
+        lambda *args: [[0.0, 0.5], [1.0, 0.5]],
+    )
+    monkeypatch.setattr(
+        poly,
+        "_run_arc_fit_with_timeout",
+        lambda *args: ([0.5, 0.5], 1.0, [[0.0, 0.5], [1.0, 0.5]]),
+    )
+
+    facet = poly.runSafeCircle(ret=True)
+
+    assert isinstance(facet, expected_type)
 
 
 def test_safe_circle_arc_failure_uses_mass_matching_support_line(monkeypatch):

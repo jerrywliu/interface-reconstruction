@@ -703,7 +703,7 @@ class BasePolygon:
             print(f"runSafeCircle fallback to PLIC after getLinearFacet failure: {error}")
             return plic_result("support_line_fit_failed")
 
-        line_area_fraction = getPolyLineArea(self.points, l1, l2) / self.getArea()
+        line_area_fraction = getPolyLineArea(self.points, l1, l2) / self.getMaxArea()
         if (
             abs(self.getFraction() - line_area_fraction)
             < BasePolygon.linearity_threshold
