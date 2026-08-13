@@ -24,6 +24,7 @@ from main.structs.facets.linear_facet import LinearFacet
 
 VolumeCorrection = Literal["translate_center", "adjust_radius"]
 PCICPhase = Literal["disk", "complement"]
+PCICPhasePolicy = Literal["infer_from_plic"]
 CenterTranslationRootPolicy = Literal["nearest_bracket"]
 
 CENTER_TRANSLATION_VARIANT = "bare PCIC (center translation)"
@@ -64,7 +65,8 @@ class PCICConfig:
     max_bisection_iterations: int = 200
     max_bracket_expansions: int = 60
     lls_max_cut_cells: int = 5
-    lls_overcrowded_radius_scale: Optional[float] = None
+    lls_overcrowded_radius_scale: float = 0.5
+    center_translation_samples_per_cell: int = 32
     cartesian_tolerance: float = 1.0e-10
 
 
@@ -273,12 +275,6 @@ def reconstruct_lls_plic(
     radius_scale = 1.0
     if len(cut_facets) > config.lls_max_cut_cells:
         radius_scale = config.lls_overcrowded_radius_scale
-        if radius_scale is None:
-            raise PCICAmbiguousSourceChoice(
-                "The cited LLS source says to reduce the radius of influence "
-                f"when more than {config.lls_max_cut_cells} cells are cut, but "
-                "does not specify the multiplier"
-            )
         if not 0.0 < radius_scale < 1.0:
             raise ValueError(
                 "The explicit overcrowded LLS radius scale must be in (0, 1)"
@@ -380,8 +376,8 @@ def reconstruct_bare_pcic_cartesian_cell(
     polygon_block: Sequence[Sequence[object]],
     *,
     correction: VolumeCorrection,
-    phase: PCICPhase,
-    center_translation_root_policy: Optional[CenterTranslationRootPolicy] = None,
+    phase: Union[PCICPhase, PCICPhasePolicy] = "infer_from_plic",
+    center_translation_root_policy: CenterTranslationRootPolicy = "nearest_bracket",
     config: PCICConfig = PCICConfig(),
 ) -> PCICCellFacet:
     """Run bare PCIC from volume fractions on a complete Cartesian halo."""
@@ -475,8 +471,8 @@ def reconstruct_bare_pcic_cell(
     plic_stencil: Sequence[Sequence[Optional[LinearFacet]]],
     *,
     correction: VolumeCorrection,
-    phase: PCICPhase,
-    center_translation_root_policy: Optional[CenterTranslationRootPolicy] = None,
+    phase: Union[PCICPhase, PCICPhasePolicy] = "infer_from_plic",
+    center_translation_root_policy: CenterTranslationRootPolicy = "nearest_bracket",
     config: PCICConfig = PCICConfig(),
 ) -> PCICCellFacet:
     """Reconstruct one static cell through the published bare-PCIC sequence.
@@ -487,13 +483,8 @@ def reconstruct_bare_pcic_cell(
 
     if correction not in ("translate_center", "adjust_radius"):
         raise ValueError(f"Unknown PCIC volume correction: {correction!r}")
-    if phase not in ("disk", "complement"):
+    if phase not in ("disk", "complement", "infer_from_plic"):
         raise ValueError(f"Unknown PCIC phase convention: {phase!r}")
-    if correction == "translate_center" and center_translation_root_policy is None:
-        raise PCICAmbiguousSourceChoice(
-            "The paper does not specify which conservative center-translation "
-            "root to select; pass an explicit root policy"
-        )
 
     target_fraction = _polygon_fraction(target_polygon)
     if not (
@@ -519,7 +510,12 @@ def reconstruct_bare_pcic_cell(
     if fit_radius >= config.straight_radius_scale * cell_width:
         return central_plic
 
-    sign = 1.0 if phase == "disk" else -1.0
+    resolved_phase = (
+        infer_phase_from_plic(fit_center, central_plic)
+        if phase == "infer_from_plic"
+        else phase
+    )
+    sign = 1.0 if resolved_phase == "disk" else -1.0
     if fit_radius < cell_diagonal:
         fit_radius = cell_diagonal
         fit_center = _center_from_plic_chord(central_plic, fit_radius, sign)
@@ -534,7 +530,11 @@ def reconstruct_bare_pcic_cell(
             fit_center, sign * fit_radius, points
         )
         direction = _fitted_chord_perpendicular(
-            fit_center, fitted_intersections, config
+            fit_center,
+            fitted_intersections,
+            config,
+            central_plic=central_plic,
+            polygon_points=points,
         )
         corrected_center = _correct_center(
             target_polygon,
@@ -569,7 +569,7 @@ def reconstruct_bare_pcic_cell(
         source_center=(float(fit_center[0]), float(fit_center[1])),
         source_radius=float(sign * fit_radius),
         correction=correction,
-        phase=phase,
+        phase=resolved_phase,
         components=components,
         component_pairing_status=pairing_status,
     )
@@ -627,16 +627,35 @@ def _correct_center(
         area, _ = getCircleIntersectArea(candidate(offset), signed_radius, points)
         return area / abs(getArea(points)) - target
 
+    if config.center_translation_samples_per_cell < 2:
+        raise ValueError(
+            "Center-translation root search needs at least two samples per cell"
+        )
     samples = [(0.0, residual(0.0))]
-    step = cell_width
-    for _ in range(config.max_bracket_expansions):
-        samples.extend([(-step, residual(-step)), (step, residual(step))])
+    previous_extent = 0.0
+    for expansion in range(config.max_bracket_expansions):
+        extent = cell_width * (2.0**expansion)
+        shell_width = extent - previous_extent
+        shell_step = shell_width / config.center_translation_samples_per_cell
+        positive = [
+            previous_extent + index * shell_step
+            for index in range(1, config.center_translation_samples_per_cell + 1)
+        ]
+        offsets = [-offset for offset in reversed(positive)] + positive
+        samples.extend((offset, residual(offset)) for offset in offsets)
         samples.sort(key=lambda pair: pair[0])
-        bracket = _closest_bracket(samples)
-        if bracket is not None:
-            offset = _bisect(residual, bracket[0], bracket[1], target, config)
-            return candidate(offset)
-        step *= 2.0
+        brackets = _all_brackets(samples)
+        if brackets:
+            roots = [
+                (
+                    bracket[0]
+                    if bracket[0] == bracket[1]
+                    else _bisect(residual, bracket[0], bracket[1], target, config)
+                )
+                for bracket in brackets
+            ]
+            return candidate(min(roots, key=lambda root: (abs(root), root)))
+        previous_extent = extent
     raise PCICConvergenceError("Could not bracket the fixed-radius center correction")
 
 
@@ -669,47 +688,136 @@ def _bisect(
     raise PCICConvergenceError("PCIC volume correction exceeded its iteration limit")
 
 
-def _closest_bracket(
-    samples: Sequence[tuple[float, float]]
-) -> Optional[tuple[float, float]]:
-    brackets = []
+def _all_brackets(samples: Sequence[tuple[float, float]]) -> list[tuple[float, float]]:
+    brackets: list[tuple[float, float]] = []
     for left, right in zip(samples, samples[1:]):
         if left[1] == 0.0:
-            return (left[0], left[0])
+            brackets.append((left[0], left[0]))
         if left[1] * right[1] <= 0.0:
             brackets.append((left[0], right[0]))
-    if not brackets:
-        return None
-    return min(brackets, key=lambda pair: abs(pair[0]) + abs(pair[1]))
+    if samples and samples[-1][1] == 0.0:
+        brackets.append((samples[-1][0], samples[-1][0]))
+    unique: list[tuple[float, float]] = []
+    for bracket in brackets:
+        if bracket not in unique:
+            unique.append(bracket)
+    return unique
 
 
 def _fitted_chord_perpendicular(
     center: Sequence[float],
     intersections: Sequence[Sequence[float]],
     config: PCICConfig,
+    *,
+    central_plic: Optional[LinearFacet] = None,
+    polygon_points: Optional[Sequence[Sequence[float]]] = None,
 ) -> list[float]:
     """Return the fitted chord's perpendicular-bisector direction."""
 
     unique = _deduplicate_points(intersections, config.cartesian_tolerance)
-    if len(unique) != 2:
+    if len(unique) == 2:
+        chord_points = unique
+    elif (
+        len(unique) > 2
+        and len(unique) % 2 == 0
+        and central_plic is not None
+        and polygon_points is not None
+    ):
+        chord_points = _select_principal_chord(
+            center, unique, polygon_points, central_plic, config
+        )
+    else:
         raise PCICAmbiguousSourceChoice(
             "The published center-translation correction defines one fitted "
             "arc chord, but the fitted target-cell circle has "
             f"{len(unique)} boundary crossings"
         )
-    chord = [unique[1][0] - unique[0][0], unique[1][1] - unique[0][1]]
+    chord = [
+        chord_points[1][0] - chord_points[0][0],
+        chord_points[1][1] - chord_points[0][1],
+    ]
     magnitude = math.hypot(chord[0], chord[1])
     if magnitude <= np.finfo(float).eps:
         raise PCICUnsupportedGeometry("The fitted target-cell chord is degenerate")
     direction = [-chord[1] / magnitude, chord[0] / magnitude]
     midpoint = [
-        0.5 * (unique[0][0] + unique[1][0]),
-        0.5 * (unique[0][1] + unique[1][1]),
+        0.5 * (chord_points[0][0] + chord_points[1][0]),
+        0.5 * (chord_points[0][1] + chord_points[1][1]),
     ]
     center_side = [center[0] - midpoint[0], center[1] - midpoint[1]]
     if np.dot(direction, center_side) < 0.0:
         direction = [-direction[0], -direction[1]]
     return direction
+
+
+def _select_principal_chord(
+    center: Sequence[float],
+    intersections: Sequence[Sequence[float]],
+    polygon_points: Sequence[Sequence[float]],
+    central_plic: LinearFacet,
+    config: PCICConfig,
+) -> list[list[float]]:
+    """Select the in-cell arc chord most consistent with the central PLIC."""
+
+    components, status = _pair_circle_components(
+        center,
+        getDistance(center, intersections[0]),
+        intersections,
+        polygon_points,
+        config,
+    )
+    if status != "paired" or not components:
+        raise PCICAmbiguousSourceChoice("Could not pair the fitted target-cell chords")
+    plic_midpoint = _facet_midpoint(central_plic)
+    plic_direction = [
+        central_plic.pRight[0] - central_plic.pLeft[0],
+        central_plic.pRight[1] - central_plic.pLeft[1],
+    ]
+    plic_magnitude = math.hypot(*plic_direction)
+    if plic_magnitude <= np.finfo(float).eps:
+        raise PCICError("Degenerate central PLIC facet")
+    plic_direction = [value / plic_magnitude for value in plic_direction]
+
+    def score(component: PCICArcComponent) -> tuple[float, float, float, float]:
+        midpoint = [
+            0.5 * (component.p_start[0] + component.p_end[0]),
+            0.5 * (component.p_start[1] + component.p_end[1]),
+        ]
+        chord = [
+            component.p_end[0] - component.p_start[0],
+            component.p_end[1] - component.p_start[1],
+        ]
+        magnitude = math.hypot(*chord)
+        alignment = abs(
+            (chord[0] * plic_direction[0] + chord[1] * plic_direction[1]) / magnitude
+        )
+        return (
+            getDistance(midpoint, plic_midpoint),
+            1.0 - alignment,
+            midpoint[0],
+            midpoint[1],
+        )
+
+    selected = min(components, key=score)
+    return [list(selected.p_start), list(selected.p_end)]
+
+
+def infer_phase_from_plic(
+    fit_center: Sequence[float], central_plic: LinearFacet
+) -> PCICPhase:
+    """Orient an unsigned circle from the reconstructed side of the PLIC."""
+
+    midpoint = _facet_midpoint(central_plic)
+    normal = _plic_normal(central_plic)
+    side = (fit_center[0] - midpoint[0]) * normal[0] + (
+        fit_center[1] - midpoint[1]
+    ) * normal[1]
+    scale = max(1.0, getDistance(fit_center, midpoint))
+    if abs(side) <= np.finfo(float).eps * scale:
+        raise PCICAmbiguousSourceChoice(
+            "The fitted circle center lies on the central PLIC and cannot orient the phase"
+        )
+    return "disk" if side > 0.0 else "complement"
 
 
 def _pair_circle_components(
@@ -999,11 +1107,13 @@ __all__ = [
     "PCICDegenerateFit",
     "PCICError",
     "PCICPhase",
+    "PCICPhasePolicy",
     "PCICUnsupportedGeometry",
     "RADIUS_ADJUSTMENT_VARIANT",
     "build_lls_parker_young_plic_stencil",
     "collect_stencil_samples",
     "fit_riemann_sphere",
+    "infer_phase_from_plic",
     "reconstruct_bare_pcic_cell",
     "reconstruct_bare_pcic_cartesian_cell",
     "reconstruct_lls_plic",

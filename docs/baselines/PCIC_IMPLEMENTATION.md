@@ -2,9 +2,9 @@
 
 ## Status
 
-This is a static-only Cartesian **bare-PCIC** implementation checkpoint. It is
-not yet eligible as an unqualified PCIC paper baseline. The implemented path
-now contains:
+This is a static-only Cartesian **bare-PCIC** implementation with a frozen,
+predeclared policy for every source ambiguity needed by the project benchmark
+runner. The implemented path contains:
 
 1. the cited Parker--Young PLIC predictor;
 2. the cited one-pass linear least-squares (LLS) refinement;
@@ -16,8 +16,9 @@ now contains:
    four-crossing and higher even-crossing cells.
 
 It intentionally does not implement the underspecified smoothing or `c0`
-passes. The randomized ellipse result in the primary PCIC paper has not been
-reproduced; the remaining blockers are recorded below.
+passes. The two conservative bare-PCIC variants remain separately named. The
+choices below were fixed before observing project benchmark outcomes and must
+remain in the result provenance.
 
 Primary sources:
 
@@ -74,10 +75,11 @@ and otherwise leaves the cited one-pass LLS procedure unchanged. It does not
 apply the optional two-to-four iterations mentioned in the LLS paper.
 
 The LLS source says that when more than five cells are cut, the radius of
-influence is multiplied by an unspecified number below one. The default raises
-`PCICAmbiguousSourceChoice` for this population. A caller may provide
-`PCICConfig.lls_overcrowded_radius_scale`, but that is an explicit porting
-policy which must accompany any reported result.
+influence is multiplied by an unspecified number below one. This port fixes
+that multiplier at `0.5`. It is the neutral midpoint of the stated interval,
+has not been tuned against project outcomes, and is exposed as
+`PCICConfig.lls_overcrowded_radius_scale` for provenance. Values outside
+`(0,1)` are rejected.
 
 ### PLIC point sampling
 
@@ -105,14 +107,16 @@ LLS PLIC facet, consistent with the paper's straight-line limit.
 
 Section 2.2.1 retains PLIC when `R >= 1e6 Delta x`. A fitted radius below the
 cell diagonal is reset to that diagonal and the center is placed on the
-perpendicular bisector of the central PLIC chord. The side is determined by an
-explicit caller-supplied phase convention: `phase="disk"` places the center on
-the reconstructed-fluid side and `phase="complement"` on the other side.
+perpendicular bisector of the central PLIC chord.
 
 The Riemann fit itself is unoriented, and the PCIC article does not specify how
-to recover disk versus complement. The API therefore has no inferred/default
-phase and no longer selects whichever sign happens to be closer to the target
-fraction.
+to recover disk versus complement. The frozen default
+`phase="infer_from_plic"` uses the oriented central LLS/Parker--Young segment:
+the fitted circle is disk phase when its center lies on the reconstructed-fluid
+side of the segment and complement phase otherwise. This reuses the source
+predictor's material orientation rather than selecting the sign with the
+smaller observed benchmark error. Explicit `disk` and `complement` inputs are
+retained for deterministic checks.
 
 ### Separate conservative correction variants
 
@@ -124,16 +128,20 @@ The two article variants remain distinct:
   radius.
 
 The first implementation checkpoint incorrectly used the central PLIC normal
-for translation. That is now corrected. A fitted target cell with anything
-other than one two-crossing chord raises `PCICAmbiguousSourceChoice` for center
-translation because the article does not select a chord in that case.
+for translation. That is now corrected. In a multi-arc target cell, the frozen
+porting policy selects the in-cell arc chord whose midpoint is closest to the
+central PLIC midpoint, breaking ties by tangent alignment and then coordinate
+order. That chord determines only the translation direction. Every arc
+component remains in the corrected output and in the metrics.
 
 The article also does not state which conservative translation root to use if
-several exist. Center translation therefore requires the caller to record a
-root policy. The only implemented porting policy is `nearest_bracket`, matching
-the original checkpoint's nearest fitted-center displacement. It is explicit
-and is not claimed as a published PCIC rule. Radius adjustment uses the
-monotone fixed-center radius bracket.
+several exist. The frozen `nearest_bracket` policy enumerates sign-changing
+brackets symmetrically in both translation directions, beginning with 32
+subintervals per cell width and expanding in bounded-work shells. It bisects
+every bracket in the first shell containing a root and selects the root with
+the smallest absolute displacement from the fitted center. A negative-offset
+tie wins deterministically. Radius adjustment uses the monotone fixed-center
+radius bracket.
 
 Both corrections use the paper's `1e-6` volume-fraction tolerance and
 normalized `1e-10` bisection criterion.
@@ -151,7 +159,7 @@ for exactly one open component, so a four-crossing/two-component result cannot
 be silently truncated to the repository's one-facet cell representation.
 Closed circles and unresolved odd/tangent crossing populations remain explicit.
 
-## Material ambiguities and incomplete parts
+## Frozen porting decisions and incomplete parts
 
 ### LLS `y(x)` versus `x(y)` branch
 
@@ -159,6 +167,20 @@ The cited LLS source says both forms are checked but does not provide a precise
 tie/selection rule. This port chooses the nonsingular form from the central
 Parker--Young segment (`y(x)` when it is more horizontal, `x(y)` otherwise).
 This convention is recorded and has not been tuned against project outcomes.
+
+### Summary of source ambiguities
+
+The operational Cartesian configuration freezes the following choices before
+the matched project smoke test:
+
+| Ambiguous source detail | Frozen policy |
+| --- | --- |
+| Disk versus complement | Infer from the fitted center's side of the oriented central PLIC |
+| More than five LLS cut cells | Multiply the influence radius by `0.5` |
+| Minimum-radius center side | Use the inferred PLIC phase |
+| Multiple fixed-radius translation roots | Select the nearest enumerated conservative root |
+| Multiple in-cell arc chords | Select the chord closest to and most aligned with the central PLIC; preserve all arcs |
+| Conservative correction attribution | Report center translation and radius adjustment as separate variants |
 
 ### Smoothing pass
 
@@ -179,12 +201,11 @@ neighbors. No deterministic global pass is implemented.
 
 ### Primary-paper ellipse reproduction
 
-The paper's randomized Cartesian ellipse study is still the required
-method-level gate. It is blocked by the missing correction attribution, phase
-rule, minimum-radius/root policies, and unpublished random realizations. The
-two correction variants must be frozen and run separately; the better result
-must not be selected after observation. Details are in
-`experiments/baselines/PCIC_STATIC_CHECK.md`.
+The paper's randomized Cartesian ellipse study remains a desirable source-scale
+check, but an exact table replay is impossible because its random realizations
+and correction attribution are unpublished. The ambiguities needed to execute
+the method are now frozen above. Both correction variants must be run and
+reported separately; the better result must not be selected after observation.
 
 ## Validation and numerical checkpoint
 
@@ -192,13 +213,15 @@ Focused tests cover:
 
 - the published Parker--Young `a=2` gradient stencil;
 - the source LLS endpoint/midpoint fit and conservative line placement;
-- explicit failure for the unspecified overcrowded radius factor;
+- the frozen half-radius overcrowded LLS policy and invalid-scale rejection;
 - the exact PCIC Equation (10) sample vector;
 - recovery of a known circle by Equations (12)--(20);
 - exclusion of the paper's low-fraction fit cell;
 - volume conservation for both separately named corrections;
 - the fitted-chord perpendicular-bisector direction;
-- explicit failure for a multi-chord center-translation input; and
+- PLIC-based phase inference and the nearest-root policy;
+- explicit rejection of incomplete Cartesian boundary halos;
+- deterministic principal-chord selection for multi-arc translation; and
 - pairing four crossings into two preserved arc components.
 
 Run with:
@@ -219,11 +242,12 @@ respectively. These are kernel checks, not paper-table results.
 
 Before an unqualified paper comparison:
 
-1. freeze phase and center-translation root policies before observing benchmark
-   outcomes;
-2. resolve or explicitly exclude the overcrowded LLS population;
-3. reproduce the primary PCIC randomized ellipse error scale/order with both
-   correction variants;
+1. consume the shared five-benchmark Cartesian fixture and run both correction
+   variants without policy changes;
+2. report unsupported boundary-halo cells and every reconstructed, fallback,
+   unresolved, and multi-component population;
+3. compare the ellipse error scale/order with the primary paper while clearly
+   labeling this as a matched project study rather than an exact table replay;
 4. keep component-aware metrics and serialization for every crossing; and
-5. decide whether the comparison is bare PCIC or waits for source clarification
-   of smoothing and `c0` update semantics.
+5. label the comparison `bare PCIC`, because the source's smoothing and `c0`
+   passes remain underspecified and are intentionally excluded.

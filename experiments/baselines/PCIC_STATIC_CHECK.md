@@ -40,15 +40,16 @@ method-level gate, but the current source record does not support a unique run:
 - the random realizations needed for an exact table replay are not published.
 
 The implementation therefore retains the two correction variants as distinct
-rows and checkpoints the remaining material choices. A future statistical
-reproduction may run both frozen variants against the paper's reported scale
-and order, but it must not select the better row after observing the outcome.
+rows and freezes the missing execution policies before the matched project
+study. A future statistical comparison may run both variants against the
+paper's reported scale and order, but it must not select the better row after
+observing the outcome.
 
 ## Separate cited-LLS ambiguity
 
 Scardovelli and Zaleski (2003), Section 2.4, says that when more than five cells
 are cut in the local block, the radius of influence is multiplied by an
-unspecified number below one. The default implementation raises
-`PCICAmbiguousSourceChoice` in that population. A caller may supply
-`PCICConfig.lls_overcrowded_radius_scale`, but doing so is an explicit porting
-policy and must be recorded with any result.
+unspecified number below one. The frozen port uses `0.5`, the neutral midpoint
+of the stated interval. This and the other predeclared policies are documented
+in `docs/baselines/PCIC_IMPLEMENTATION.md` and must be recorded with every
+result.

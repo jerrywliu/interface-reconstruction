@@ -13,6 +13,7 @@ from main.algos.baselines.pcic import (
     build_lls_parker_young_plic_stencil,
     collect_stencil_samples,
     fit_riemann_sphere,
+    infer_phase_from_plic,
     parker_young_normal,
     reconstruct_bare_pcic_cell,
     reconstruct_bare_pcic_cartesian_cell,
@@ -203,14 +204,28 @@ def test_one_pass_lls_parker_young_predictor_improves_source_line_fixture():
     assert reconstructed_fraction == pytest.approx(target.getFraction(), abs=1.0e-10)
 
 
-def test_lls_overcrowded_radius_reduction_is_an_explicit_source_choice():
+def test_lls_overcrowded_radius_reduction_uses_frozen_half_radius_policy():
     polygons = [[_cell(i, j, 0.5) for j in range(3)] for i in range(3)]
     facets = [
         [LinearFacet([i, j + 0.5], [i + 1.0, j + 0.5]) for j in range(3)]
         for i in range(3)
     ]
-    with pytest.raises(PCICAmbiguousSourceChoice, match="does not specify"):
-        reconstruct_lls_plic(polygons, facets)
+    result = reconstruct_lls_plic(polygons, facets)
+    assert result.pLeft[1] == pytest.approx(1.5, abs=1.0e-10)
+    assert result.pRight[1] == pytest.approx(1.5, abs=1.0e-10)
+    assert PCICConfig().lls_overcrowded_radius_scale == 0.5
+
+
+def test_lls_overcrowded_radius_policy_must_shrink_the_influence_circle():
+    polygons = [[_cell(i, j, 0.5) for j in range(3)] for i in range(3)]
+    facets = [
+        [LinearFacet([i, j + 0.5], [i + 1.0, j + 0.5]) for j in range(3)]
+        for i in range(3)
+    ]
+    with pytest.raises(ValueError, match="must be in"):
+        reconstruct_lls_plic(
+            polygons, facets, PCICConfig(lls_overcrowded_radius_scale=1.0)
+        )
 
 
 @pytest.mark.parametrize("correction", ["translate_center", "adjust_radius"])
@@ -269,25 +284,79 @@ def test_center_translation_direction_is_the_fitted_chord_bisector():
     assert direction == pytest.approx([1.0, 0.0], abs=1.0e-14)
 
 
-def test_center_translation_requires_an_explicit_root_policy():
+def test_center_translation_defaults_to_frozen_nearest_root_policy():
     polygons, facets = _circle_stencil()
-    with pytest.raises(PCICAmbiguousSourceChoice, match="root policy"):
-        reconstruct_bare_pcic_cell(
-            polygons[1][1],
-            polygons,
-            facets,
-            correction="translate_center",
-            phase="disk",
-        )
+    result = reconstruct_bare_pcic_cell(
+        polygons[1][1],
+        polygons,
+        facets,
+        correction="translate_center",
+        phase="disk",
+    )
+    assert isinstance(result, PCICCircle)
+    assert result.fraction_in(polygons[1][1]) == pytest.approx(
+        polygons[1][1].getFraction(), abs=1.0e-10
+    )
 
 
-def test_center_translation_checkpoints_a_multi_chord_fitted_cell():
-    with pytest.raises(PCICAmbiguousSourceChoice, match="4 boundary crossings"):
-        pcic._fitted_chord_perpendicular(
-            [0.5, 0.5],
-            [[0.2, 0.0], [1.0, 0.2], [0.8, 1.0], [0.0, 0.8]],
-            PCICConfig(),
-        )
+def test_phase_is_inferred_from_oriented_central_plic():
+    disk_plic = LinearFacet([0.0, 0.5], [1.0, 0.5])
+    complement_plic = LinearFacet([1.0, 0.5], [0.0, 0.5])
+    assert infer_phase_from_plic([0.5, 2.0], disk_plic) == "disk"
+    assert infer_phase_from_plic([0.5, 2.0], complement_plic) == "complement"
+
+
+def test_cartesian_cell_defaults_to_plic_phase_inference():
+    result = reconstruct_bare_pcic_cartesian_cell(
+        _circle_block(), correction="adjust_radius"
+    )
+    assert isinstance(result, PCICCircle)
+    assert result.phase == "disk"
+
+
+def test_nearest_center_translation_root_is_selected(monkeypatch):
+    polygon = _cell(0.0, 0.0, 0.5)
+
+    def synthetic_area(center, signed_radius, points):
+        offset = center[0]
+        residual = 0.1 * (offset + 0.75) * (offset - 0.25)
+        return 0.5 + residual, []
+
+    monkeypatch.setattr(pcic, "getCircleIntersectArea", synthetic_area)
+    corrected = pcic._correct_center(
+        polygon,
+        [0.0, 0.0],
+        1.0,
+        [1.0, 0.0],
+        1.0,
+        "nearest_bracket",
+        PCICConfig(),
+    )
+    assert corrected == pytest.approx([0.25, 0.0], abs=1.0e-10)
+
+
+def test_multi_arc_center_translation_selects_the_plic_matched_chord():
+    polygon = _cell(0.0, 0.0, 0.5)
+    center = [-0.25, 0.5]
+    radius = 1.3
+    _, intersections = getCircleIntersectArea(center, radius, polygon.points)
+    assert len(intersections) == 4
+    central_plic = LinearFacet([0.0, 0.2], [1.0, 0.2])
+    direction = pcic._fitted_chord_perpendicular(
+        center,
+        intersections,
+        PCICConfig(),
+        central_plic=central_plic,
+        polygon_points=polygon.points,
+    )
+    assert math.hypot(*direction) == pytest.approx(1.0, abs=1.0e-14)
+
+
+def test_incomplete_boundary_halo_is_rejected_explicitly():
+    block = _circle_block()
+    block[0][3] = None
+    with pytest.raises(pcic.PCICUnsupportedGeometry, match="complete halo"):
+        reconstruct_bare_pcic_cartesian_cell(block, correction="adjust_radius")
 
 
 def test_four_crossing_result_is_not_silently_truncated():

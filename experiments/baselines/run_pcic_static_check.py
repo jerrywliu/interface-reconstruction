@@ -96,10 +96,6 @@ def _circle_check():
         result = reconstruct_bare_pcic_cartesian_cell(
             block,
             correction=correction,
-            phase="disk",
-            center_translation_root_policy=(
-                "nearest_bracket" if correction == "translate_center" else None
-            ),
         )
         if not isinstance(result, PCICCircle):
             raise RuntimeError(f"{correction} unexpectedly retained a PLIC line")
@@ -135,6 +131,12 @@ def main():
             {
                 "classification": "deterministic source-method kernel check",
                 "paper_table_reproduction": False,
+                "frozen_porting_policies": {
+                    "phase": "infer_from_plic",
+                    "lls_overcrowded_radius_scale": 0.5,
+                    "center_translation_root": "nearest_bracket",
+                    "multi_arc_chord": "closest midpoint, then tangent alignment",
+                },
                 "lls_line": line,
                 "bare_pcic_circle": circle,
             },
