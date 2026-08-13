@@ -64,6 +64,7 @@ def adapt_plvira_cell(
             diagnostics={"reason": "no clipped parabolic interval"},
             target_phase_area=target_phase_area,
         )
+    ghf = interface.ghf_diagnostics
     components = tuple(
         ExternalInterfaceComponent(
             (
@@ -86,10 +87,19 @@ def adapt_plvira_cell(
         status=ExternalReconstructionStatus.RECONSTRUCTED,
         diagnostics={
             "curvature_source": interface.curvature_source,
+            "curvature": interface.curvature,
             "objective": interface.objective,
             "optimizer_success": interface.optimizer_success,
             "optimizer_message": interface.optimizer_message,
             "interval_count": len(intervals),
+            "ghf_method": None if ghf is None else ghf.method,
+            "ghf_direction": None if ghf is None else ghf.direction,
+            "ghf_height_points": None if ghf is None else ghf.height_points,
+            "ghf_independent_points": (
+                None if ghf is None else ghf.independent_points
+            ),
+            "ghf_fit_points": None if ghf is None else ghf.fit_points,
+            "ghf_diagnostic": None if ghf is None else ghf.diagnostic,
         },
         target_phase_area=target_phase_area,
         exact_area_callback=interface.intersect_area,
