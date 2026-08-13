@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "source_root": "results/static/submission_static_20260731_012430_505aefa45432.sealed/raw_runs",
+  "source_runs": [
+    "submission_static_20260731_012430_505aefa45432_perturb_sweep_ellipses_circular_r0p32_w0p0_s0",
+    "submission_static_20260731_012430_505aefa45432_perturb_sweep_ellipses_circular_r0p5_w0p0_s0",
+    "submission_static_20260731_012430_505aefa45432_perturb_sweep_ellipses_circular_r0p64_w0p0_s0",
+    "submission_static_20260731_012430_505aefa45432_perturb_sweep_ellipses_circular_r1p0_w0p0_s0",
+    "submission_static_20260731_012430_505aefa45432_perturb_sweep_ellipses_circular_r1p28_w0p0_s0",
+    "submission_static_20260731_012430_505aefa45432_perturb_sweep_ellipses_circular_r1p5_w0p0_s0"
+  ],
+  "source_commits": [
+    "505aefa454328d4ba34ade5e7247050a0acfc793"
+  ],
+  "method": "graph-coordinated circular reconstruction",
+  "mesh": "Cartesian (perturbation magnitude w=0)",
+  "resolutions": [
+    32,
+    50,
+    64,
+    100,
+    128,
+    150
+  ],
+  "case_indices": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24
+  ],
+  "metric": "per-case arithmetic mean over every active serialized primitive of abs(unsigned reconstructed curvature - analytic ellipse curvature at the primitive chord midpoint)",
+  "aggregation": "median and interquartile range over 25 cases",
+  "order_fit": "ordinary least squares of log(median error) on log(h)",
+  "observed_order": 1.1768582685114526
+}
