@@ -163,10 +163,15 @@ def _distinct_root_values(
 
 
 def _multiplicity(coefficients: np.ndarray, root: float, tolerance: float) -> int:
+    # Root isolation returns an approximation whose derivative residual can be
+    # a few multiples of the requested root tolerance at a repeated root.
+    multiplicity_tolerance = max(
+        8.0 * tolerance, 128.0 * np.finfo(float).eps
+    )
     derivative = coefficients.copy()
     for order in range(1, coefficients.size):
         derivative = np.arange(1, derivative.size, dtype=float) * derivative[1:]
-        if not _is_zero(derivative, root, tolerance):
+        if not _is_zero(derivative, root, multiplicity_tolerance):
             return order
     return coefficients.size - 1
 
