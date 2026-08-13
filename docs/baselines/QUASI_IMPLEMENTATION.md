@@ -114,3 +114,19 @@ the intended target-neighbor rule for Section 2.5 and approve or replace the
 least-displacement rule for multiple C1 roots. Once those decisions are fixed,
 the next validation step is the paper's random-circle `L1` study, followed by
 the project's matched static smoke suite.
+
+## 2026-08-13 algebraic-root checkpoint
+
+`main/algos/baselines/quasi_roots.py` now provides sampling-free enumeration
+of all real roots in an admissible edge interval, including repeated roots and
+the identically-zero relation. Focused tests cover a repeated cubic root,
+interval filtering, and the non-unique zero polynomial. This removes the
+numerical sign-change limitation identified in the fidelity audit, but it is
+not yet wired into the reconstruction: doing so faithfully still requires the
+paper's exact expanded continuity polynomial and an approved multiple-root
+selection rule.
+
+Section 2.5 remains unimplemented. The available source record does not settle
+the target-neighbor selection when several mixed cells satisfy the published
+volume-fraction filter, nor the associated root and update-order policies.
+Accordingly, no random-circle reproduction is claimed at this checkpoint.
