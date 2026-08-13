@@ -432,7 +432,7 @@ def _plot_all_benchmarks(summary: Sequence[Mapping[str, Any]], path: Path) -> No
         operations.set_yscale("log")
         operations.text(
             0.98,
-            0.95,
+            0.72,
             "converged: "
             + ", ".join(
                 f"{100.0 * row['sweep_converged_fraction']:.0f}%" for row in rows
@@ -452,7 +452,12 @@ def _plot_all_benchmarks(summary: Sequence[Mapping[str, Any]], path: Path) -> No
         operations.grid(True, which="both", alpha=0.25)
         if index == 0:
             operations.set_title("Frozen sweep diagnostics")
-            operations.legend(frameon=False, fontsize=6.8, loc="upper left")
+            operations.legend(
+                frameon=False,
+                fontsize=6.6,
+                loc="upper left",
+                bbox_to_anchor=(0.0, 1.02),
+            )
 
         for axis in (geometry, curvature, operations):
             axis.set_xscale("log", base=2)
