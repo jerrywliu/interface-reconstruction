@@ -17,7 +17,7 @@ PYTHONPATH=. python experiments/baselines/run_plvira_project_smoke.py \
   --resolutions 32,64,128 --cases 0,1,2,3,4
 ```
 
-Wall time was 91.99 seconds. Timed reconstruction calls account for 36.37
+Wall time was 92.04 seconds. Timed reconstruction calls account for 36.51
 seconds; fixture initialization, metric sampling, serialization, and plotting
 account for the remainder.
 

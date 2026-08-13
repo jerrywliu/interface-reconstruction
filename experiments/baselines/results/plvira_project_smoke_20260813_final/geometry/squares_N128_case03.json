@@ -1,0 +1,4781 @@
+{
+  "cells": [
+    {
+      "cell_index": [
+        55,
+        57
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": -2.5567818681702943,
+              "center": [
+                43.35937500000009,
+                44.921874999999815
+              ],
+              "curvature": 0.11701036803648461,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.3182092825007561,
+              "s_start": -0.29827195867229606,
+              "shift": -0.2518787187183075
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 0.11701036803648461,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "x",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 0.5122637802998926,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.08983957609416342,
+      "polygon": [
+        [
+          42.96875,
+          44.53125
+        ],
+        [
+          43.75,
+          44.53125
+        ],
+        [
+          43.75,
+          45.3125
+        ],
+        [
+          42.96875,
+          45.3125
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.08983957609416393
+    },
+    {
+      "cell_index": [
+        55,
+        58
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": 3.250235127908047,
+              "center": [
+                43.35937500000009,
+                45.703125000000185
+              ],
+              "curvature": 0.9634771802452451,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.4280045386527047,
+              "s_start": -0.36066925378201736,
+              "shift": -0.2332165447363456
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 0.9634771802452451,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "x",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 0.03233220594472154,
+        "optimizer_message": "CONVERGENCE: REL_REDUCTION_OF_F_<=_FACTR*EPSMCH",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.1019811862931878,
+      "polygon": [
+        [
+          42.96875,
+          45.3125
+        ],
+        [
+          43.75,
+          45.3125
+        ],
+        [
+          43.75,
+          46.09375
+        ],
+        [
+          42.96875,
+          46.09375
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.10198118629318742
+    },
+    {
+      "cell_index": [
+        55,
+        59
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": 3.0265553661076687,
+              "center": [
+                43.35937500000009,
+                46.484374999999815
+              ],
+              "curvature": 0.0,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.3530083252019799,
+              "s_start": -0.39100130865067245,
+              "shift": -0.3480448119936571
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 0.0,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "x",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 1.946177786156007e-18,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.031559307038492024,
+      "polygon": [
+        [
+          42.96875,
+          46.09375
+        ],
+        [
+          43.75,
+          46.09375
+        ],
+        [
+          43.75,
+          46.875
+        ],
+        [
+          42.96875,
+          46.875
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.03155930703849208
+    },
+    {
+      "cell_index": [
+        56,
+        57
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": -2.322051789238731,
+              "center": [
+                44.14062499999991,
+                44.92187499999991
+              ],
+              "curvature": 0.11701036803648461,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.48904951290401183,
+              "s_start": -0.46039410697829575,
+              "shift": 0.09174085339809147
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 0.11701036803648461,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "x",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 0.46875126204574985,
+        "optimizer_message": "CONVERGENCE: REL_REDUCTION_OF_F_<=_FACTR*EPSMCH",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.39391363580341526,
+      "polygon": [
+        [
+          43.75,
+          44.53125
+        ],
+        [
+          44.53125,
+          44.53125
+        ],
+        [
+          44.53125,
+          45.3125
+        ],
+        [
+          43.75,
+          45.3125
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.39391363580341476
+    },
+    {
+      "cell_index": [
+        56,
+        59
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": 3.0265553670887373,
+              "center": [
+                44.14062500000009,
+                46.484375
+              ],
+              "curvature": 0.0,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": -0.3013265235643556,
+              "s_start": -0.3437649107730445,
+              "shift": 0.4280415201147952
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 0.0,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "x",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 1.4316853480171906e-22,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.6102488819753945,
+      "polygon": [
+        [
+          43.75,
+          46.09375
+        ],
+        [
+          44.53125,
+          46.09375
+        ],
+        [
+          44.53125,
+          46.875
+        ],
+        [
+          43.75,
+          46.875
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.6102488819753944
+    },
+    {
+      "cell_index": [
+        56,
+        60
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": 3.0265553377857084,
+              "center": [
+                44.14062499999991,
+                47.265624999999815
+              ],
+              "curvature": 7.00781669685309e-13,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.4323214325983527,
+              "s_start": -0.35412659425282694,
+              "shift": 0.33836673104769455
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 7.00781669685309e-13,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "x",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 1.7138019454713268e-15,
+        "optimizer_message": "CONVERGENCE: REL_REDUCTION_OF_F_<=_FACTR*EPSMCH",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.5712836292345855,
+      "polygon": [
+        [
+          43.75,
+          46.875
+        ],
+        [
+          44.53125,
+          46.875
+        ],
+        [
+          44.53125,
+          47.65625
+        ],
+        [
+          43.75,
+          47.65625
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.5712836292345855
+    },
+    {
+      "cell_index": [
+        56,
+        61
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": 3.0265553670937853,
+              "center": [
+                44.14062499999991,
+                48.046875
+              ],
+              "curvature": -9.34018927687472e-13,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.4219597292872311,
+              "s_start": -0.3644882949006685,
+              "shift": 0.24869194427287963
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": -9.34018927687472e-13,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "x",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 3.667084341108515e-22,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.5007590694549435,
+      "polygon": [
+        [
+          43.75,
+          47.65625
+        ],
+        [
+          44.53125,
+          47.65625
+        ],
+        [
+          44.53125,
+          48.4375
+        ],
+        [
+          43.75,
+          48.4375
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.5007590694549435
+    },
+    {
+      "cell_index": [
+        56,
+        62
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": 3.0265553743113505,
+              "center": [
+                44.14062500000009,
+                48.828125
+              ],
+              "curvature": 9.34018927687472e-13,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.4115980357488551,
+              "s_start": -0.37484998778316503,
+              "shift": 0.15901715648568213
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 9.34018927687472e-13,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "x",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 1.0738483289823391e-16,
+        "optimizer_message": "CONVERGENCE: REL_REDUCTION_OF_F_<=_FACTR*EPSMCH",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.43023450967575616,
+      "polygon": [
+        [
+          43.75,
+          48.4375
+        ],
+        [
+          44.53125,
+          48.4375
+        ],
+        [
+          44.53125,
+          49.21875
+        ],
+        [
+          43.75,
+          49.21875
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.43023450967575627
+    },
+    {
+      "cell_index": [
+        56,
+        63
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": 3.0265553670809218,
+              "center": [
+                44.14062499999991,
+                49.609375000000185
+              ],
+              "curvature": -4.671877797901911e-13,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.4012363451633608,
+              "s_start": -0.38521167902570524,
+              "shift": 0.06934236843210104
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": -4.671877797901911e-13,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "x",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 1.02002437847795e-24,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.35970994989611427,
+      "polygon": [
+        [
+          43.75,
+          49.21875
+        ],
+        [
+          44.53125,
+          49.21875
+        ],
+        [
+          44.53125,
+          50.0
+        ],
+        [
+          43.75,
+          50.0
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.3597099498961142
+    },
+    {
+      "cell_index": [
+        56,
+        64
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": 3.026555367081667,
+              "center": [
+                44.14062499999991,
+                50.390624999999815
+              ],
+              "curvature": 0.0,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.3908746530990555,
+              "s_start": -0.3955733710899426,
+              "shift": -0.020332419488046306
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 0.0,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "x",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 3.3065881007513737e-24,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.28918539011669964,
+      "polygon": [
+        [
+          43.75,
+          50.0
+        ],
+        [
+          44.53125,
+          50.0
+        ],
+        [
+          44.53125,
+          50.78125
+        ],
+        [
+          43.75,
+          50.78125
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.28918539011669964
+    },
+    {
+      "cell_index": [
+        56,
+        65
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": 3.0265553925533006,
+              "center": [
+                44.14062500000009,
+                51.171875
+              ],
+              "curvature": 1.7831594648481707e-16,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.3805129626801439,
+              "s_start": -0.40593505919419465,
+              "shift": -0.1100072077318625
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 1.7831594648481707e-16,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "x",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 1.332621614304317e-15,
+        "optimizer_message": "CONVERGENCE: REL_REDUCTION_OF_F_<=_FACTR*EPSMCH",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.21866083033728506,
+      "polygon": [
+        [
+          43.75,
+          50.78125
+        ],
+        [
+          44.53125,
+          50.78125
+        ],
+        [
+          44.53125,
+          51.5625
+        ],
+        [
+          43.75,
+          51.5625
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.218660830337285
+    },
+    {
+      "cell_index": [
+        56,
+        66
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": 3.0265553650790866,
+              "center": [
+                44.14062499999991,
+                51.953125000000185
+              ],
+              "curvature": 0.0,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.3701512686628329,
+              "s_start": -0.4162967557081438,
+              "shift": -0.19968199528229874
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 0.0,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "x",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 8.225819418270874e-18,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.14813627055787038,
+      "polygon": [
+        [
+          43.75,
+          51.5625
+        ],
+        [
+          44.53125,
+          51.5625
+        ],
+        [
+          44.53125,
+          52.34375
+        ],
+        [
+          43.75,
+          52.34375
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.14813627055787038
+    },
+    {
+      "cell_index": [
+        56,
+        67
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": 3.026555366998985,
+              "center": [
+                44.14062499999991,
+                52.734374999999815
+              ],
+              "curvature": -1.7831594648481707e-16,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.3597895768873381,
+              "s_start": -0.4266584473091734,
+              "shift": -0.2893567832459044
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": -1.7831594648481707e-16,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "x",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 1.021474041462258e-20,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.07761171077845574,
+      "polygon": [
+        [
+          43.75,
+          52.34375
+        ],
+        [
+          44.53125,
+          52.34375
+        ],
+        [
+          44.53125,
+          53.125
+        ],
+        [
+          43.75,
+          53.125
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.07761171077845574
+    },
+    {
+      "cell_index": [
+        56,
+        68
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": 3.0265553670725427,
+              "center": [
+                44.14062500000009,
+                53.515625
+              ],
+              "curvature": 0.0,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.34942788484066833,
+              "s_start": -0.12282782793532432,
+              "shift": -0.37903157116960023
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 0.0,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "x",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 1.349444574041009e-22,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.012715246307151928,
+      "polygon": [
+        [
+          43.75,
+          53.125
+        ],
+        [
+          44.53125,
+          53.125
+        ],
+        [
+          44.53125,
+          53.90625
+        ],
+        [
+          43.75,
+          53.90625
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.012715246307152483
+    },
+    {
+      "cell_index": [
+        57,
+        57
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": -1.68583361719089,
+              "center": [
+                44.921875,
+                44.921875
+              ],
+              "curvature": -7.132637859392683e-16,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.4166233522365367,
+              "s_start": -0.3698246723057599,
+              "shift": 0.20250850579161692
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": -7.132637859392683e-16,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "y",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 3.102338650900969e-17,
+        "optimizer_message": "CONVERGENCE: REL_REDUCTION_OF_F_<=_FACTR*EPSMCH",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.46443819558282934,
+      "polygon": [
+        [
+          44.53125,
+          44.53125
+        ],
+        [
+          45.3125,
+          44.53125
+        ],
+        [
+          45.3125,
+          45.3125
+        ],
+        [
+          44.53125,
+          45.3125
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.4644381955828294
+    },
+    {
+      "cell_index": [
+        57,
+        68
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": 3.026555376122135,
+              "center": [
+                44.921874999999815,
+                53.515625000000185
+              ],
+              "curvature": 0.0,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": -0.03315303132625047,
+              "s_start": -0.3473453548512597,
+              "shift": 0.39705475923608813
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 0.0,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "x",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 1.906033912865874e-16,
+        "optimizer_message": "CONVERGENCE: REL_REDUCTION_OF_F_<=_FACTR*EPSMCH",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.6047234671918887,
+      "polygon": [
+        [
+          44.53125,
+          53.125
+        ],
+        [
+          45.3125,
+          53.125
+        ],
+        [
+          45.3125,
+          53.90625
+        ],
+        [
+          44.53125,
+          53.90625
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.6047234671918886
+    },
+    {
+      "cell_index": [
+        57,
+        69
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": 3.0265553654491613,
+              "center": [
+                44.921875,
+                54.296875
+              ],
+              "curvature": 0.0,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.4287409812751838,
+              "s_start": -0.3577070430621634,
+              "shift": 0.30737997297826863
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 0.0,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "x",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 4.364316537799376e-18,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.5469141537196265,
+      "polygon": [
+        [
+          44.53125,
+          53.90625
+        ],
+        [
+          45.3125,
+          53.90625
+        ],
+        [
+          45.3125,
+          54.6875
+        ],
+        [
+          44.53125,
+          54.6875
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.5469141537196265
+    },
+    {
+      "cell_index": [
+        57,
+        70
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": 3.0265553394004288,
+              "center": [
+                44.921875,
+                55.078124999999815
+              ],
+              "curvature": 3.5663189296963413e-16,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.418379295919251,
+              "s_start": -0.3680687307851983,
+              "shift": 0.21770518441973474
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 3.5663189296963413e-16,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "x",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 1.5735523198572993e-15,
+        "optimizer_message": "CONVERGENCE: REL_REDUCTION_OF_F_<=_FACTR*EPSMCH",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.476389593940212,
+      "polygon": [
+        [
+          44.53125,
+          54.6875
+        ],
+        [
+          45.3125,
+          54.6875
+        ],
+        [
+          45.3125,
+          55.46875
+        ],
+        [
+          44.53125,
+          55.46875
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.47638959394021185
+    },
+    {
+      "cell_index": [
+        57,
+        71
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": 3.026555369878875,
+              "center": [
+                44.921874999999815,
+                55.859375000000185
+              ],
+              "curvature": -7.132637859392683e-16,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.40801759608645055,
+              "s_start": -0.37843042784835945,
+              "shift": 0.12803039723701107
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": -7.132637859392683e-16,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "x",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 1.6083982760754267e-17,
+        "optimizer_message": "CONVERGENCE: REL_REDUCTION_OF_F_<=_FACTR*EPSMCH",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.4058650341607971,
+      "polygon": [
+        [
+          44.53125,
+          55.46875
+        ],
+        [
+          45.3125,
+          55.46875
+        ],
+        [
+          45.3125,
+          56.25
+        ],
+        [
+          44.53125,
+          56.25
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.4058650341607972
+    },
+    {
+      "cell_index": [
+        57,
+        72
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": 2.4037986493155015,
+              "center": [
+                44.921875,
+                56.640625
+              ],
+              "curvature": 0.08687636387588005,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.5457949733225425,
+              "s_start": -0.5084592799773139,
+              "shift": 0.03262050162571874
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 0.08687636387588005,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "y",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 0.37803535739835525,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.3353404743813836,
+      "polygon": [
+        [
+          44.53125,
+          56.25
+        ],
+        [
+          45.3125,
+          56.25
+        ],
+        [
+          45.3125,
+          57.03125
+        ],
+        [
+          44.53125,
+          57.03125
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.3353404743813826
+    },
+    {
+      "cell_index": [
+        57,
+        73
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": 2.231028390672513,
+              "center": [
+                44.921875,
+                57.421874999999815
+              ],
+              "curvature": 0.08687636387588005,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.30926658969043025,
+              "s_start": -0.2972523536076631,
+              "shift": -0.25026295319083297
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 0.08687636387588005,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "y",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 0.5417931961467511,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.09073879008815294,
+      "polygon": [
+        [
+          44.53125,
+          57.03125
+        ],
+        [
+          45.3125,
+          57.03125
+        ],
+        [
+          45.3125,
+          57.8125
+        ],
+        [
+          44.53125,
+          57.8125
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.09073879008815311
+    },
+    {
+      "cell_index": [
+        58,
+        57
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": -1.6858336136273544,
+              "center": [
+                45.703125000000185,
+                44.921875
+              ],
+              "curvature": 2.3395052178808745e-13,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.42698504344572635,
+              "s_start": -0.3594629807727436,
+              "shift": 0.2921832937918754
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 2.3395052178808745e-13,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "y",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 1.614662759412658e-19,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.534962755362244,
+      "polygon": [
+        [
+          45.3125,
+          44.53125
+        ],
+        [
+          46.09375,
+          44.53125
+        ],
+        [
+          46.09375,
+          45.3125
+        ],
+        [
+          45.3125,
+          45.3125
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.534962755362244
+    },
+    {
+      "cell_index": [
+        58,
+        73
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": 1.7183144921119844,
+              "center": [
+                45.703125000000185,
+                57.421874999999815
+              ],
+              "curvature": 1.143891699996998,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.43764639316741805,
+              "s_start": -0.3575926130521641,
+              "shift": -0.17802252844052796
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 1.143891699996998,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "y",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 0.029628086437389557,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.14036410950166178,
+      "polygon": [
+        [
+          45.3125,
+          57.03125
+        ],
+        [
+          46.09375,
+          57.03125
+        ],
+        [
+          46.09375,
+          57.8125
+        ],
+        [
+          45.3125,
+          57.8125
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.140364109501661
+    },
+    {
+      "cell_index": [
+        59,
+        56
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": -1.6858336106726663,
+              "center": [
+                46.484375,
+                44.140625
+              ],
+              "curvature": -7.009599856317936e-13,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.34767194846649124,
+              "s_start": 0.008691131476758818,
+              "shift": -0.39422824993368427
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": -7.009599856317936e-13,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "y",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 1.5949914924349104e-17,
+        "optimizer_message": "CONVERGENCE: REL_REDUCTION_OF_F_<=_FACTR*EPSMCH",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.006551195673182603,
+      "polygon": [
+        [
+          46.09375,
+          43.75
+        ],
+        [
+          46.875,
+          43.75
+        ],
+        [
+          46.875,
+          44.53125
+        ],
+        [
+          46.09375,
+          44.53125
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.006551195673182519
+    },
+    {
+      "cell_index": [
+        59,
+        57
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": -1.685833684630104,
+              "center": [
+                46.484374999999815,
+                44.921874999999815
+              ],
+              "curvature": -7.009599856317936e-13,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.09836581134518152,
+              "s_start": -0.34910126339570535,
+              "shift": 0.3818580906647316
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": -7.009599856317936e-13,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "y",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 1.1176175113325074e-14,
+        "optimizer_message": "CONVERGENCE: REL_REDUCTION_OF_F_<=_FACTR*EPSMCH",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.5989361194683667,
+      "polygon": [
+        [
+          46.09375,
+          44.53125
+        ],
+        [
+          46.875,
+          44.53125
+        ],
+        [
+          46.875,
+          45.3125
+        ],
+        [
+          46.09375,
+          45.3125
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.5989361194683624
+    },
+    {
+      "cell_index": [
+        59,
+        73
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": 1.4557590389867638,
+              "center": [
+                46.484374999999815,
+                57.421874999999815
+              ],
+              "curvature": -1.7831594648481707e-16,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.35864766601782394,
+              "s_start": -0.4278003582893084,
+              "shift": -0.29923939568024965
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": -1.7831594648481707e-16,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "y",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 2.6608369708094357e-18,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.06983954972224653,
+      "polygon": [
+        [
+          46.09375,
+          57.03125
+        ],
+        [
+          46.875,
+          57.03125
+        ],
+        [
+          46.875,
+          57.8125
+        ],
+        [
+          46.09375,
+          57.8125
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.06983954972224637
+    },
+    {
+      "cell_index": [
+        60,
+        56
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": -1.6858336149839703,
+              "center": [
+                47.265624999999815,
+                44.140625
+              ],
+              "curvature": 4.671877797901911e-13,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.35803363910953695,
+              "s_start": -0.42841438523221387,
+              "shift": -0.30455346242276193
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 4.671877797901911e-13,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "y",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 4.557788584659905e-18,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.06566031242118711,
+      "polygon": [
+        [
+          46.875,
+          43.75
+        ],
+        [
+          47.65625,
+          43.75
+        ],
+        [
+          47.65625,
+          44.53125
+        ],
+        [
+          46.875,
+          44.53125
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.06566031242118697
+    },
+    {
+      "cell_index": [
+        60,
+        72
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": 1.4557590385465575,
+              "center": [
+                47.265625,
+                56.640625
+              ],
+              "curvature": 0.0,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.05237557327305098,
+              "s_start": -0.3484872613522932,
+              "shift": 0.38717214873689715
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 0.0,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "y",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 6.769716157116302e-18,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.601190160723261,
+      "polygon": [
+        [
+          46.875,
+          56.25
+        ],
+        [
+          47.65625,
+          56.25
+        ],
+        [
+          47.65625,
+          57.03125
+        ],
+        [
+          46.875,
+          57.03125
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.601190160723263
+    },
+    {
+      "cell_index": [
+        60,
+        73
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": 1.4557590402665639,
+              "center": [
+                47.265625,
+                57.421874999999815
+              ],
+              "curvature": 0.0,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.3482859742767456,
+              "s_start": -0.03729921228269689,
+              "shift": -0.3889141836481335
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 0.0,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "y",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 8.016998353015256e-22,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.008476391719577217,
+      "polygon": [
+        [
+          46.875,
+          57.03125
+        ],
+        [
+          47.65625,
+          57.03125
+        ],
+        [
+          47.65625,
+          57.8125
+        ],
+        [
+          46.875,
+          57.8125
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.00847639171956871
+    },
+    {
+      "cell_index": [
+        61,
+        56
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": -1.685833635207731,
+              "center": [
+                48.046875,
+                44.140624999999815
+              ],
+              "curvature": 1.7831594648481707e-16,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.3683953278971551,
+              "s_start": -0.4180526982823689,
+              "shift": -0.21487867401801686
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 1.7831594648481707e-16,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "y",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 9.85313831902628e-16,
+        "optimizer_message": "CONVERGENCE: REL_REDUCTION_OF_F_<=_FACTR*EPSMCH",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.13618487220060158,
+      "polygon": [
+        [
+          47.65625,
+          43.75
+        ],
+        [
+          48.4375,
+          43.75
+        ],
+        [
+          48.4375,
+          44.53125
+        ],
+        [
+          47.65625,
+          44.53125
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.1361848722006016
+    },
+    {
+      "cell_index": [
+        61,
+        72
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": 1.4557590392196729,
+              "center": [
+                48.046875,
+                56.640625000000185
+              ],
+              "curvature": 3.5663189296963413e-16,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.42759907050536405,
+              "s_start": -0.35884895378060333,
+              "shift": 0.2974973605225794
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 3.5663189296963413e-16,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "y",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 1.780722678751366e-18,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.5391419926634171,
+      "polygon": [
+        [
+          47.65625,
+          56.25
+        ],
+        [
+          48.4375,
+          56.25
+        ],
+        [
+          48.4375,
+          57.03125
+        ],
+        [
+          47.65625,
+          57.03125
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.5391419926634171
+    },
+    {
+      "cell_index": [
+        62,
+        56
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": -1.6858336068086424,
+              "center": [
+                48.828125,
+                44.140625
+              ],
+              "curvature": -3.5663189296963413e-16,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.3787570241906607,
+              "s_start": -0.40769099940817966,
+              "shift": -0.1252038867354449
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": -3.5663189296963413e-16,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "y",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 8.665530755868502e-17,
+        "optimizer_message": "CONVERGENCE: REL_REDUCTION_OF_F_<=_FACTR*EPSMCH",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.20670943198001623,
+      "polygon": [
+        [
+          48.4375,
+          43.75
+        ],
+        [
+          49.21875,
+          43.75
+        ],
+        [
+          49.21875,
+          44.53125
+        ],
+        [
+          48.4375,
+          44.53125
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.20670943198001623
+    },
+    {
+      "cell_index": [
+        62,
+        72
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": 1.4557590305487271,
+              "center": [
+                48.828125000000185,
+                56.640625000000185
+              ],
+              "curvature": 4.671877797901909e-13,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.4172373805419943,
+              "s_start": -0.3692106445319187,
+              "shift": 0.20782257240520097
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 4.671877797901909e-13,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "y",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 1.946986089005254e-16,
+        "optimizer_message": "CONVERGENCE: REL_REDUCTION_OF_F_<=_FACTR*EPSMCH",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.4686174328840025,
+      "polygon": [
+        [
+          48.4375,
+          56.25
+        ],
+        [
+          49.21875,
+          56.25
+        ],
+        [
+          49.21875,
+          57.03125
+        ],
+        [
+          48.4375,
+          57.03125
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.4686174328840025
+    },
+    {
+      "cell_index": [
+        63,
+        56
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": -1.6858336133029366,
+              "center": [
+                49.609375000000185,
+                44.140625
+              ],
+              "curvature": 4.682576754691595e-13,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.3891187157362806,
+              "s_start": -0.39732930845270975,
+              "shift": -0.035529098721250756
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 4.682576754691595e-13,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "y",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 2.810144217393099e-24,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.27723399175943075,
+      "polygon": [
+        [
+          49.21875,
+          43.75
+        ],
+        [
+          50.0,
+          43.75
+        ],
+        [
+          50.0,
+          44.53125
+        ],
+        [
+          49.21875,
+          44.53125
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.27723399175943086
+    },
+    {
+      "cell_index": [
+        63,
+        72
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": 1.4557590624043781,
+              "center": [
+                49.609375,
+                56.640625
+              ],
+              "curvature": -9.350888233663806e-13,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.4068756823936324,
+              "s_start": -0.3795723397854946,
+              "shift": 0.11814778502065904
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": -9.350888233663806e-13,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "y",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 1.0047908316845491e-15,
+        "optimizer_message": "CONVERGENCE: REL_REDUCTION_OF_F_<=_FACTR*EPSMCH",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.3980928731043605,
+      "polygon": [
+        [
+          49.21875,
+          56.25
+        ],
+        [
+          50.0,
+          56.25
+        ],
+        [
+          50.0,
+          57.03125
+        ],
+        [
+          49.21875,
+          57.03125
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.3980928731043605
+    },
+    {
+      "cell_index": [
+        64,
+        56
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": -1.6858336133031977,
+              "center": [
+                50.390624999999815,
+                44.140624999999815
+              ],
+              "curvature": -4.682576754691595e-13,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.3994804078004668,
+              "s_start": -0.38696761638854743,
+              "shift": 0.054145689198417446
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": -4.682576754691595e-13,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "y",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 1.691524228157936e-24,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.34775855153861807,
+      "polygon": [
+        [
+          50.0,
+          43.75
+        ],
+        [
+          50.78125,
+          43.75
+        ],
+        [
+          50.78125,
+          44.53125
+        ],
+        [
+          50.0,
+          44.53125
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.3477585515386181
+    },
+    {
+      "cell_index": [
+        64,
+        72
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": 1.4557590402867664,
+              "center": [
+                50.390624999999815,
+                56.640625000000185
+              ],
+              "curvature": 9.350888233663806e-13,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.39651399394768216,
+              "s_start": -0.38993403024131595,
+              "shift": 0.028472996798682988
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 9.350888233663806e-13,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "y",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 3.3034483480669326e-24,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.32756831332517305,
+      "polygon": [
+        [
+          50.0,
+          56.25
+        ],
+        [
+          50.78125,
+          56.25
+        ],
+        [
+          50.78125,
+          57.03125
+        ],
+        [
+          50.0,
+          57.03125
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.3275683133251732
+    },
+    {
+      "cell_index": [
+        65,
+        56
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": -1.68583360990248,
+              "center": [
+                51.171875,
+                44.140625
+              ],
+              "curvature": -4.671877797901909e-13,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.4098420992205623,
+              "s_start": -0.3766059246594222,
+              "shift": 0.14382047717534122
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": -4.671877797901909e-13,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "y",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 2.3769263328479804e-17,
+        "optimizer_message": "CONVERGENCE: REL_REDUCTION_OF_F_<=_FACTR*EPSMCH",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.41828311131803275,
+      "polygon": [
+        [
+          50.78125,
+          43.75
+        ],
+        [
+          51.5625,
+          43.75
+        ],
+        [
+          51.5625,
+          44.53125
+        ],
+        [
+          50.78125,
+          44.53125
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.41828311131803275
+    },
+    {
+      "cell_index": [
+        65,
+        72
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": 1.4557590402861262,
+              "center": [
+                51.171875000000185,
+                56.640625000000185
+              ],
+              "curvature": -4.675444116831607e-13,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.38615230188416383,
+              "s_start": -0.40029572230489235,
+              "shift": -0.06120179112188658
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": -4.675444116831607e-13,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "y",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 1.3541372443762864e-24,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.25704375354553116,
+      "polygon": [
+        [
+          50.78125,
+          56.25
+        ],
+        [
+          51.5625,
+          56.25
+        ],
+        [
+          51.5625,
+          57.03125
+        ],
+        [
+          50.78125,
+          57.03125
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.2570437535455312
+    },
+    {
+      "cell_index": [
+        66,
+        56
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": -1.6858336779123413,
+              "center": [
+                51.953125000000185,
+                44.140625
+              ],
+              "curvature": 9.350888233663806e-13,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.42020380994938844,
+              "s_start": -0.3662442201107904,
+              "shift": 0.2334952632962382
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 9.350888233663806e-13,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "y",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 8.572804597506431e-15,
+        "optimizer_message": "CONVERGENCE: REL_REDUCTION_OF_F_<=_FACTR*EPSMCH",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.4888076710976747,
+      "polygon": [
+        [
+          51.5625,
+          43.75
+        ],
+        [
+          52.34375,
+          43.75
+        ],
+        [
+          52.34375,
+          44.53125
+        ],
+        [
+          51.5625,
+          44.53125
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.48880767109767476
+    },
+    {
+      "cell_index": [
+        66,
+        72
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": 1.4557590467912613,
+              "center": [
+                51.953125,
+                56.640625
+              ],
+              "curvature": -9.34910507420015e-13,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.37579061050600104,
+              "s_start": -0.4106574130919189,
+              "shift": -0.1508765791553011
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": -9.34910507420015e-13,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "y",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 8.691585339123239e-17,
+        "optimizer_message": "CONVERGENCE: REL_REDUCTION_OF_F_<=_FACTR*EPSMCH",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.18651919376611656,
+      "polygon": [
+        [
+          51.5625,
+          56.25
+        ],
+        [
+          52.34375,
+          56.25
+        ],
+        [
+          52.34375,
+          57.03125
+        ],
+        [
+          51.5625,
+          57.03125
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.18651919376611661
+    },
+    {
+      "cell_index": [
+        67,
+        56
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": -1.6858336135644294,
+              "center": [
+                52.734374999999815,
+                44.140624999999815
+              ],
+              "curvature": -1.4029898669424512e-12,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.4305654840883629,
+              "s_start": -0.3558825401243949,
+              "shift": 0.3231700529492559
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": -1.4029898669424512e-12,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "y",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 1.2248980274965883e-19,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.559332230876862,
+      "polygon": [
+        [
+          52.34375,
+          43.75
+        ],
+        [
+          53.125,
+          43.75
+        ],
+        [
+          53.125,
+          44.53125
+        ],
+        [
+          52.34375,
+          44.53125
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.559332230876862
+    },
+    {
+      "cell_index": [
+        67,
+        72
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": 1.4557590403054022,
+              "center": [
+                52.734374999999815,
+                56.640625000000185
+              ],
+              "curvature": 1.4026332350496605e-12,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.36542891775980046,
+              "s_start": -0.4210191064275084,
+              "shift": -0.24055136696215615
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 1.4026332350496605e-12,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "y",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 7.955460293521453e-22,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.11599463398715663,
+      "polygon": [
+        [
+          52.34375,
+          56.25
+        ],
+        [
+          53.125,
+          56.25
+        ],
+        [
+          53.125,
+          57.03125
+        ],
+        [
+          52.34375,
+          57.03125
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.1159946339871567
+    },
+    {
+      "cell_index": [
+        68,
+        55
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": -1.6858336137435788,
+              "center": [
+                53.515625,
+                43.359375
+              ],
+              "curvature": 1.870712594572216e-12,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.35125238799206165,
+              "s_start": -0.2594823482049278,
+              "shift": -0.3632414912652908
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 1.870712594572216e-12,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "y",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 4.0389518231615826e-19,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.02126549918921225,
+      "polygon": [
+        [
+          53.125,
+          42.96875
+        ],
+        [
+          53.90625,
+          42.96875
+        ],
+        [
+          53.90625,
+          43.75
+        ],
+        [
+          53.125,
+          43.75
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.021265499189212278
+    },
+    {
+      "cell_index": [
+        68,
+        56
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": -1.6858336133016647,
+              "center": [
+                53.515625,
+                44.140625
+              ],
+              "curvature": 1.870712594572216e-12,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": -0.1698075612842137,
+              "s_start": -0.34552084813382894,
+              "shift": 0.41284484087950085
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 1.870712594572216e-12,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "y",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 1.7387804345941447e-23,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.6085912914675179,
+      "polygon": [
+        [
+          53.125,
+          43.75
+        ],
+        [
+          53.90625,
+          43.75
+        ],
+        [
+          53.90625,
+          44.53125
+        ],
+        [
+          53.125,
+          44.53125
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.6085912914675191
+    },
+    {
+      "cell_index": [
+        68,
+        72
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": 1.4557590402431033,
+              "center": [
+                53.515625000000185,
+                56.640625000000185
+              ],
+              "curvature": -4.677227276296452e-13,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.3550672256802212,
+              "s_start": -0.4313807985127432,
+              "shift": -0.3302261548805584
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": -4.677227276296452e-13,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "y",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 3.371211458241788e-21,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.0454700742075147,
+      "polygon": [
+        [
+          53.125,
+          56.25
+        ],
+        [
+          53.90625,
+          56.25
+        ],
+        [
+          53.90625,
+          57.03125
+        ],
+        [
+          53.125,
+          57.03125
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.0454700742075147
+    },
+    {
+      "cell_index": [
+        69,
+        55
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": -1.6858336144001762,
+              "center": [
+                54.296875000000185,
+                43.359375
+              ],
+              "curvature": -1.4029898669426303e-12,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.3616140799498523,
+              "s_start": -0.42483394433884186,
+              "shift": -0.27356670329092414
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": -1.4029898669426303e-12,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "y",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 1.9392222888911608e-18,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.09002978793569139,
+      "polygon": [
+        [
+          53.90625,
+          42.96875
+        ],
+        [
+          54.6875,
+          42.96875
+        ],
+        [
+          54.6875,
+          43.75
+        ],
+        [
+          53.90625,
+          43.75
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.09002978793569127
+    },
+    {
+      "cell_index": [
+        69,
+        71
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": 1.4557590394478088,
+              "center": [
+                54.296875000000185,
+                55.859375000000185
+              ],
+              "curvature": 3.5663189296963413e-16,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.32054905697160335,
+              "s_start": -0.3520677023747778,
+              "shift": 0.3561853893359032
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 3.5663189296963413e-16,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "y",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 1.4524625499366161e-18,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.5845583338209538,
+      "polygon": [
+        [
+          53.90625,
+          55.46875
+        ],
+        [
+          54.6875,
+          55.46875
+        ],
+        [
+          54.6875,
+          56.25
+        ],
+        [
+          53.90625,
+          56.25
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.5845583338209508
+    },
+    {
+      "cell_index": [
+        69,
+        72
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": 1.455759040291819,
+              "center": [
+                54.296875,
+                56.640625
+              ],
+              "curvature": 3.5663189296963413e-16,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.3447055336308417,
+              "s_start": 0.23087427118510817,
+              "shift": -0.41990094279979356
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 3.5663189296963413e-16,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "y",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 1.174142586425677e-22,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.0007387431071479052,
+      "polygon": [
+        [
+          53.90625,
+          56.25
+        ],
+        [
+          54.6875,
+          56.25
+        ],
+        [
+          54.6875,
+          57.03125
+        ],
+        [
+          53.90625,
+          57.03125
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.0007387431071492756
+    },
+    {
+      "cell_index": [
+        70,
+        55
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": -1.4341582024852078,
+              "center": [
+                55.078124999999815,
+                43.359375
+              ],
+              "curvature": 0.8112877851719953,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.4267273547719605,
+              "s_start": -0.36461421309130093,
+              "shift": -0.16197742532942916
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 0.8112877851719953,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "y",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 0.04461321645427287,
+        "optimizer_message": "CONVERGENCE: REL_REDUCTION_OF_F_<=_FACTR*EPSMCH",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.16055434771533195,
+      "polygon": [
+        [
+          54.6875,
+          42.96875
+        ],
+        [
+          55.46875,
+          42.96875
+        ],
+        [
+          55.46875,
+          43.75
+        ],
+        [
+          54.6875,
+          43.75
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.16055434771533328
+    },
+    {
+      "cell_index": [
+        70,
+        71
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": 1.4557590306971897,
+              "center": [
+                55.078124999999815,
+                55.859375
+              ],
+              "curvature": 4.668311478972215e-13,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.4240186324752529,
+              "s_start": -0.36242939258516865,
+              "shift": 0.26651060110756597
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 4.668311478972215e-13,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "y",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 1.5785473816583654e-16,
+        "optimizer_message": "CONVERGENCE: REL_REDUCTION_OF_F_<=_FACTR*EPSMCH",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.5147725171486854,
+      "polygon": [
+        [
+          54.6875,
+          55.46875
+        ],
+        [
+          55.46875,
+          55.46875
+        ],
+        [
+          55.46875,
+          56.25
+        ],
+        [
+          54.6875,
+          56.25
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.5147725171486854
+    },
+    {
+      "cell_index": [
+        71,
+        55
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": -0.8777838055235566,
+              "center": [
+                55.859375,
+                43.359375
+              ],
+              "curvature": 0.13596342597741753,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.3824789182868507,
+              "s_start": -0.3511571317637119,
+              "shift": -0.18018969568310494
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 0.13596342597741753,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "y",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 0.5224852920798588,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.13684364153347112,
+      "polygon": [
+        [
+          55.46875,
+          42.96875
+        ],
+        [
+          56.25,
+          42.96875
+        ],
+        [
+          56.25,
+          43.75
+        ],
+        [
+          55.46875,
+          43.75
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.13684364153345996
+    },
+    {
+      "cell_index": [
+        71,
+        56
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": -0.7032713376880755,
+              "center": [
+                55.859375,
+                44.140625
+              ],
+              "curvature": 0.13596342597741753,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.46104900398740684,
+              "s_start": -0.40663809856445154,
+              "shift": 0.13566915616703754
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 0.13596342597741753,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "y",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 0.46273767905986185,
+        "optimizer_message": "CONVERGENCE: REL_REDUCTION_OF_F_<=_FACTR*EPSMCH",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.4322965590120021,
+      "polygon": [
+        [
+          55.46875,
+          43.75
+        ],
+        [
+          56.25,
+          43.75
+        ],
+        [
+          56.25,
+          44.53125
+        ],
+        [
+          55.46875,
+          44.53125
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.43229655901200204
+    },
+    {
+      "cell_index": [
+        71,
+        57
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": -0.11503728650610882,
+              "center": [
+                55.859375000000185,
+                44.921874999999815
+              ],
+              "curvature": -3.5663189296967964e-16,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.42226269212075085,
+              "s_start": -0.3641853320680638,
+              "shift": 0.2513139221690976
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": -3.5663189296967964e-16,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "x",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 1.749520024662717e-23,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.5028211187911895,
+      "polygon": [
+        [
+          55.46875,
+          44.53125
+        ],
+        [
+          56.25,
+          44.53125
+        ],
+        [
+          56.25,
+          45.3125
+        ],
+        [
+          55.46875,
+          45.3125
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.5028211187911893
+    },
+    {
+      "cell_index": [
+        71,
+        58
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": -0.11503729916373662,
+              "center": [
+                55.859375,
+                45.703125000000185
+              ],
+              "curvature": -9.343755595804416e-13,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.43262438907526846,
+              "s_start": -0.3538236362637746,
+              "shift": 0.34098870959052374
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": -9.343755595804416e-13,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "x",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 3.247564659829281e-16,
+        "optimizer_message": "CONVERGENCE: REL_REDUCTION_OF_F_<=_FACTR*EPSMCH",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.5733456785703767,
+      "polygon": [
+        [
+          55.46875,
+          45.3125
+        ],
+        [
+          56.25,
+          45.3125
+        ],
+        [
+          56.25,
+          46.09375
+        ],
+        [
+          55.46875,
+          46.09375
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.5733456785703765
+    },
+    {
+      "cell_index": [
+        71,
+        59
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": -0.11503728651147137,
+              "center": [
+                55.859375,
+                46.484375
+              ],
+              "curvature": -7.132637859391776e-16,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": -0.3240183107026898,
+              "s_start": -0.3434619479396038,
+              "shift": 0.43066349800273
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": -7.132637859391776e-16,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "x",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 2.3373832620169505e-22,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.6103300086251693,
+      "polygon": [
+        [
+          55.46875,
+          46.09375
+        ],
+        [
+          56.25,
+          46.09375
+        ],
+        [
+          56.25,
+          46.875
+        ],
+        [
+          55.46875,
+          46.875
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.6103300086251693
+    },
+    {
+      "cell_index": [
+        71,
+        71
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": 1.4557590415210815,
+              "center": [
+                55.859375,
+                55.859375
+              ],
+              "curvature": -4.671877797901911e-13,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.4136569371457699,
+              "s_start": -0.3727910869310647,
+              "shift": 0.17683581350755245
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": -4.671877797901911e-13,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "y",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 3.1362811089011256e-18,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.4442479573690433,
+      "polygon": [
+        [
+          55.46875,
+          55.46875
+        ],
+        [
+          56.25,
+          55.46875
+        ],
+        [
+          56.25,
+          56.25
+        ],
+        [
+          55.46875,
+          56.25
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.44424795736904343
+    },
+    {
+      "cell_index": [
+        72,
+        59
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": -0.11503728738855938,
+              "center": [
+                56.640625000000185,
+                46.484374999999815
+              ],
+              "curvature": -7.132637859391776e-16,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.3533112880647562,
+              "s_start": -0.41369309607624655,
+              "shift": -0.34542283408902463
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": -7.132637859391776e-16,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "x",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 1.5864313861780514e-18,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.03354022972484927,
+      "polygon": [
+        [
+          56.25,
+          46.09375
+        ],
+        [
+          57.03125,
+          46.09375
+        ],
+        [
+          57.03125,
+          46.875
+        ],
+        [
+          56.25,
+          46.875
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.03354022972484927
+    },
+    {
+      "cell_index": [
+        72,
+        60
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": -0.11503728703100144,
+              "center": [
+                56.640625,
+                47.265625
+              ],
+              "curvature": 9.354454552593503e-13,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.3636729802835898,
+              "s_start": -0.4227750439529258,
+              "shift": -0.25574804617963315
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 9.354454552593503e-13,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "x",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 5.392695287140787e-19,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.10404323562966046,
+      "polygon": [
+        [
+          56.25,
+          46.875
+        ],
+        [
+          57.03125,
+          46.875
+        ],
+        [
+          57.03125,
+          47.65625
+        ],
+        [
+          56.25,
+          47.65625
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.10404323562966057
+    },
+    {
+      "cell_index": [
+        72,
+        61
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": -0.11503728123517552,
+              "center": [
+                56.640625000000185,
+                48.046875
+              ],
+              "curvature": -4.679010435761898e-13,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.3740346730934726,
+              "s_start": -0.41241335061636064,
+              "shift": -0.16607325837656964
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": -4.679010435761898e-13,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "x",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 5.712649558337853e-17,
+        "optimizer_message": "CONVERGENCE: REL_REDUCTION_OF_F_<=_FACTR*EPSMCH",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.17456779540884781,
+      "polygon": [
+        [
+          56.25,
+          47.65625
+        ],
+        [
+          57.03125,
+          47.65625
+        ],
+        [
+          57.03125,
+          48.4375
+        ],
+        [
+          56.25,
+          48.4375
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.17456779540884781
+    },
+    {
+      "cell_index": [
+        72,
+        62
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": -0.11503728650877851,
+              "center": [
+                56.640625000000185,
+                48.828125000000185
+              ],
+              "curvature": 3.5663189296963413e-16,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.38439636452100223,
+              "s_start": -0.402051659668055,
+              "shift": -0.07639847035513869
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 3.5663189296963413e-16,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "x",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 7.819444932787767e-25,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.24509235518826253,
+      "polygon": [
+        [
+          56.25,
+          48.4375
+        ],
+        [
+          57.03125,
+          48.4375
+        ],
+        [
+          57.03125,
+          49.21875
+        ],
+        [
+          56.25,
+          49.21875
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.24509235518826245
+    },
+    {
+      "cell_index": [
+        72,
+        63
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": -0.11503728650831228,
+              "center": [
+                56.640625,
+                49.609375
+              ],
+              "curvature": -4.675444116831607e-13,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.3947580565850907,
+              "s_start": -0.39168996760392427,
+              "shift": 0.013276317565213216
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": -4.675444116831607e-13,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "x",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 3.293610442147506e-24,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.3156169149676772,
+      "polygon": [
+        [
+          56.25,
+          49.21875
+        ],
+        [
+          57.03125,
+          49.21875
+        ],
+        [
+          57.03125,
+          50.0
+        ],
+        [
+          56.25,
+          50.0
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.3156169149676771
+    },
+    {
+      "cell_index": [
+        72,
+        64
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": -0.11503728650906705,
+              "center": [
+                56.640625000000185,
+                50.390624999999815
+              ],
+              "curvature": 9.350888233663806e-13,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.4051197486492561,
+              "s_start": -0.38132827553982634,
+              "shift": 0.10295110548552945
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 9.350888233663806e-13,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "x",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 2.3560885236927836e-25,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.38614147474731897,
+      "polygon": [
+        [
+          56.25,
+          50.0
+        ],
+        [
+          57.03125,
+          50.0
+        ],
+        [
+          57.03125,
+          50.78125
+        ],
+        [
+          56.25,
+          50.78125
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.3861414747473191
+    },
+    {
+      "cell_index": [
+        72,
+        65
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": -0.11503728661558603,
+              "center": [
+                56.640625000000185,
+                51.171875000000185
+              ],
+              "curvature": -4.679010435761898e-13,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.41548144073815735,
+              "s_start": -0.3709665834606068,
+              "shift": 0.19262589340307443
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": -4.679010435761898e-13,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "x",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 2.3243686888236973e-20,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.4566660345265063,
+      "polygon": [
+        [
+          56.25,
+          50.78125
+        ],
+        [
+          57.03125,
+          50.78125
+        ],
+        [
+          57.03125,
+          51.5625
+        ],
+        [
+          56.25,
+          51.5625
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.45666603452650634
+    },
+    {
+      "cell_index": [
+        72,
+        66
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": -0.1150372865233808,
+              "center": [
+                56.640625,
+                51.953125
+              ],
+              "curvature": 7.132637859392683e-16,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.42584313278162605,
+              "s_start": -0.3606048914087582,
+              "shift": 0.28230068132535036
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 7.132637859392683e-16,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "x",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 3.0368312819355817e-22,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.5271905943059212,
+      "polygon": [
+        [
+          56.25,
+          51.5625
+        ],
+        [
+          57.03125,
+          51.5625
+        ],
+        [
+          57.03125,
+          52.34375
+        ],
+        [
+          56.25,
+          52.34375
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.527190594305921
+    },
+    {
+      "cell_index": [
+        72,
+        67
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": -0.1150372865980714,
+              "center": [
+                56.640625000000185,
+                52.734374999999815
+              ],
+              "curvature": -4.680793595226152e-13,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.18389453769042768,
+              "s_start": -0.3502431993177069,
+              "shift": 0.37197546925305003
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": -4.680793595226152e-13,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "x",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 1.6701687192059015e-20,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.5940857088139636,
+      "polygon": [
+        [
+          56.25,
+          52.34375
+        ],
+        [
+          57.03125,
+          52.34375
+        ],
+        [
+          57.03125,
+          53.125
+        ],
+        [
+          56.25,
+          53.125
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.5940857088139637
+    },
+    {
+      "cell_index": [
+        72,
+        71
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": 0.8724290105677965,
+              "center": [
+                56.640625000000185,
+                55.859375000000185
+              ],
+              "curvature": 0.10087209468978799,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.5395331933449523,
+              "s_start": -0.4586839923660958,
+              "shift": 0.07176853199649026
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 0.10087209468978799,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "x",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 0.3639698334735761,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.373723397589628,
+      "polygon": [
+        [
+          56.25,
+          55.46875
+        ],
+        [
+          57.03125,
+          55.46875
+        ],
+        [
+          57.03125,
+          56.25
+        ],
+        [
+          56.25,
+          56.25
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.3737233975896288
+    },
+    {
+      "cell_index": [
+        73,
+        67
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": -0.11503724577216774,
+              "center": [
+                57.421874999999815,
+                52.734374999999815
+              ],
+              "curvature": -4.680793595226152e-13,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.3465300527895788,
+              "s_start": 0.09421972192416603,
+              "shift": -0.404110853901302
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": -4.680793595226152e-13,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "x",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 3.9978851414174506e-15,
+        "optimizer_message": "CONVERGENCE: REL_REDUCTION_OF_F_<=_FACTR*EPSMCH",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.0036294452713718714,
+      "polygon": [
+        [
+          57.03125,
+          52.34375
+        ],
+        [
+          57.8125,
+          52.34375
+        ],
+        [
+          57.8125,
+          53.125
+        ],
+        [
+          57.03125,
+          53.125
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.0036294452713718783
+    },
+    {
+      "cell_index": [
+        73,
+        68
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": -0.11503728751000966,
+              "center": [
+                57.421874999999815,
+                53.515625
+              ],
+              "curvature": 9.350888233663806e-13,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.35689172871566105,
+              "s_start": -0.42955629556438363,
+              "shift": -0.3144360749221036
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 9.350888233663806e-13,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "x",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 1.712996291645627e-18,
+        "optimizer_message": "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.057888151364977644,
+      "polygon": [
+        [
+          57.03125,
+          53.125
+        ],
+        [
+          57.8125,
+          53.125
+        ],
+        [
+          57.8125,
+          53.90625
+        ],
+        [
+          57.03125,
+          53.90625
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.0578881513649776
+    },
+    {
+      "cell_index": [
+        73,
+        69
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": -0.1150373282915746,
+              "center": [
+                57.421874999999815,
+                54.296875000000185
+              ],
+              "curvature": -4.673660957367354e-13,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.3672534135559793,
+              "s_start": -0.4191946144299661,
+              "shift": -0.22476128595345926
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": -4.673660957367354e-13,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "x",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 3.5853844948692825e-15,
+        "optimizer_message": "CONVERGENCE: REL_REDUCTION_OF_F_<=_FACTR*EPSMCH",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.12841271114416475,
+      "polygon": [
+        [
+          57.03125,
+          53.90625
+        ],
+        [
+          57.8125,
+          53.90625
+        ],
+        [
+          57.8125,
+          54.6875
+        ],
+        [
+          57.03125,
+          54.6875
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.12841271114416486
+    },
+    {
+      "cell_index": [
+        73,
+        70
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": 0.15970239881185702,
+              "center": [
+                57.421874999999815,
+                55.078124999999815
+              ],
+              "curvature": 1.0786992231393508,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.4286303881628676,
+              "s_start": -0.36695239601865964,
+              "shift": -0.10559986850484902
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 1.0786992231393508,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "x",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 0.04549315268390421,
+        "optimizer_message": "CONVERGENCE: REL_REDUCTION_OF_F_<=_FACTR*EPSMCH",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.19893727092358038,
+      "polygon": [
+        [
+          57.03125,
+          54.6875
+        ],
+        [
+          57.8125,
+          54.6875
+        ],
+        [
+          57.8125,
+          55.46875
+        ],
+        [
+          57.03125,
+          55.46875
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.1989372709235795
+    },
+    {
+      "cell_index": [
+        73,
+        71
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "angle": 0.7376333954807435,
+              "center": [
+                57.421874999999815,
+                55.859375
+              ],
+              "curvature": 0.10087209468978799,
+              "kind": "parabola",
+              "metadata": {
+                "curvature_source": "cartesian-ghf"
+              },
+              "s_end": 0.3699855406017391,
+              "s_start": -0.35423235604595393,
+              "shift": -0.18469530585740213
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "curvature": 0.10087209468978799,
+        "curvature_source": "cartesian-ghf",
+        "ghf_diagnostic": "complete three-column height function",
+        "ghf_direction": "x",
+        "ghf_fit_points": 0,
+        "ghf_height_points": 3,
+        "ghf_independent_points": 3,
+        "ghf_method": "height_function",
+        "interval_count": 1,
+        "objective": 0.5152137199480263,
+        "optimizer_message": "CONVERGENCE: REL_REDUCTION_OF_F_<=_FACTR*EPSMCH",
+        "optimizer_success": true
+      },
+      "exact_phase_area": 0.13373782063171247,
+      "polygon": [
+        [
+          57.03125,
+          55.46875
+        ],
+        [
+          57.8125,
+          55.46875
+        ],
+        [
+          57.8125,
+          56.25
+        ],
+        [
+          57.03125,
+          56.25
+        ]
+      ],
+      "source_method": "PLVIRA",
+      "source_variant": "PLVIRA",
+      "status": "reconstructed",
+      "target_phase_area": 0.13373782063172257
+    }
+  ],
+  "metadata": {
+    "config": {
+      "benchmark": "squares",
+      "case_index": 3,
+      "cell_size": 0.78125,
+      "cells_per_side": 128,
+      "curvature_source": "cartesian-ghf"
+    },
+    "geometry_tolerance": 1e-10,
+    "mesh_class": "axis_aligned_cartesian",
+    "mesh_shape": [
+      128,
+      128
+    ],
+    "mixed_tolerance": 1e-10,
+    "status_counts": {
+      "paper_fallback": 0,
+      "reconstructed": 72,
+      "unresolved": 0,
+      "unsupported": 0
+    }
+  },
+  "schema_version": 1,
+  "source_method": "PLVIRA",
+  "source_variant": "PLVIRA"
+}

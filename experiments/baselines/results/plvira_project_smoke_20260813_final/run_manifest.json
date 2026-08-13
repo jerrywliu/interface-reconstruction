@@ -1,0 +1,38 @@
+{
+  "benchmarks": [
+    "lines",
+    "squares",
+    "circles",
+    "ellipses",
+    "zalesak"
+  ],
+  "boundary_policy": "unsupported when PLVIRA/GHF requires cells outside the available halo",
+  "case_indices": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "curvature_source": "Cartesian generalized height function",
+  "geometry_error_metric": "sampled reconstruction-to-truth maximum with the same spacing; does not penalize unsupported boundary truth segments",
+  "git_head_at_launch": "a600825e0ab57346f3c330b6739df4a933ab981e",
+  "hausdorff_metric": "symmetric sampled point-cloud diagnostic with spacing min(h/128, 2.5e-3); not the adaptive native metric",
+  "implementation_sha256": {
+    "experiments/baselines/project_benchmarks.py": "96af4d38bdc83aaf691b0087286deb393153977e1c26030f1f9af309fcc81ae2",
+    "experiments/baselines/project_smoke.py": "bb7f97341d7036d0ae21bcef667fc13153e96f2defbec221370e582d97d54666",
+    "experiments/baselines/run_plvira_project_smoke.py": "2b14eebde22b33edcf054c61d99a0b95ec6f83770398a3eeb3e3e5d16d0792eb",
+    "main/algos/baselines/external_method_adapters.py": "a0f35e77841a34805ca75a0b201a664abc784649edb5920d9ae6ee187c0b4ef8",
+    "main/algos/baselines/plvira.py": "55fb05e05dbbd653f71565f3c5e85b585403632056e6f1e97678a9e82385b368",
+    "main/algos/baselines/plvira_ghf.py": "bd4f6ef4b34067ece5632b54c503cc2bac544bf2c9ee69ee52d2d275e5eedfe5"
+  },
+  "mesh": "uniform axis-aligned Cartesian",
+  "method": "PLVIRA",
+  "resolutions": [
+    32,
+    64,
+    128
+  ],
+  "study": "PLVIRA five-benchmark Cartesian mini resolution study",
+  "variant": "PLVIRA"
+}
