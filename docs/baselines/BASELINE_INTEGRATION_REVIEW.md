@@ -2,6 +2,13 @@
 
 Date: 2026-08-13
 
+> **Implementation follow-up:** The original risk assessment below remains as
+> the audit trail. Subsequent Cartesian work completed the PLVIRA GHF path,
+> advanced the bare-PCIC predictor and component geometry, added algebraic
+> QUASI root enumeration, and integrated a component-aware external geometry
+> contract. Current readiness and numerical results are summarized in
+> `docs/baselines/CARTESIAN_BASELINE_STATUS.md`.
+
 ## Scope
 
 This is a read-only scientific-fidelity review of the static PLVIRA, PCIC, and
