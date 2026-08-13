@@ -49,6 +49,7 @@ class Interface:
         cls,
         mesh,
         reconstructed_facets: Optional[Iterable[Facet]] = None,
+        reconstructed_polys: Optional[Iterable[object]] = None,
         infer_missing_neighbors: bool = False,
     ) -> "Interface":
         """
@@ -58,14 +59,26 @@ class Interface:
         if mesh is None or not hasattr(mesh, "merged_polys"):
             return cls(components=[])
 
-        merge_items = list(mesh.merged_polys.items())
+        all_merge_items = list(mesh.merged_polys.items())
+        if reconstructed_polys is None:
+            merge_items = all_merge_items
+        else:
+            merge_id_by_poly = {poly: merge_id for merge_id, poly in all_merge_items}
+            merge_items = [
+                (merge_id_by_poly[poly], poly) for poly in reconstructed_polys
+            ]
         id_to_poly = {merge_id: poly for merge_id, poly in merge_items}
         poly_to_id = {poly: merge_id for merge_id, poly in merge_items}
 
         facet_override = None
         if reconstructed_facets is not None:
             reconstructed_facets = list(reconstructed_facets)
-            if len(reconstructed_facets) == len(merge_items):
+            if reconstructed_polys is not None:
+                facet_override = {
+                    poly: facet
+                    for (_, poly), facet in zip(merge_items, reconstructed_facets)
+                }
+            elif len(reconstructed_facets) == len(merge_items):
                 has_mesh_facets = any(poly.getFacet() is not None for _, poly in merge_items)
                 if not has_mesh_facets:
                     facet_override = {
@@ -147,12 +160,35 @@ def _infer_neighbors_from_adjacency(
     id_to_poly: Dict[int, object],
     poly_to_id: Dict[object, int],
 ) -> None:
+    def _shares_vertex(first_poly, second_poly, tolerance=1e-12):
+        first_points = getattr(first_poly, "points", ())
+        second_points = getattr(second_poly, "points", ())
+        return any(
+            getDistance(first_point, second_point) <= tolerance
+            for first_point in first_points
+            for second_point in second_points
+        )
+
+    unresolved_ids = {
+        merge_id
+        for merge_id, poly in id_to_poly.items()
+        if (
+            not hasattr(poly, "getLeftNeighbor")
+            or (
+                poly.getLeftNeighbor() is None
+                and poly.getRightNeighbor() is None
+            )
+        )
+    }
+    has_unresolved = bool(unresolved_ids)
+
     for merge_id, record_ids in cell_to_records.items():
         left_record = records[record_ids[0]]
         right_record = records[record_ids[-1]]
         if (
             left_record.left_cell_id is not None
             and right_record.right_cell_id is not None
+            and not has_unresolved
         ):
             continue
         if getattr(left_record.facet, "name", None) == "linear_deadend":
@@ -168,6 +204,13 @@ def _infer_neighbors_from_adjacency(
             if neighbor_id not in cell_to_records:
                 continue
             candidates.append(neighbor_id)
+        for neighbor_id, neighbor in id_to_poly.items():
+            if neighbor_id == merge_id or neighbor_id in candidates:
+                continue
+            if neighbor_id not in cell_to_records:
+                continue
+            if _shares_vertex(poly, neighbor):
+                candidates.append(neighbor_id)
         if not candidates:
             continue
 
@@ -196,10 +239,20 @@ def _infer_neighbors_from_adjacency(
         left_id, left_dist = _best_left_neighbor(left_record.left_point())
         right_id, right_dist = _best_right_neighbor(right_record.right_point())
 
-        if left_record.left_cell_id is None and left_id in cell_to_records:
+        replace_left = (
+            left_record.left_cell_id is None
+            or merge_id in unresolved_ids
+            or left_id in unresolved_ids
+        )
+        replace_right = (
+            right_record.right_cell_id is None
+            or merge_id in unresolved_ids
+            or right_id in unresolved_ids
+        )
+        if replace_left and left_id in cell_to_records:
             left_record.left_cell_id = left_id
             left_record.left_record_id = cell_to_records[left_id][-1]
-        if right_record.right_cell_id is None and right_id in cell_to_records:
+        if replace_right and right_id in cell_to_records:
             right_record.right_cell_id = right_id
             right_record.right_record_id = cell_to_records[right_id][0]
 

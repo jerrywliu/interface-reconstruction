@@ -178,7 +178,9 @@ def test_square_driver_uses_active_polygons_returned_by_reconstruction(
     monkeypatch.setattr(squares, "writeFacets", lambda *args, **kwargs: None)
     monkeypatch.setattr(squares, "append_case_geometry", lambda *args, **kwargs: None)
     monkeypatch.setattr(squares, "append_case_metrics", lambda *args, **kwargs: None)
-    monkeypatch.setattr(squares, "calculate_facet_gaps", lambda *args: 0.0)
+    monkeypatch.setattr(
+        squares, "calculate_facet_gaps", lambda *args, **kwargs: 0.0
+    )
     monkeypatch.setattr(squares, "hausdorff_interface", lambda *args: 0.0)
 
     def reconstruct(*args, **kwargs):

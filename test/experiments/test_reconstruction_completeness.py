@@ -8,6 +8,14 @@ from util.reconstruction import (
 )
 
 
+class _Poly:
+    def __init__(self, facet):
+        self.facet = facet
+
+    def getFacet(self):
+        return self.facet
+
+
 def _mesh(active_poly, stale_poly=None):
     merged_polys = {4: active_poly}
     if stale_poly is not None:
@@ -19,14 +27,15 @@ def _mesh(active_poly, stale_poly=None):
 
 
 def test_complete_reconstruction_ignores_inactive_stale_merge_objects():
-    active = object()
-    stale = object()
+    facet = object()
+    active = _Poly(facet)
+    stale = _Poly(object())
 
-    _validate_active_reconstruction(_mesh(active, stale), [active], [object()])
+    _validate_active_reconstruction(_mesh(active, stale), [active], [facet])
 
 
 def test_complete_reconstruction_rejects_dropped_active_component():
-    active = object()
+    active = _Poly(object())
 
     with pytest.raises(
         IncompleteReconstructionError, match=r"missing active merge ids=\[4\]"
@@ -35,7 +44,15 @@ def test_complete_reconstruction_rejects_dropped_active_component():
 
 
 def test_complete_reconstruction_rejects_missing_facet():
-    active = object()
+    active = _Poly(object())
 
     with pytest.raises(IncompleteReconstructionError, match="missing facets"):
         _validate_active_reconstruction(_mesh(active), [active], [None])
+
+
+def test_complete_reconstruction_rejects_shifted_facet_pairing():
+    facet = object()
+    active = _Poly(facet)
+
+    with pytest.raises(IncompleteReconstructionError, match="owning polygons"):
+        _validate_active_reconstruction(_mesh(active), [active], [object()])

@@ -70,6 +70,17 @@ def _validate_active_reconstruction(m, reconstructed_polys, reconstructed_facets
             f"Final reconstruction has missing facets at indices {missing_facet_indices}"
         )
 
+    mismatched_facet_indices = [
+        index
+        for index, (poly, facet) in enumerate(zip(returned_polys, returned_facets))
+        if poly.getFacet() is not facet
+    ]
+    if mismatched_facet_indices:
+        raise IncompleteReconstructionError(
+            "Final reconstruction facets are not paired with their owning polygons "
+            f"at indices {mismatched_facet_indices}"
+        )
+
 
 def runReconstruction(
     m: MergeMesh, facet_algo, do_c0, iter, output_dirs, algo_kwargs={}, return_polys=False

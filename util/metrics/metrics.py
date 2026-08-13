@@ -252,25 +252,15 @@ def calculate_facet_gaps(
     mode: str = "euclidean",
     infer_missing_neighbors: bool = True,
     return_stats: bool = False,
+    reconstructed_polys=None,
 ):
     """Calculate gap metrics between adjacent facets along the interface."""
     interface = Interface.from_merge_mesh(
         mesh,
         reconstructed_facets=reconstructed_facets,
-        infer_missing_neighbors=False,
+        reconstructed_polys=reconstructed_polys,
+        infer_missing_neighbors=infer_missing_neighbors,
     )
-    if infer_missing_neighbors:
-        has_oriented = any(
-            record.left_cell_id is not None or record.right_cell_id is not None
-            for component in interface.components
-            for record in component.records
-        )
-        if not has_oriented:
-            interface = Interface.from_merge_mesh(
-                mesh,
-                reconstructed_facets=reconstructed_facets,
-                infer_missing_neighbors=True,
-            )
     stats = interface_gap_stats(interface, mode=mode)
     return stats if return_stats else stats["mean"]
 

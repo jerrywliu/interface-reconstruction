@@ -367,7 +367,7 @@ def main(
 
         # Run reconstruction
         print(f"Reconstructing line {i+1}")
-        reconstructed_facets = runReconstruction(
+        reconstructed_facets, reconstructed_polys = runReconstruction(
             m,
             facet_algo,
             do_c0,
@@ -378,6 +378,7 @@ def main(
                 "plic_fallback": plic_fallback,
                 "corner_behavior_profile": corner_behavior_profile,
             },  # Fit 1-neighbor to handle boundary cells
+            return_polys=True,
         )
         fallback_records = getattr(m, "plic_fallback_records", [])
         if fallback_records:
@@ -410,7 +411,7 @@ def main(
         avg_hausdorff = 0
         cnt_hausdorff = 0
         for poly, reconstructed_facet in zip(
-            m.merged_polys.values(), reconstructed_facets
+            reconstructed_polys, reconstructed_facets
         ):
             intersects = getPolyLineIntersects(poly.points, [x1, y1], [x2, y2])
             if intersects:
@@ -436,7 +437,7 @@ def main(
 
             # Write individual cell facet information
             for j, (poly, reconstructed_facet) in enumerate(
-                zip(m.merged_polys.values(), reconstructed_facets)
+                zip(reconstructed_polys, reconstructed_facets)
             ):
                 intersects = getPolyLineIntersects(poly.points, [x1, y1], [x2, y2])
                 if intersects:
@@ -452,7 +453,9 @@ def main(
         hausdorff_distances.append(avg_hausdorff / cnt_hausdorff)
 
         # Calculate facet gap
-        avg_gap = calculate_facet_gaps(m, reconstructed_facets)
+        avg_gap = calculate_facet_gaps(
+            m, reconstructed_facets, reconstructed_polys=reconstructed_polys
+        )
         print(f"Average facet gap for line {i+1}: {avg_gap:.3e}")
         with open(os.path.join(output_dirs["metrics"], "facet_gap.txt"), "a") as f:
             f.write(f"line_{i+1}_angle_{angle:.4f}_gap_{avg_gap:.6e}\n")

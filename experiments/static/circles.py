@@ -239,7 +239,7 @@ def main(
 
         # Run reconstruction
         print(f"Reconstructing circle {i+1}")
-        reconstructed_facets = runReconstruction(
+        reconstructed_facets, reconstructed_polys = runReconstruction(
             m,
             facet_algo,
             do_c0,
@@ -249,6 +249,7 @@ def main(
                 "plic_fallback": plic_fallback,
                 "corner_behavior_profile": corner_behavior_profile,
             },
+            return_polys=True,
         )
         fallback_records = getattr(m, "plic_fallback_records", [])
         if fallback_records:
@@ -285,7 +286,7 @@ def main(
         cnt_hausdorff = 0
 
         for poly, reconstructed_facet in zip(
-            m.merged_polys.values(), reconstructed_facets
+            reconstructed_polys, reconstructed_facets
         ):
             # Take absolute error in curvature
             curvature_error = abs(reconstructed_facet.curvature - true_curvature)
@@ -307,7 +308,9 @@ def main(
         print(f"Average Hausdorff distance for circle {i+1}: {avg_hausdorff:.3e}")
 
         # Calculate facet gaps
-        avg_gap = calculate_facet_gaps(m, reconstructed_facets)
+        avg_gap = calculate_facet_gaps(
+            m, reconstructed_facets, reconstructed_polys=reconstructed_polys
+        )
         print(f"Average facet gap for circle {i+1}: {avg_gap:.3e}")
 
         # Tangent error + curvature proxy error

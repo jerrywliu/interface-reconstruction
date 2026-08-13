@@ -475,7 +475,9 @@ def main(
             print(f"Area error for case {i+1}: {area_error:.3e}")
 
             # Facet gaps / Hausdorff
-            avg_gap = calculate_facet_gaps(m, reconstructed_facets)
+            avg_gap = calculate_facet_gaps(
+                m, reconstructed_facets, reconstructed_polys=reconstructed_polys
+            )
             hausdorff_distance = hausdorff_interface(true_facets, reconstructed_facets)
             print(f"Average facet gap for case {i+1}: {avg_gap:.3e}")
             print(f"Hausdorff distance for case {i+1}: {hausdorff_distance:.3e}")

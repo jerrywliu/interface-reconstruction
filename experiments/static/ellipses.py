@@ -364,7 +364,7 @@ def main(
 
         # Run reconstruction
         print(f"Reconstructing ellipse {i+1}")
-        reconstructed_facets = runReconstruction(
+        reconstructed_facets, reconstructed_polys = runReconstruction(
             m,
             facet_algo,
             do_c0,
@@ -374,6 +374,7 @@ def main(
                 "plic_fallback": plic_fallback,
                 "corner_behavior_profile": corner_behavior_profile,
             },
+            return_polys=True,
         )
         append_case_geometry(
             output_dirs,
@@ -408,7 +409,7 @@ def main(
         circle_to_ellipse = get_circle_to_ellipse_matrix(major_axis, minor_axis, theta)
 
         for poly, reconstructed_facet in zip(
-            m.merged_polys.values(), reconstructed_facets
+            reconstructed_polys, reconstructed_facets
         ):
             # Curvature error (existing)
             facet_center = [
@@ -450,7 +451,9 @@ def main(
         print(f"Average Hausdorff distance for ellipse {i+1}: {avg_hausdorff:.3e}")
 
         # Calculate facet gaps
-        avg_gap = calculate_facet_gaps(m, reconstructed_facets)
+        avg_gap = calculate_facet_gaps(
+            m, reconstructed_facets, reconstructed_polys=reconstructed_polys
+        )
         print(f"Average facet gap for ellipse {i+1}: {avg_gap:.3e}")
 
         # Tangent error + curvature proxy error

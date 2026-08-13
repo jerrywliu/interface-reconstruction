@@ -333,7 +333,9 @@ def main(
             true_total_area, 1e-12
         )
 
-        avg_gap = calculate_facet_gaps(m, reconstructed_facets)
+        avg_gap = calculate_facet_gaps(
+            m, reconstructed_facets, reconstructed_polys=reconstructed_polys
+        )
         hausdorff_distance = hausdorff_interface(true_facets, reconstructed_facets)
 
         print(f"Area error for square {i+1}: {area_error:.3e}")
