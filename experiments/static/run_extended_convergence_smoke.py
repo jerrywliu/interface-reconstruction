@@ -31,6 +31,12 @@ LINEAR_METHODS = ("Youngs", "ELVIRA", "LVIRA", "safe_linear", "linear")
 ELLIPSE_METHODS = ("circular",)
 PLIC_FALLBACK = "LVIRA"
 FIT_TOLERANCE = 1.0e-10
+LOG_DIAGNOSTIC_PATTERNS = {
+    "arc_fit_error_messages": "Error in getArcFacet",
+    "easy_orientation_error_messages": "Error in easy orientation",
+    "final_failed_orientation_messages": "Final failed orientations:",
+    "traceback_messages": "Traceback (most recent call last)",
+}
 
 
 def _utc_now() -> str:
@@ -182,6 +188,14 @@ def _read_csv(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(stream))
 
 
+def _log_diagnostics(path: Path) -> dict[str, int]:
+    text = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+    return {
+        field: text.count(pattern)
+        for field, pattern in LOG_DIAGNOSTIC_PATTERNS.items()
+    }
+
+
 def _float(row: Mapping[str, Any], field: str) -> float | None:
     value = row.get(field)
     if value in (None, ""):
@@ -229,6 +243,7 @@ def _execute(spec: Mapping[str, Any]) -> dict[str, Any]:
         error = f"driver returned success without {temporary_run}"
     return {
         **spec,
+        **_log_diagnostics(log_path),
         "status": status,
         "returncode": result.returncode,
         "wall_time_seconds": elapsed,
@@ -289,7 +304,7 @@ def _collect_case_rows(result: Mapping[str, Any]) -> tuple[list[dict[str, Any]],
                 "signed_global_phase_area_residual": conservation.get(
                     "signed_global_phase_area_residual"
                 ),
-                "max_merge_absolute_residual": conservation.get(
+                "max_fitted_component_absolute_residual": conservation.get(
                     "max_zone_absolute_residual"
                 ),
                 "max_merged_component_absolute_residual": conservation.get(
@@ -308,6 +323,10 @@ def _collect_case_rows(result: Mapping[str, Any]) -> tuple[list[dict[str, Any]],
 
 def _finite(rows: Iterable[Mapping[str, Any]], field: str) -> list[float]:
     return [value for row in rows if (value := _float(row, field)) is not None]
+
+
+def _is_true(value: Any) -> bool:
+    return value is True or str(value).strip().lower() in {"1", "true", "yes"}
 
 
 def _summaries(case_rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -330,14 +349,14 @@ def _summaries(case_rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
             "wiggle": wiggle,
             "num_cases": len(rows),
             "failed_conservation_cases": sum(
-                row.get("conservation_complete") is not True for row in rows
+                not _is_true(row.get("conservation_complete")) for row in rows
             ),
         }
         for field in (
             "hausdorff",
             "facet_gap",
             "global_relative_phase_area_error",
-            "max_merge_absolute_residual",
+            "max_fitted_component_absolute_residual",
             "max_cell_area_relative_residual",
         ):
             values = _finite(rows, field)
@@ -375,6 +394,10 @@ def _checkpoint(
     manifest["completed_runs"] = len(results)
     manifest["successful_runs"] = sum(row.get("status") == "succeeded" for row in results)
     manifest["failed_runs"] = sum(row.get("status") != "succeeded" for row in results)
+    manifest["solver_diagnostic_totals"] = {
+        field: sum(int(row.get(field, 0) or 0) for row in results)
+        for field in LOG_DIAGNOSTIC_PATTERNS
+    }
     manifest["status"] = (
         "complete" if len(results) == len(manifest["runs"]) else "running"
     )
