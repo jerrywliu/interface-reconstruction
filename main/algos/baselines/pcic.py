@@ -1,10 +1,10 @@
 """Static reconstruction kernel for the published PCIC method.
 
 This module deliberately does not call this repository's circular fitter.  It
-implements the point selection, Riemann-sphere fit, and the two conservative
-corrections described by Maity, Sundararajan, and Velusamy (2021).  The caller
-must supply the paper's LLS/Parker--Young PLIC prediction; see the accompanying
-implementation report for the boundary of this prototype.
+implements the cited linear least-squares (LLS)/Parker--Young predictor, the
+point selection, Riemann-sphere fit, and the two conservative corrections
+described by Maity, Sundararajan, and Velusamy (2021).  Only uniform Cartesian
+blocks are accepted by the end-to-end predictor.
 """
 
 from __future__ import annotations
@@ -16,12 +16,18 @@ from typing import Iterable, Literal, Optional, Sequence, Union
 import numpy as np
 
 from main.geoms.circular_facet import getCircleIntersectArea
-from main.geoms.geoms import getArea, getDistance
+from main.geoms.geoms import getArea, getDistance, pointInPoly
+from main.geoms.linear_facet import getLinearFacetFromNormal
 from main.structs.facets.circular_facet import ArcFacet
 from main.structs.facets.linear_facet import LinearFacet
 
 
 VolumeCorrection = Literal["translate_center", "adjust_radius"]
+PCICPhase = Literal["disk", "complement"]
+CenterTranslationRootPolicy = Literal["nearest_bracket"]
+
+CENTER_TRANSLATION_VARIANT = "bare PCIC (center translation)"
+RADIUS_ADJUSTMENT_VARIANT = "bare PCIC (radius adjustment)"
 
 
 class PCICError(RuntimeError):
@@ -34,6 +40,14 @@ class PCICDegenerateFit(PCICError):
 
 class PCICConvergenceError(PCICError):
     """Raised when the published bisection correction cannot be bracketed."""
+
+
+class PCICAmbiguousSourceChoice(PCICError):
+    """Raised when the cited source requires an unspecified material choice."""
+
+
+class PCICUnsupportedGeometry(PCICError):
+    """Raised for geometry outside the published Cartesian construction."""
 
 
 @dataclass(frozen=True)
@@ -49,6 +63,38 @@ class PCICConfig:
     straight_radius_scale: float = 1.0e6
     max_bisection_iterations: int = 200
     max_bracket_expansions: int = 60
+    lls_max_cut_cells: int = 5
+    lls_overcrowded_radius_scale: Optional[float] = None
+    cartesian_tolerance: float = 1.0e-10
+
+
+@dataclass(frozen=True)
+class PCICArcComponent:
+    """One phase-oriented connected circular arc inside a target cell."""
+
+    center: tuple[float, float]
+    radius: float
+    p_start: tuple[float, float]
+    p_end: tuple[float, float]
+    start_angle: float
+    sweep_angle: float
+    closed: bool = False
+
+    def sample(self, count: int) -> tuple[tuple[float, float], ...]:
+        if count < 2:
+            raise ValueError("A PCIC arc sample requires at least two points")
+        magnitude = abs(self.radius)
+        return tuple(
+            (
+                self.center[0]
+                + magnitude
+                * math.cos(self.start_angle + self.sweep_angle * index / (count - 1)),
+                self.center[1]
+                + magnitude
+                * math.sin(self.start_angle + self.sweep_angle * index / (count - 1)),
+            )
+            for index in range(count)
+        )
 
 
 @dataclass(frozen=True)
@@ -67,6 +113,13 @@ class PCICCircle:
     source_center: tuple[float, float]
     source_radius: float
     correction: VolumeCorrection
+    phase: PCICPhase
+    components: tuple[PCICArcComponent, ...] = ()
+    component_pairing_status: Literal["paired", "unresolved"] = "unresolved"
+
+    @property
+    def source_variant(self) -> str:
+        return source_variant_for_correction(self.correction)
 
     def fraction_in(self, polygon: object) -> float:
         points = _polygon_points(polygon)
@@ -76,16 +129,39 @@ class PCICCircle:
     def to_arc_facet(self) -> ArcFacet:
         """Convert a two-crossing result to the repository's facet type."""
 
-        if len(self.intersections) != 2:
+        if (
+            self.component_pairing_status != "paired"
+            or len(self.components) != 1
+            or self.components[0].closed
+        ):
             raise PCICError(
                 "ArcFacet cannot represent a PCIC cell with "
+                f"{len(self.components)} connected component(s) and "
                 f"{len(self.intersections)} circle-boundary intersections"
             )
+        component = self.components[0]
         return ArcFacet(
             list(self.center),
             self.radius,
-            list(self.intersections[0]),
-            list(self.intersections[1]),
+            list(component.p_start),
+            list(component.p_end),
+        )
+
+    def to_arc_facets(self) -> tuple[ArcFacet, ...]:
+        """Convert every paired open component without dropping extra arcs."""
+
+        if self.component_pairing_status != "paired" or any(
+            component.closed for component in self.components
+        ):
+            raise PCICError("PCIC components are not representable as open ArcFacets")
+        return tuple(
+            ArcFacet(
+                list(self.center),
+                self.radius,
+                list(component.p_start),
+                list(component.p_end),
+            )
+            for component in self.components
         )
 
 
@@ -103,6 +179,224 @@ def sample_plic_segment(
         [alpha * p[0] + (1.0 - alpha) * q[0], alpha * p[1] + (1.0 - alpha) * q[1]]
         for alpha in alphas
     ]
+
+
+def source_variant_for_correction(correction: VolumeCorrection) -> str:
+    """Return the paper-facing name of one published bare-PCIC variant."""
+
+    if correction == "translate_center":
+        return CENTER_TRANSLATION_VARIANT
+    if correction == "adjust_radius":
+        return RADIUS_ADJUSTMENT_VARIANT
+    raise ValueError(f"Unknown PCIC volume correction: {correction!r}")
+
+
+def parker_young_normal(
+    polygon_stencil: Sequence[Sequence[object]],
+    config: PCICConfig = PCICConfig(),
+) -> list[float]:
+    """Return the Parker--Young normal for a Cartesian 3-by-3 block.
+
+    This is Scardovelli and Zaleski (2003), Section 2.1: compute the
+    volume-fraction gradient at each corner of the central cell and average
+    the four corner values.  Algebraically it is the Parker--Young ``a=2``
+    stencil reported by Pilliod and Puckett (2004), Section 2.4.
+    """
+
+    _validate_cartesian_block(polygon_stencil, 3, config)
+    fractions = [
+        [_polygon_fraction(polygon_stencil[i][j]) for j in range(3)] for i in range(3)
+    ]
+    x_gradient = (
+        fractions[2][0]
+        + 2.0 * fractions[2][1]
+        + fractions[2][2]
+        - fractions[0][0]
+        - 2.0 * fractions[0][1]
+        - fractions[0][2]
+    ) / 8.0
+    y_gradient = (
+        fractions[0][2]
+        + 2.0 * fractions[1][2]
+        + fractions[2][2]
+        - fractions[0][0]
+        - 2.0 * fractions[1][0]
+        - fractions[2][0]
+    ) / 8.0
+    magnitude = math.hypot(x_gradient, y_gradient)
+    if magnitude <= np.finfo(float).eps:
+        raise PCICDegenerateFit("The Parker--Young volume-fraction gradient is zero")
+    return [x_gradient / magnitude, y_gradient / magnitude]
+
+
+def reconstruct_parker_young_plic(
+    polygon_stencil: Sequence[Sequence[object]],
+    config: PCICConfig = PCICConfig(),
+) -> LinearFacet:
+    """Place the conservative Parker--Young PLIC in the central cell."""
+
+    normal = parker_young_normal(polygon_stencil, config)
+    target = polygon_stencil[1][1]
+    fraction = _polygon_fraction(target)
+    if not _is_reconstructed_fraction(fraction, config):
+        raise ValueError("Parker--Young PLIC requires a PCIC mixed target cell")
+    points = _polygon_points(target)
+    area_tolerance = config.normalized_bisection_tolerance * abs(getArea(points))
+    p_left, p_right = getLinearFacetFromNormal(points, fraction, normal, area_tolerance)
+    return LinearFacet(p_left, p_right, name="PCIC Parker-Young")
+
+
+def reconstruct_lls_plic(
+    polygon_stencil: Sequence[Sequence[object]],
+    parker_young_stencil: Sequence[Sequence[Optional[LinearFacet]]],
+    config: PCICConfig = PCICConfig(),
+) -> LinearFacet:
+    """Apply the cited one-pass linear least-squares fit to one mixed cell.
+
+    The fitted points are the two endpoints and midpoint of each preliminary
+    Parker--Young segment inside the source's radius of influence.  The fit is
+    ordinary least squares in ``y(x)`` or ``x(y)``, selected from the central
+    preliminary segment to avoid the vertical-line singularity.  Only the
+    fitted direction is retained; the final line is repositioned to conserve
+    the central-cell volume fraction.
+    """
+
+    bounds = _validate_cartesian_block(polygon_stencil, 3, config)
+    _validate_square_stencil(parker_young_stencil, 3, "Parker--Young")
+    central_facet = parker_young_stencil[1][1]
+    if central_facet is None:
+        raise ValueError("LLS requires a central Parker--Young PLIC facet")
+
+    cut_facets = [
+        facet for row in parker_young_stencil for facet in row if facet is not None
+    ]
+    radius_scale = 1.0
+    if len(cut_facets) > config.lls_max_cut_cells:
+        radius_scale = config.lls_overcrowded_radius_scale
+        if radius_scale is None:
+            raise PCICAmbiguousSourceChoice(
+                "The cited LLS source says to reduce the radius of influence "
+                f"when more than {config.lls_max_cut_cells} cells are cut, but "
+                "does not specify the multiplier"
+            )
+        if not 0.0 < radius_scale < 1.0:
+            raise ValueError(
+                "The explicit overcrowded LLS radius scale must be in (0, 1)"
+            )
+
+    midpoint = _facet_midpoint(central_facet)
+    influence_radius = radius_scale * min(
+        midpoint[0] - bounds[0],
+        bounds[1] - midpoint[0],
+        midpoint[1] - bounds[2],
+        bounds[3] - midpoint[1],
+    )
+    if influence_radius <= 0.0:
+        raise PCICUnsupportedGeometry("The LLS radius of influence is not positive")
+
+    fit_points: list[list[float]] = []
+    inclusion_tolerance = config.cartesian_tolerance * max(1.0, influence_radius)
+    for facet in cut_facets:
+        for point in (facet.pLeft, _facet_midpoint(facet), facet.pRight):
+            if getDistance(point, midpoint) <= influence_radius + inclusion_tolerance:
+                fit_points.append([float(point[0]), float(point[1])])
+    if len(fit_points) < 3:
+        raise PCICDegenerateFit("Fewer than three PLIC points enter the LLS fit")
+
+    dx = central_facet.pRight[0] - central_facet.pLeft[0]
+    dy = central_facet.pRight[1] - central_facet.pLeft[1]
+    if abs(dx) >= abs(dy):
+        independent = np.asarray([point[0] for point in fit_points], dtype=float)
+        dependent = np.asarray([point[1] for point in fit_points], dtype=float)
+        slope, _ = _ordinary_line_fit(independent, dependent)
+        normal = [slope, 1.0]
+    else:
+        independent = np.asarray([point[1] for point in fit_points], dtype=float)
+        dependent = np.asarray([point[0] for point in fit_points], dtype=float)
+        slope, _ = _ordinary_line_fit(independent, dependent)
+        normal = [1.0, slope]
+
+    initial_normal = _plic_normal(central_facet)
+    if np.dot(normal, initial_normal) < 0.0:
+        normal = [-normal[0], -normal[1]]
+    magnitude = math.hypot(normal[0], normal[1])
+    normal = [normal[0] / magnitude, normal[1] / magnitude]
+
+    target = polygon_stencil[1][1]
+    points = _polygon_points(target)
+    area_tolerance = config.normalized_bisection_tolerance * abs(getArea(points))
+    p_left, p_right = getLinearFacetFromNormal(
+        points, _polygon_fraction(target), normal, area_tolerance
+    )
+    return LinearFacet(p_left, p_right, name="PCIC LLS/Parker-Young")
+
+
+def build_lls_parker_young_plic_stencil(
+    polygon_block: Sequence[Sequence[object]],
+    config: PCICConfig = PCICConfig(),
+) -> list[list[Optional[LinearFacet]]]:
+    """Build the target 3-by-3 LLS PLIC stencil from a Cartesian 7-by-7 halo.
+
+    Each of the nine final LLS lines needs preliminary Parker--Young lines in
+    its own 3-by-3 block, and each of those preliminary lines needs a 3-by-3
+    volume-fraction stencil.  A complete 7-by-7 volume-fraction block is thus
+    the smallest boundary-free input for all nine final lines.
+    """
+
+    _validate_cartesian_block(polygon_block, 7, config)
+    parker_young: list[list[Optional[LinearFacet]]] = [
+        [None for _ in range(7)] for _ in range(7)
+    ]
+    for i in range(1, 6):
+        for j in range(1, 6):
+            fraction = _polygon_fraction(polygon_block[i][j])
+            if not _is_reconstructed_fraction(fraction, config):
+                continue
+            parker_young[i][j] = reconstruct_parker_young_plic(
+                _subblock(polygon_block, i, j, 1), config
+            )
+
+    lls_stencil: list[list[Optional[LinearFacet]]] = [
+        [None for _ in range(3)] for _ in range(3)
+    ]
+    for output_i, block_i in enumerate(range(2, 5)):
+        for output_j, block_j in enumerate(range(2, 5)):
+            fraction = _polygon_fraction(polygon_block[block_i][block_j])
+            is_target = block_i == 3 and block_j == 3
+            is_fit_cell = config.fit_fraction_min <= fraction <= config.fit_fraction_max
+            if not (is_target or is_fit_cell):
+                continue
+            if not _is_reconstructed_fraction(fraction, config):
+                continue
+            lls_stencil[output_i][output_j] = reconstruct_lls_plic(
+                _subblock(polygon_block, block_i, block_j, 1),
+                _subblock(parker_young, block_i, block_j, 1),
+                config,
+            )
+    return lls_stencil
+
+
+def reconstruct_bare_pcic_cartesian_cell(
+    polygon_block: Sequence[Sequence[object]],
+    *,
+    correction: VolumeCorrection,
+    phase: PCICPhase,
+    center_translation_root_policy: Optional[CenterTranslationRootPolicy] = None,
+    config: PCICConfig = PCICConfig(),
+) -> PCICCellFacet:
+    """Run bare PCIC from volume fractions on a complete Cartesian halo."""
+
+    plic_stencil = build_lls_parker_young_plic_stencil(polygon_block, config)
+    polygon_stencil = _subblock(polygon_block, 3, 3, 1)
+    return reconstruct_bare_pcic_cell(
+        polygon_block[3][3],
+        polygon_stencil,
+        plic_stencil,
+        correction=correction,
+        phase=phase,
+        center_translation_root_policy=center_translation_root_policy,
+        config=config,
+    )
 
 
 def collect_stencil_samples(
@@ -181,6 +475,8 @@ def reconstruct_bare_pcic_cell(
     plic_stencil: Sequence[Sequence[Optional[LinearFacet]]],
     *,
     correction: VolumeCorrection,
+    phase: PCICPhase,
+    center_translation_root_policy: Optional[CenterTranslationRootPolicy] = None,
     config: PCICConfig = PCICConfig(),
 ) -> PCICCellFacet:
     """Reconstruct one static cell through the published bare-PCIC sequence.
@@ -191,6 +487,13 @@ def reconstruct_bare_pcic_cell(
 
     if correction not in ("translate_center", "adjust_radius"):
         raise ValueError(f"Unknown PCIC volume correction: {correction!r}")
+    if phase not in ("disk", "complement"):
+        raise ValueError(f"Unknown PCIC phase convention: {phase!r}")
+    if correction == "translate_center" and center_translation_root_policy is None:
+        raise PCICAmbiguousSourceChoice(
+            "The paper does not specify which conservative center-translation "
+            "root to select; pass an explicit root policy"
+        )
 
     target_fraction = _polygon_fraction(target_polygon)
     if not (
@@ -216,12 +519,10 @@ def reconstruct_bare_pcic_cell(
     if fit_radius >= config.straight_radius_scale * cell_width:
         return central_plic
 
-    sign = _select_phase_sign(points, target_fraction, fit_center, fit_radius)
+    sign = 1.0 if phase == "disk" else -1.0
     if fit_radius < cell_diagonal:
         fit_radius = cell_diagonal
-        fit_center = _center_from_plic_chord(
-            central_plic, fit_center, fit_radius, sign, target_polygon
-        )
+        fit_center = _center_from_plic_chord(central_plic, fit_radius, sign)
 
     if correction == "adjust_radius":
         corrected_center = fit_center
@@ -229,22 +530,48 @@ def reconstruct_bare_pcic_cell(
             target_polygon, fit_center, sign, fit_radius, cell_diagonal, config
         )
     else:
-        direction = _plic_normal(central_plic)
+        _, fitted_intersections = getCircleIntersectArea(
+            fit_center, sign * fit_radius, points
+        )
+        direction = _fitted_chord_perpendicular(
+            fit_center, fitted_intersections, config
+        )
         corrected_center = _correct_center(
-            target_polygon, fit_center, sign * fit_radius, direction, cell_width, config
+            target_polygon,
+            fit_center,
+            sign * fit_radius,
+            direction,
+            cell_width,
+            center_translation_root_policy,
+            config,
         )
         corrected_radius = sign * fit_radius
 
     _, intersections = getCircleIntersectArea(
         corrected_center, corrected_radius, points
     )
+    unique_intersections = _deduplicate_points(
+        intersections, config.cartesian_tolerance * max(1.0, cell_width)
+    )
+    components, pairing_status = _pair_circle_components(
+        corrected_center,
+        corrected_radius,
+        unique_intersections,
+        points,
+        config,
+    )
     return PCICCircle(
         center=(float(corrected_center[0]), float(corrected_center[1])),
         radius=float(corrected_radius),
-        intersections=tuple((float(p[0]), float(p[1])) for p in intersections),
+        intersections=tuple(
+            (float(point[0]), float(point[1])) for point in unique_intersections
+        ),
         source_center=(float(fit_center[0]), float(fit_center[1])),
         source_radius=float(sign * fit_radius),
         correction=correction,
+        phase=phase,
+        components=components,
+        component_pairing_status=pairing_status,
     )
 
 
@@ -285,8 +612,11 @@ def _correct_center(
     signed_radius: float,
     direction: Sequence[float],
     cell_width: float,
+    root_policy: CenterTranslationRootPolicy,
     config: PCICConfig,
 ) -> list[float]:
+    if root_policy != "nearest_bracket":
+        raise ValueError(f"Unknown center-translation root policy: {root_policy!r}")
     target = _polygon_fraction(polygon)
     points = _polygon_points(polygon)
 
@@ -353,56 +683,273 @@ def _closest_bracket(
     return min(brackets, key=lambda pair: abs(pair[0]) + abs(pair[1]))
 
 
+def _fitted_chord_perpendicular(
+    center: Sequence[float],
+    intersections: Sequence[Sequence[float]],
+    config: PCICConfig,
+) -> list[float]:
+    """Return the fitted chord's perpendicular-bisector direction."""
+
+    unique = _deduplicate_points(intersections, config.cartesian_tolerance)
+    if len(unique) != 2:
+        raise PCICAmbiguousSourceChoice(
+            "The published center-translation correction defines one fitted "
+            "arc chord, but the fitted target-cell circle has "
+            f"{len(unique)} boundary crossings"
+        )
+    chord = [unique[1][0] - unique[0][0], unique[1][1] - unique[0][1]]
+    magnitude = math.hypot(chord[0], chord[1])
+    if magnitude <= np.finfo(float).eps:
+        raise PCICUnsupportedGeometry("The fitted target-cell chord is degenerate")
+    direction = [-chord[1] / magnitude, chord[0] / magnitude]
+    midpoint = [
+        0.5 * (unique[0][0] + unique[1][0]),
+        0.5 * (unique[0][1] + unique[1][1]),
+    ]
+    center_side = [center[0] - midpoint[0], center[1] - midpoint[1]]
+    if np.dot(direction, center_side) < 0.0:
+        direction = [-direction[0], -direction[1]]
+    return direction
+
+
+def _pair_circle_components(
+    center: Sequence[float],
+    signed_radius: float,
+    intersections: Sequence[Sequence[float]],
+    polygon_points: Sequence[Sequence[float]],
+    config: PCICConfig,
+) -> tuple[tuple[PCICArcComponent, ...], Literal["paired", "unresolved"]]:
+    """Pair every crossing into the connected circle arcs inside a convex cell."""
+
+    magnitude = abs(signed_radius)
+    if magnitude <= np.finfo(float).eps:
+        return (), "unresolved"
+    if len(intersections) == 0:
+        probe = [center[0] + magnitude, center[1]]
+        if not pointInPoly(probe, polygon_points):
+            return (), "unresolved"
+        sweep = 2.0 * math.pi if signed_radius > 0.0 else -2.0 * math.pi
+        point = (float(probe[0]), float(probe[1]))
+        return (
+            PCICArcComponent(
+                center=(float(center[0]), float(center[1])),
+                radius=float(signed_radius),
+                p_start=point,
+                p_end=point,
+                start_angle=0.0,
+                sweep_angle=sweep,
+                closed=True,
+            ),
+        ), "paired"
+    if len(intersections) % 2 != 0:
+        return (), "unresolved"
+
+    angular_points = sorted(
+        (
+            math.atan2(point[1] - center[1], point[0] - center[0]) % (2.0 * math.pi),
+            (float(point[0]), float(point[1])),
+        )
+        for point in intersections
+    )
+    components: list[PCICArcComponent] = []
+    for index, (start_angle, start_point) in enumerate(angular_points):
+        end_angle, end_point = angular_points[(index + 1) % len(angular_points)]
+        counterclockwise_sweep = (end_angle - start_angle) % (2.0 * math.pi)
+        if counterclockwise_sweep <= np.finfo(float).eps:
+            continue
+        middle_angle = start_angle + 0.5 * counterclockwise_sweep
+        probe = [
+            center[0] + magnitude * math.cos(middle_angle),
+            center[1] + magnitude * math.sin(middle_angle),
+        ]
+        if not pointInPoly(probe, polygon_points):
+            continue
+        if signed_radius > 0.0:
+            component_start = start_point
+            component_end = end_point
+            oriented_start_angle = start_angle
+            oriented_sweep = counterclockwise_sweep
+        else:
+            component_start = end_point
+            component_end = start_point
+            oriented_start_angle = end_angle
+            oriented_sweep = -counterclockwise_sweep
+        components.append(
+            PCICArcComponent(
+                center=(float(center[0]), float(center[1])),
+                radius=float(signed_radius),
+                p_start=component_start,
+                p_end=component_end,
+                start_angle=oriented_start_angle,
+                sweep_angle=oriented_sweep,
+            )
+        )
+    if not components:
+        return (), "unresolved"
+    return tuple(components), "paired"
+
+
+def _deduplicate_points(
+    points: Sequence[Sequence[float]], tolerance: float
+) -> list[list[float]]:
+    unique: list[list[float]] = []
+    for point in points:
+        candidate = [float(point[0]), float(point[1])]
+        if not any(getDistance(candidate, prior) <= tolerance for prior in unique):
+            unique.append(candidate)
+    return unique
+
+
+def _ordinary_line_fit(
+    independent: np.ndarray, dependent: np.ndarray
+) -> tuple[float, float]:
+    """Solve the cited ordinary 2-by-2 least-squares normal equations."""
+
+    matrix = np.array(
+        [
+            [float(np.dot(independent, independent)), float(np.sum(independent))],
+            [float(np.sum(independent)), float(independent.size)],
+        ]
+    )
+    right_hand_side = -np.array(
+        [float(np.dot(independent, dependent)), float(np.sum(dependent))]
+    )
+    try:
+        slope, intercept = np.linalg.solve(matrix, right_hand_side)
+    except np.linalg.LinAlgError as error:
+        raise PCICDegenerateFit("The LLS 2-by-2 system is singular") from error
+    if not math.isfinite(float(slope)) or not math.isfinite(float(intercept)):
+        raise PCICDegenerateFit("The LLS 2-by-2 solution is not finite")
+    return float(slope), float(intercept)
+
+
+def _facet_midpoint(facet: LinearFacet) -> list[float]:
+    return [
+        0.5 * (facet.pLeft[0] + facet.pRight[0]),
+        0.5 * (facet.pLeft[1] + facet.pRight[1]),
+    ]
+
+
+def _subblock(
+    block: Sequence[Sequence[object]], center_i: int, center_j: int, radius: int
+) -> list[list[object]]:
+    return [
+        [block[i][j] for j in range(center_j - radius, center_j + radius + 1)]
+        for i in range(center_i - radius, center_i + radius + 1)
+    ]
+
+
+def _validate_square_stencil(
+    stencil: Sequence[Sequence[object]], size: int, label: str
+) -> None:
+    if len(stencil) != size or any(len(row) != size for row in stencil):
+        raise ValueError(f"PCIC requires a {size}-by-{size} {label} stencil")
+
+
+def _validate_cartesian_block(
+    block: Sequence[Sequence[object]], size: int, config: PCICConfig
+) -> tuple[float, float, float, float]:
+    _validate_square_stencil(block, size, "Cartesian polygon")
+    cell_bounds: list[list[tuple[float, float, float, float]]] = [
+        [None for _ in range(size)] for _ in range(size)  # type: ignore[list-item]
+    ]
+    reference_width: Optional[float] = None
+    for i in range(size):
+        for j in range(size):
+            polygon = block[i][j]
+            if polygon is None:
+                raise PCICUnsupportedGeometry(
+                    "The published Cartesian predictor requires a complete halo"
+                )
+            points = _polygon_points(polygon)
+            if len(points) != 4:
+                raise PCICUnsupportedGeometry("PCIC requires square Cartesian cells")
+            x_values = [point[0] for point in points]
+            y_values = [point[1] for point in points]
+            x_min, x_max = min(x_values), max(x_values)
+            y_min, y_max = min(y_values), max(y_values)
+            width = x_max - x_min
+            height = y_max - y_min
+            scale = max(1.0, abs(x_min), abs(x_max), abs(y_min), abs(y_max))
+            tolerance = config.cartesian_tolerance * scale
+            expected_corners = {
+                (x_min, y_min),
+                (x_max, y_min),
+                (x_max, y_max),
+                (x_min, y_max),
+            }
+            actual_corners = {(point[0], point[1]) for point in points}
+            if actual_corners != expected_corners or width <= 0.0 or height <= 0.0:
+                raise PCICUnsupportedGeometry("PCIC requires axis-aligned square cells")
+            if abs(width - height) > tolerance:
+                raise PCICUnsupportedGeometry("PCIC requires square Cartesian cells")
+            if reference_width is None:
+                reference_width = width
+            elif abs(width - reference_width) > tolerance:
+                raise PCICUnsupportedGeometry("PCIC requires a uniform Cartesian grid")
+            fraction = _polygon_fraction(polygon)
+            if not 0.0 <= fraction <= 1.0:
+                raise ValueError("PCIC volume fractions must lie in [0, 1]")
+            cell_bounds[i][j] = (x_min, x_max, y_min, y_max)
+
+    assert reference_width is not None
+    origin_x = cell_bounds[0][0][0]
+    origin_y = cell_bounds[0][0][2]
+    alignment_scale = max(
+        1.0,
+        abs(origin_x),
+        abs(origin_y),
+        size * reference_width,
+    )
+    alignment_tolerance = config.cartesian_tolerance * alignment_scale
+    for i in range(size):
+        for j in range(size):
+            x_min, _, y_min, _ = cell_bounds[i][j]
+            if (
+                abs(x_min - (origin_x + i * reference_width)) > alignment_tolerance
+                or abs(y_min - (origin_y + j * reference_width)) > alignment_tolerance
+            ):
+                raise PCICUnsupportedGeometry(
+                    "PCIC requires an ordered, uniform Cartesian block"
+                )
+    return (
+        origin_x,
+        origin_x + size * reference_width,
+        origin_y,
+        origin_y + size * reference_width,
+    )
+
+
+def _is_reconstructed_fraction(fraction: float, config: PCICConfig) -> bool:
+    return (
+        config.reconstruction_fraction_min
+        < fraction
+        < 1.0 - config.reconstruction_fraction_min
+    )
+
+
 def _center_from_plic_chord(
     facet: LinearFacet,
-    fitted_center: Sequence[float],
     radius: float,
     sign: float,
-    polygon: object,
 ) -> list[float]:
     """Apply the paper's minimum-radius reset using the PLIC chord."""
 
     chord = getDistance(facet.pLeft, facet.pRight)
     if chord > 2.0 * radius:
-        return list(fitted_center)
+        raise PCICUnsupportedGeometry(
+            "The reset radius is smaller than half of the central PLIC chord"
+        )
     midpoint = [
         0.5 * (facet.pLeft[0] + facet.pRight[0]),
         0.5 * (facet.pLeft[1] + facet.pRight[1]),
     ]
     normal = _plic_normal(facet)
     distance = math.sqrt(max(0.0, radius * radius - 0.25 * chord * chord))
-    candidates = [
-        [midpoint[0] + distance * normal[0], midpoint[1] + distance * normal[1]],
-        [midpoint[0] - distance * normal[0], midpoint[1] - distance * normal[1]],
+    return [
+        midpoint[0] + sign * distance * normal[0],
+        midpoint[1] + sign * distance * normal[1],
     ]
-    target = _polygon_fraction(polygon)
-    points = _polygon_points(polygon)
-    return min(
-        candidates,
-        key=lambda candidate: abs(
-            getCircleIntersectArea(candidate, sign * radius, points)[0]
-            / abs(getArea(points))
-            - target
-        ),
-    )
-
-
-def _select_phase_sign(
-    points: Sequence[Sequence[float]],
-    target_fraction: float,
-    center: Sequence[float],
-    radius: float,
-) -> float:
-    polygon_area = abs(getArea(points))
-    inside = (
-        getCircleIntersectArea(list(center), radius, list(points))[0] / polygon_area
-    )
-    outside = (
-        getCircleIntersectArea(list(center), -radius, list(points))[0] / polygon_area
-    )
-    return (
-        1.0 if abs(inside - target_fraction) <= abs(outside - target_fraction) else -1.0
-    )
 
 
 def _plic_normal(facet: LinearFacet) -> list[float]:
@@ -411,7 +958,7 @@ def _plic_normal(facet: LinearFacet) -> list[float]:
     magnitude = math.hypot(dx, dy)
     if magnitude == 0.0:
         raise PCICError("Degenerate PLIC facet")
-    return [dy / magnitude, -dx / magnitude]
+    return [-dy / magnitude, dx / magnitude]
 
 
 def _polygon_points(polygon: object) -> list[list[float]]:
@@ -441,14 +988,27 @@ def _cell_width(points: Sequence[Sequence[float]]) -> float:
 
 
 __all__ = [
+    "CENTER_TRANSLATION_VARIANT",
+    "CenterTranslationRootPolicy",
     "PCICCellFacet",
+    "PCICArcComponent",
+    "PCICAmbiguousSourceChoice",
     "PCICCircle",
     "PCICConfig",
     "PCICConvergenceError",
     "PCICDegenerateFit",
     "PCICError",
+    "PCICPhase",
+    "PCICUnsupportedGeometry",
+    "RADIUS_ADJUSTMENT_VARIANT",
+    "build_lls_parker_young_plic_stencil",
     "collect_stencil_samples",
     "fit_riemann_sphere",
     "reconstruct_bare_pcic_cell",
+    "reconstruct_bare_pcic_cartesian_cell",
+    "reconstruct_lls_plic",
+    "reconstruct_parker_young_plic",
+    "parker_young_normal",
     "sample_plic_segment",
+    "source_variant_for_correction",
 ]
