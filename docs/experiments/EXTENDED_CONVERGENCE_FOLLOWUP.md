@@ -2,14 +2,32 @@
 
 ## Status
 
-The planned 25-case extension is **paused**. Diagnosis of the five-case smoke
-found a shared circular-fitting correctness defect that materially affects the
-ellipse case-2 facet-gap result at `N=512`. The smoke should be rerun after the
-shared implementation is corrected and regression-tested; only then should the
-25-case matrix be launched.
+The shared circular-fitting defect has been corrected and regression-tested in
+commit `d8e2d7b`. A fresh five-case smoke completed all `36` settings and `180`
+cases without a false line-precheck candidate. The corrected evidence passes
+the gate below, and the 25-case extension was launched on 2026-08-13.
 
 No shared algorithm, paper source, sealed result, or prior smoke artifact was
 changed during this diagnosis.
+
+## Corrected Smoke Result
+
+The corrected run is
+`results/static/extended_convergence_smoke_cell_area_fix_20260813/`, with its
+diagnostic in
+`results/static/extended_convergence_diagnosis_cell_area_fix_20260813/`.
+
+- false line-precheck candidates: `0`;
+- ellipse median facet-gap order: `2.87` at `w=0` and `2.90` at `w=0.2`;
+- ellipse case-2 facet-gap order: `2.87` at `w=0` and `2.90` at `w=0.2`;
+- maximum global relative ellipse area error: `2.41e-11`, reduced from
+  `3.40e-9` in the contaminated run;
+- maximum accepted line volume-fraction residual: `8.43e-7`, within the
+  configured `1e-6` linearity threshold.
+
+The five per-case facet-gap orders are `2.84--3.04` at `w=0` and
+`2.86--3.05` at `w=0.2`. This restores a stable near-third-order signal while
+remaining above the metric floor.
 
 ## Nearly Full Cell Diagnosis
 
@@ -71,7 +89,7 @@ same algorithm defect. The other eight per-case fits near third order remain
 useful as a signal, but the current extended data cannot be used to confirm or
 reject the paper's prior aggregate `N^{-2.94}` claim.
 
-## Required Gate Before Full Run
+## Gate Before Full Run
 
 1. Correct both circular straight-line prechecks to normalize by cell area.
 2. Add focused regressions for nearly full and nearly empty cells, including
@@ -82,6 +100,9 @@ reject the paper's prior aggregate `N^{-2.94}` claim.
    recompute per-case facet-gap windows.
 5. If clean, launch the 25-case extension using the existing non-destructive
    runner.
+
+All five conditions are complete. The full extension output is
+`results/static/extended_convergence_smoke_full_cell_area_fix_20260813/`.
 
 ## Reproduction
 
@@ -99,4 +120,3 @@ The first diagnostic artifact is
 - `convergence_windows.csv`: aggregate inputs plus every per-case resolution
   window;
 - `summary.json`: the gate status and anomaly counts.
-

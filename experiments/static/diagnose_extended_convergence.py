@@ -185,18 +185,23 @@ def main() -> None:
     window_rows = convergence_windows(run_dir)
     _write_csv(output_dir / "linear_facet_diagnostics.csv", line_rows)
     _write_csv(output_dir / "convergence_windows.csv", window_rows)
+    false_precheck_candidate_count = sum(
+        int(row["false_precheck_candidate"]) for row in line_rows
+    )
     summary = {
         "source_run": str(run_dir),
         "linearity_threshold": LINEARITY_THRESHOLD,
         "linear_facet_count": len(line_rows),
-        "false_precheck_candidate_count": sum(
-            int(row["false_precheck_candidate"]) for row in line_rows
-        ),
+        "false_precheck_candidate_count": false_precheck_candidate_count,
         "maximum_absolute_area_residual": max(
             (float(row["absolute_area_residual"]) for row in line_rows),
             default=0.0,
         ),
-        "full_sweep_status": "blocked_pending_shared_algorithm_fix_and_smoke_rerun",
+        "full_sweep_status": (
+            "eligible_for_full_sweep_review"
+            if false_precheck_candidate_count == 0
+            else "blocked_by_false_linearity_prechecks"
+        ),
     }
     (output_dir / "summary.json").write_text(
         json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
