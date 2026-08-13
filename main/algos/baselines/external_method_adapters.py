@@ -188,7 +188,7 @@ def adapt_quasi_cell(
     unresolved_reason: str | None = None,
 ) -> ExternalCellReconstruction:
     polygon_points = _points(polygon)
-    variant = "QUASI Sections 2.1-2.4"
+    variant = "QUASI (frozen Cartesian port)"
     if facet is None:
         return ExternalCellReconstruction(
             cell_index=cell_index,
@@ -203,9 +203,7 @@ def adapt_quasi_cell(
     return ExternalCellReconstruction(
         cell_index=cell_index,
         polygon=polygon_points,
-        components=(
-            ExternalInterfaceComponent((adapt_quadratic_facet(facet),)),
-        ),
+        components=(ExternalInterfaceComponent((adapt_quadratic_facet(facet),)),),
         source_method="QUASI",
         source_variant=variant,
         status=ExternalReconstructionStatus.RECONSTRUCTED,

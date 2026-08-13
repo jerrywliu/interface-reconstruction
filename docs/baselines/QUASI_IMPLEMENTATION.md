@@ -1,12 +1,13 @@
-# QUASI Static Prototype
+# QUASI Cartesian Baseline
 
 ## Status
 
-This is a **partial, static-only checkpoint**, not yet a complete baseline for
-paper experiments. The connected-cell core is implemented and tested. The
-curvature correction for diagonal and boundary configurations is intentionally
-not implemented because the primary paper leaves a material selection rule
-unspecified.
+This is a frozen, static-only Cartesian port suitable for matched benchmark
+execution. Sections 2.1--2.5 are represented. The article leaves several
+material implementation choices open, so the choices below were declared
+before examining project-benchmark results and are stored in every
+`QuasiResult.policy` record. This is a best-judgment baseline port, not a claim
+that the missing choices reproduce the authors' unpublished implementation.
 
 Source:
 
@@ -58,33 +59,46 @@ the abstract or a secondary implementation.
    paper's reported typical optimum.
 
 5. **Curvature correction (Section 2.5, Eqs. 17-21).**
-   When C0 connection is impossible, the paper moves the discontinuous endpoint
-   to match midpoint curvature with a "selected neighboring mixed cell" having
-   `0.02 < F < 0.98`; out-of-range roots can trigger a vertex jump. The article
-   does not define how that target neighbor is selected when several candidates
-   exist. Because this choice changes the reconstructed geometry, the prototype
-   reports these cases through `QuasiResult.unresolved` and raises
-   `QuasiTopologyError` by default instead of inventing a policy.
+   When the C0 predictor cannot connect neighboring segments, the port applies
+   the paper's midpoint-curvature correction against an eligible neighboring
+   mixed cell with `0.02 < F < 0.98`. The moving endpoint remains on the shared
+   Cartesian edge, and both cells are re-fit conservatively at the selected
+   common point. A diagonal transition uses the shared cell vertex, matching
+   the paper's vertex-jump construction. If no admissible correction exists,
+   the conservative local quadratic is retained and the event is reported.
 
-## Ambiguous decisions
+## Frozen ambiguous decisions
 
-- **Multiple roots of Eq. (16).** The article derives a cubic but does not state
-  which admissible root to use. The prototype uses the root in `[0, 1]` nearest
-  the current C0 predictor, i.e. the least endpoint displacement. This decision
-  needs author review before using the baseline in comparisons.
-- **Ordering of pairwise corrections.** The paper says that the correction is
-  applied to all interface segments iteratively, but does not prescribe an
-  ordering. The prototype uses deterministic mesh-index order.
-- **One-endpoint C0 ties.** The paper gives phase consistency as the primary
-  criterion and normal alignment as the secondary criterion. Exact remaining
-  ties are resolved by endpoint index solely for determinism.
+- **Target-neighbor selection.** Prefer the eligible mixed neighbor that
+  exposed the discontinuity. If it is ineligible, use the nearest eligible
+  mixed cell in the source cell's 8-neighborhood. Midpoint-tangent alignment,
+  then lexicographic cell index, break exact ties.
+- **Admissible and multiple roots.** Enumerate every algebraic root on the
+  physical edge interval `[0,1]`, including repeated roots. Reject roots that
+  fail the unsquared geometric relation. Among remaining roots, select the one
+  with least displacement from the current predictor; the smaller parameter
+  breaks exact ties.
+- **Update order.** Apply pairwise corrections in lexicographic cell/endpoint
+  order, in place (deterministic Gauss--Seidel).
+- **Sweeps and convergence.** Perform at most ten sweeps, as reported by the
+  article. Stop earlier only when the largest endpoint displacement is at most
+  `1e-11` in mesh coordinates. Exhausting ten sweeps is reported separately
+  from a missing root and does not trigger a different reconstruction.
+- **Boundary handling.** Endpoints on the physical domain boundary remain open.
+  No ghost volume fractions or contact-angle rule are invented.
+- **Fallback.** If an eligible target or admissible correction is unavailable,
+  retain the cell's area-preserving local quadratic and emit an unresolved
+  diagnostic. `strict=True` converts that diagnostic into an exception.
+- **One-endpoint C0 ties.** Apply the paper's phase-consistency and normal-
+  alignment criteria. Endpoint index resolves an exact remaining tie.
 
 ## Deliberate porting deviations
 
-- The source solves the expanded cubic in Eq. (16) directly. The prototype
-  evaluates the mathematically equivalent tangent mismatch and brackets all
-  roots on the shared edge with `scipy.optimize.brentq`. This avoids duplicating
-  frame-dependent expanded coefficients but is a numerical-solver deviation.
+- The source prints expanded frame-specific continuity equations. The port
+  constructs the equivalent cross-multiplied polynomial from chord, area, and
+  tangent polynomials, then enumerates its real roots algebraically. The same
+  machinery is used for the squared midpoint-curvature relation, followed by an
+  unsquared residual check to reject extraneous roots.
 - The original method is formulated on square Cartesian grids. The repository
   supports perturbed quadrilateral meshes, but this prototype rejects them
   rather than extending QUASI beyond the paper.
@@ -99,34 +113,28 @@ Focused tests cover:
 - endpoint interpolation, tangent evaluation, and analytic area conservation
   of the quadratic facet;
 - recovery of a connected straight interface initialized by Youngs PLIC;
-- explicit failure/checkpoint behavior when the underspecified curvature path
-  is required.
+- conservative diagonal vertex jumps;
+- reported conservative fallback plus strict-mode failure;
+- repeated algebraic continuity roots and interval filtering;
+- deterministic sweep and policy metadata.
 
 The source paper's circle study uses a unit square, `epsilon = 1e-6`, 1000
 random circles with centers between `(0.4, 0.4)` and `(0.6, 0.6)`, radii in
-`[0.2, 0.25]`, and grids from `10^2` through `320^2`. That reproduction is not
-claimed here: circles can exercise Section 2.5, which must be resolved first.
+`[0.2, 0.25]`, and grids from `10^2` through `320^2`. Reproducing that full
+study remains a validation task; it is not claimed by the focused tests.
 
-## Completeness decision
+## Readiness decision
 
-Do not add QUASI to shared experiment drivers yet. Before continuing, verify
-the intended target-neighbor rule for Section 2.5 and approve or replace the
-least-displacement rule for multiple C1 roots. Once those decisions are fixed,
-the next validation step is the paper's random-circle `L1` study, followed by
-the project's matched static smoke suite.
+The kernel and adapter are ready for the five-benchmark Cartesian smoke suite.
+Benchmark summaries must retain unresolved/fallback counts, convergence status,
+and the frozen policy record. QUASI should not be extended to perturbed meshes,
+and the policies above must not be tuned after inspecting benchmark outcomes.
 
-## 2026-08-13 algebraic-root checkpoint
+## 2026-08-13 algebraic-root integration
 
-`main/algos/baselines/quasi_roots.py` now provides sampling-free enumeration
-of all real roots in an admissible edge interval, including repeated roots and
-the identically-zero relation. Focused tests cover a repeated cubic root,
-interval filtering, and the non-unique zero polynomial. This removes the
-numerical sign-change limitation identified in the fidelity audit, but it is
-not yet wired into the reconstruction: doing so faithfully still requires the
-paper's exact expanded continuity polynomial and an approved multiple-root
-selection rule.
-
-Section 2.5 remains unimplemented. The available source record does not settle
-the target-neighbor selection when several mixed cells satisfy the published
-volume-fraction filter, nor the associated root and update-order policies.
-Accordingly, no random-circle reproduction is claimed at this checkpoint.
+`main/algos/baselines/quasi_roots.py` provides sampling-free enumeration of all
+real roots in an admissible edge interval, including repeated roots and the
+identically-zero relation. The enumerator is wired into both the C1 and
+midpoint-curvature corrections, so repeated roots no longer depend on sampled
+sign changes. Focused tests cover a repeated cubic root, interval filtering,
+the non-unique zero polynomial, and integration through the QUASI verifier.

@@ -3,8 +3,11 @@ import math
 import pytest
 
 from main.algos.baselines.quasi import (
+    DEFAULT_QUASI_POLICY,
     QuadraticFacet,
+    QuasiPolicy,
     QuasiTopologyError,
+    _verified_algebraic_roots,
     reconstruct_quasi,
 )
 from main.structs.facets.linear_facet import LinearFacet
@@ -68,9 +71,12 @@ def test_quasi_recovers_a_connected_straight_interface():
         cross = tangents[0][0] * tangents[1][1] - tangents[0][1] * tangents[1][0]
         scale = math.hypot(*tangents[0]) * math.hypot(*tangents[1])
         assert abs(cross) / scale < 1.0e-7
+    assert result.sweeps_completed == DEFAULT_QUASI_POLICY.max_sweeps
+    assert result.c1_misses == 0
+    assert result.policy["update_order"] == "lexicographic Gauss-Seidel"
 
 
-def test_strict_mode_exposes_underspecified_curvature_path():
+def _diagonal_interface_mesh(fraction=0.5):
     class StubPolygon:
         def __init__(self, points, fraction, endpoints):
             self.points = points
@@ -95,7 +101,7 @@ def test_strict_mode_exposes_underspecified_curvature_path():
                 [
                     StubPolygon(
                         [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
-                        0.5,
+                        fraction,
                         ([0.0, 0.5], [1.0, 0.5]),
                     ),
                     StubPolygon(
@@ -112,7 +118,7 @@ def test_strict_mode_exposes_underspecified_curvature_path():
                     ),
                     StubPolygon(
                         [[1.0, 1.0], [2.0, 1.0], [2.0, 2.0], [1.0, 2.0]],
-                        0.5,
+                        fraction,
                         ([1.0, 1.5], [2.0, 1.5]),
                     ),
                 ],
@@ -121,6 +127,60 @@ def test_strict_mode_exposes_underspecified_curvature_path():
         def get3x3Stencil(self, x, y):
             return [[None] * 3 for _ in range(3)]
 
-    mesh = StubMesh()
-    with pytest.raises(QuasiTopologyError, match="Diagonal mixed cells"):
+    return StubMesh()
+
+
+def test_section_25_vertex_jump_connects_diagonal_cells_conservatively():
+    mesh = _diagonal_interface_mesh()
+    result = reconstruct_quasi(mesh)
+
+    assert result.unresolved == []
+    assert result.vertex_jumps == 1
+    assert result.sweeps_completed == 0
+    assert result.converged
+    assert any(join.kind == "vertex-jump" for join in result.joins)
+    first = result.facets[(0, 0)]
+    second = result.facets[(1, 1)]
+    assert (
+        min(
+            math.dist(a, b)
+            for a in (first.pLeft, first.pRight)
+            for b in (second.pLeft, second.pRight)
+        )
+        < 1.0e-12
+    )
+    for index, facet in result.facets.items():
+        assert facet.represented_area(
+            mesh.polys[index[0]][index[1]].points
+        ) == pytest.approx(mesh.polys[index[0]][index[1]].getArea(), abs=1.0e-10)
+
+
+def test_fallback_is_reported_and_strict_mode_raises():
+    mesh = _diagonal_interface_mesh(fraction=0.01)
+    result = reconstruct_quasi(mesh)
+    assert result.unresolved
+    assert result.curvature_updates == 0
+
+    with pytest.raises(QuasiTopologyError, match="No eligible Section 2.5 target"):
         reconstruct_quasi(mesh, strict=True)
+
+
+def test_repeated_continuity_root_is_not_lost():
+    root = 0.375
+    coefficients = [root * root, -2.0 * root, 1.0]
+    roots = _verified_algebraic_roots(
+        coefficients,
+        lambda alpha: (alpha - root) ** 2,
+        current_parameter=0.7,
+        tolerance=1.0e-12,
+    )
+    assert roots == pytest.approx([root], abs=1.0e-9)
+
+
+def test_policy_validation_and_zero_sweep_override():
+    with pytest.raises(ValueError, match="target fraction bounds"):
+        QuasiPolicy(target_fraction_lower=0.7, target_fraction_upper=0.2)
+
+    result = reconstruct_quasi(_horizontal_interface_mesh(), iterations=0)
+    assert result.sweeps_completed == 0
+    assert not result.converged

@@ -1,21 +1,20 @@
-"""Static, Cartesian prototype of the 2009 QUASI reconstruction method.
+"""Static Cartesian port of the 2009 QUASI reconstruction method.
 
-The implementation follows Sections 2.1--2.4 of Diwakar, Das, and
-Sundararajan (JCP 228, 2009, 9107--9130).  The curvature correction from
-Section 2.5 is deliberately reported as unresolved: the paper does not define
-how the neighboring mixed cell used as the curvature target is selected.
+The implementation follows Sections 2.1--2.5 of Diwakar, Das, and
+Sundararajan (JCP 228, 2009, 9107--9130).  Choices left open by the article are
+collected in :class:`QuasiPolicy` so benchmark runs can retain them verbatim.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 import math
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
-from scipy.optimize import brentq
 
 from main.geoms.geoms import getDistance, getPolyLineArea
+from main.algos.baselines.quasi_roots import enumerate_real_polynomial_roots
 
 
 Point = List[float]
@@ -23,7 +22,31 @@ CellIndex = Tuple[int, int]
 
 
 class QuasiTopologyError(RuntimeError):
-    """Raised when the prototype reaches QUASI's underspecified correction."""
+    """Raised when strict execution cannot complete a QUASI correction."""
+
+
+@dataclass(frozen=True)
+class QuasiPolicy:
+    """Frozen porting choices not prescribed completely by the article."""
+
+    max_sweeps: int = 10
+    convergence_tolerance: float = 1.0e-11
+    target_fraction_lower: float = 0.02
+    target_fraction_upper: float = 0.98
+    fallback: str = "retain-area-preserving-quadratic"
+
+    def __post_init__(self) -> None:
+        if self.max_sweeps < 0:
+            raise ValueError("max_sweeps must be nonnegative")
+        if self.convergence_tolerance <= 0.0:
+            raise ValueError("convergence_tolerance must be positive")
+        if not 0.0 <= self.target_fraction_lower < self.target_fraction_upper <= 1.0:
+            raise ValueError("target fraction bounds must lie in [0, 1]")
+        if self.fallback != "retain-area-preserving-quadratic":
+            raise ValueError("unsupported QUASI fallback policy")
+
+
+DEFAULT_QUASI_POLICY = QuasiPolicy()
 
 
 @dataclass(frozen=True)
@@ -109,6 +132,7 @@ class QuasiJoin:
     cells: Tuple[CellIndex, CellIndex]
     slots: Tuple[int, int]
     edge: Tuple[Point, Point]
+    kind: str = "edge"
 
 
 @dataclass
@@ -118,6 +142,11 @@ class QuasiResult:
     unresolved: List[str] = field(default_factory=list)
     c1_updates: int = 0
     c1_misses: int = 0
+    curvature_updates: int = 0
+    vertex_jumps: int = 0
+    sweeps_completed: int = 0
+    converged: bool = False
+    policy: Dict[str, Any] = field(default_factory=dict)
 
     def facet_grid(self, shape: Tuple[int, int]) -> List[List[List[QuadraticFacet]]]:
         grid: List[List[List[QuadraticFacet]]] = [
@@ -134,6 +163,12 @@ class _CellState:
     polygon: Any
     endpoints: List[Point]
     facet: Optional[QuadraticFacet] = None
+
+
+@dataclass(frozen=True)
+class _CorrectionRequest:
+    cells: Tuple[CellIndex, CellIndex]
+    reason: str
 
 
 def _cross(a: Sequence[float], b: Sequence[float]) -> float:
@@ -257,12 +292,16 @@ def _register_join(
     occupied: Dict[Tuple[CellIndex, int], QuasiJoin],
     join: QuasiJoin,
     unresolved: List[str],
+    correction_requests: List[_CorrectionRequest],
 ) -> None:
     keys = ((join.cells[0], join.slots[0]), (join.cells[1], join.slots[1]))
     if any(key in occupied for key in keys):
         unresolved.append(
             "C0 endpoint is claimed by multiple neighbors; this requires the "
             f"Section 2.5 vertex-jump path: {join.cells}"
+        )
+        correction_requests.append(
+            _CorrectionRequest(tuple(sorted(join.cells)), "multiply-claimed-endpoint")
         )
         return
     joins.append(join)
@@ -272,9 +311,10 @@ def _register_join(
 
 def _establish_c0(
     states: Dict[CellIndex, _CellState], tolerance: float
-) -> Tuple[List[QuasiJoin], List[str]]:
+) -> Tuple[List[QuasiJoin], List[str], List[_CorrectionRequest]]:
     joins: List[QuasiJoin] = []
     unresolved: List[str] = []
+    correction_requests: List[_CorrectionRequest] = []
     occupied: Dict[Tuple[CellIndex, int], QuasiJoin] = {}
     directions = ((1, 0), (0, 1))
 
@@ -332,11 +372,16 @@ def _establish_c0(
                     "Adjacent mixed cells have no PLIC endpoint on their common "
                     f"edge and require Section 2.5 curvature correction: {index_a}, {index_b}"
                 )
+                correction_requests.append(
+                    _CorrectionRequest(
+                        tuple(sorted((index_a, index_b))), "no-common-edge-endpoint"
+                    )
+                )
                 continue
 
             join = QuasiJoin((index_a, index_b), (slot_a, slot_b), edge)
             before_count = len(joins)
-            _register_join(joins, occupied, join, unresolved)
+            _register_join(joins, occupied, join, unresolved, correction_requests)
             if len(joins) != before_count:
                 state_a.endpoints[slot_a] = list(target)
                 state_b.endpoints[slot_b] = list(target)
@@ -355,8 +400,378 @@ def _establish_c0(
                     "Diagonal mixed cells require Section 2.5 curvature correction: "
                     f"{index_a}, {index_b}"
                 )
+                correction_requests.append(
+                    _CorrectionRequest(
+                        tuple(sorted((index_a, index_b))), "diagonal-vertex-jump"
+                    )
+                )
 
-    return joins, unresolved
+    unique_requests = sorted(
+        set(correction_requests), key=lambda request: (request.cells, request.reason)
+    )
+    return joins, unresolved, unique_requests
+
+
+def _polygon_area(points: Sequence[Point]) -> float:
+    return abs(
+        0.5
+        * sum(
+            points[index][0] * points[(index + 1) % len(points)][1]
+            - points[index][1] * points[(index + 1) % len(points)][0]
+            for index in range(len(points))
+        )
+    )
+
+
+def _volume_fraction(state: _CellState) -> float:
+    if hasattr(state.polygon, "getFraction"):
+        return float(state.polygon.getFraction())
+    cell_area = _polygon_area(state.polygon.points)
+    return 0.0 if cell_area == 0.0 else float(state.polygon.getArea()) / cell_area
+
+
+def _point_at_parameter(edge: Tuple[Point, Point], alpha: float) -> Point:
+    return [
+        edge[0][coordinate] + alpha * (edge[1][coordinate] - edge[0][coordinate])
+        for coordinate in (0, 1)
+    ]
+
+
+def _select_curvature_target(
+    source: _CellState,
+    preferred: _CellState,
+    states: Dict[CellIndex, _CellState],
+    policy: QuasiPolicy,
+) -> Optional[_CellState]:
+    """Select the frozen Section 2.5 target without result-driven tuning."""
+
+    source_midpoint = np.mean(np.asarray(source.endpoints, dtype=float), axis=0)
+    source_tangent = np.asarray(source.facet.tangent(0.5), dtype=float)
+    source_norm = float(np.linalg.norm(source_tangent))
+    candidates = []
+    for index, candidate in states.items():
+        if index == source.index:
+            continue
+        if max(abs(index[0] - source.index[0]), abs(index[1] - source.index[1])) > 1:
+            continue
+        fraction = _volume_fraction(candidate)
+        if not policy.target_fraction_lower < fraction < policy.target_fraction_upper:
+            continue
+        candidate_midpoint = np.asarray(candidate.facet.midpoint, dtype=float)
+        candidate_tangent = np.asarray(candidate.facet.tangent(0.5), dtype=float)
+        candidate_norm = float(np.linalg.norm(candidate_tangent))
+        alignment = 0.0
+        if source_norm > 0.0 and candidate_norm > 0.0:
+            alignment = abs(
+                float(np.dot(source_tangent, candidate_tangent))
+                / (source_norm * candidate_norm)
+            )
+        candidates.append(
+            (
+                0 if index == preferred.index else 1,
+                float(np.linalg.norm(candidate_midpoint - source_midpoint)),
+                -alignment,
+                index,
+                candidate,
+            )
+        )
+    return min(candidates)[-1] if candidates else None
+
+
+def _poly_trim(coefficients: Sequence[float], tolerance: float) -> np.ndarray:
+    values = np.asarray(coefficients, dtype=float)
+    scale = max(1.0, float(np.max(np.abs(values))))
+    while values.size > 1 and abs(values[-1]) <= tolerance * scale:
+        values = values[:-1]
+    return values
+
+
+def _verified_algebraic_roots(
+    coefficients: Sequence[float],
+    residual,
+    current_parameter: float,
+    tolerance: float,
+) -> List[float]:
+    root_set = enumerate_real_polynomial_roots(
+        _poly_trim(coefficients, tolerance),
+        lower=0.0,
+        upper=1.0,
+        tolerance=tolerance,
+    )
+    if root_set.identically_zero:
+        return [current_parameter]
+    residual_tolerance = max(1.0e-8, 256.0 * tolerance)
+    return [
+        root.value
+        for root in root_set.roots
+        if math.isfinite(residual(root.value))
+        and abs(residual(root.value)) <= residual_tolerance
+    ]
+
+
+def _moving_endpoint_polynomials(
+    state: _CellState,
+    slot: int,
+    edge: Tuple[Point, Point],
+) -> Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray, np.ndarray]:
+    """Return chord, squared length, and area residual polynomials."""
+
+    moving = (
+        np.asarray([edge[0][0], edge[1][0] - edge[0][0]], dtype=float),
+        np.asarray([edge[0][1], edge[1][1] - edge[0][1]], dtype=float),
+    )
+    fixed_point = state.endpoints[1 - slot]
+    fixed = (
+        np.asarray([fixed_point[0]], dtype=float),
+        np.asarray([fixed_point[1]], dtype=float),
+    )
+    if slot == 0:
+        chord = (
+            np.polynomial.polynomial.polysub(fixed[0], moving[0]),
+            np.polynomial.polynomial.polysub(fixed[1], moving[1]),
+        )
+    else:
+        chord = (
+            np.polynomial.polynomial.polysub(moving[0], fixed[0]),
+            np.polynomial.polynomial.polysub(moving[1], fixed[1]),
+        )
+    squared_length = np.polynomial.polynomial.polyadd(
+        np.polynomial.polynomial.polymul(chord[0], chord[0]),
+        np.polynomial.polynomial.polymul(chord[1], chord[1]),
+    )
+
+    areas = []
+    for alpha in (0.0, 1.0):
+        endpoints = [list(point) for point in state.endpoints]
+        endpoints[slot] = _point_at_parameter(edge, alpha)
+        areas.append(getPolyLineArea(state.polygon.points, *endpoints))
+    area_residual = np.asarray(
+        [areas[0] - state.polygon.getArea(), areas[1] - areas[0]],
+        dtype=float,
+    )
+    return chord, squared_length, area_residual
+
+
+def _midpoint_curvature_polynomial(
+    state: _CellState,
+    slot: int,
+    edge: Tuple[Point, Point],
+    target_curvature: float,
+) -> np.ndarray:
+    """Cross-multiplied midpoint-curvature relation from Eqs. (17)--(21)."""
+
+    _, squared_length, area_residual = _moving_endpoint_polynomials(state, slot, edge)
+    residual_squared = np.polynomial.polynomial.polymul(area_residual, area_residual)
+    length_sixth = np.polynomial.polynomial.polymul(
+        np.polynomial.polynomial.polymul(squared_length, squared_length),
+        squared_length,
+    )
+    return np.polynomial.polynomial.polysub(
+        144.0 * residual_squared,
+        target_curvature * target_curvature * length_sixth,
+    )
+
+
+def _endpoint_distance_to_edge(
+    point: Sequence[float], edge: Tuple[Point, Point]
+) -> Tuple[float, float]:
+    alpha = min(1.0, max(0.0, _edge_parameter(point, edge)))
+    return getDistance(point, _point_at_parameter(edge, alpha)), alpha
+
+
+def _shared_vertex(
+    first: _CellState, second: _CellState, tolerance: float
+) -> Optional[Point]:
+    shared = []
+    for point_a in first.polygon.points:
+        for point_b in second.polygon.points:
+            if getDistance(point_a, point_b) <= tolerance:
+                shared.append(list(point_a))
+    if len(shared) != 1:
+        return None
+    return shared[0]
+
+
+def _apply_curvature_correction(
+    source: _CellState,
+    target: _CellState,
+    edge: Tuple[Point, Point],
+    occupied: set[Tuple[CellIndex, int]],
+    geometry_tolerance: float,
+    root_tolerance: float,
+) -> Tuple[Optional[QuasiJoin], bool]:
+    target_curvature = target.facet.curvature(0.5)
+    slot = min(
+        (0, 1),
+        key=lambda candidate: (
+            _endpoint_distance_to_edge(source.endpoints[candidate], edge)[0],
+            candidate,
+        ),
+    )
+    target_slot = min(
+        (0, 1),
+        key=lambda candidate: (
+            _endpoint_distance_to_edge(target.endpoints[candidate], edge)[0],
+            candidate,
+        ),
+    )
+    if (source.index, slot) in occupied or (target.index, target_slot) in occupied:
+        return None, False
+    source_alpha = _endpoint_distance_to_edge(source.endpoints[slot], edge)[1]
+    target_alpha = _endpoint_distance_to_edge(target.endpoints[target_slot], edge)[1]
+    current_alpha = 0.5 * (source_alpha + target_alpha)
+
+    polynomial = _midpoint_curvature_polynomial(source, slot, edge, target_curvature)
+
+    def mismatch(alpha: float) -> float:
+        endpoints = [list(point) for point in source.endpoints]
+        endpoints[slot] = _point_at_parameter(edge, alpha)
+        if getDistance(endpoints[0], endpoints[1]) <= geometry_tolerance:
+            return float("nan")
+        proposal = _CellState(source.index, source.polygon, endpoints)
+        return _make_quadratic(proposal).curvature(0.5) - target_curvature
+
+    roots = _verified_algebraic_roots(
+        polynomial, mismatch, current_alpha, root_tolerance
+    )
+    jumped = False
+    if roots:
+        alpha = min(roots, key=lambda value: (abs(value - current_alpha), value))
+    else:
+        current_residual = abs(mismatch(current_alpha))
+        vertex_candidates = [
+            (abs(mismatch(alpha)), abs(alpha - current_alpha), alpha)
+            for alpha in (0.0, 1.0)
+            if math.isfinite(mismatch(alpha))
+        ]
+        if not vertex_candidates:
+            return None, False
+        residual, _, alpha = min(vertex_candidates)
+        if not residual < current_residual:
+            return None, False
+        jumped = True
+
+    common_point = _point_at_parameter(edge, alpha)
+    source.endpoints[slot] = list(common_point)
+    target.endpoints[target_slot] = list(common_point)
+    source.facet = _make_quadratic(source)
+    target.facet = _make_quadratic(target)
+    return (
+        QuasiJoin((source.index, target.index), (slot, target_slot), edge, "edge"),
+        jumped,
+    )
+
+
+def _apply_vertex_jump(
+    first: _CellState,
+    second: _CellState,
+    vertex: Point,
+    occupied: set[Tuple[CellIndex, int]],
+    geometry_tolerance: float,
+) -> Optional[QuasiJoin]:
+    slots = tuple(
+        min(
+            (0, 1),
+            key=lambda slot: (getDistance(state.endpoints[slot], vertex), slot),
+        )
+        for state in (first, second)
+    )
+    if any(
+        (state.index, slot) in occupied for state, slot in zip((first, second), slots)
+    ):
+        return None
+    for state, slot in zip((first, second), slots):
+        if getDistance(state.endpoints[1 - slot], vertex) <= geometry_tolerance:
+            return None
+    for state, slot in zip((first, second), slots):
+        state.endpoints[slot] = list(vertex)
+        state.facet = _make_quadratic(state)
+    return QuasiJoin(
+        (first.index, second.index), slots, (list(vertex), list(vertex)), "vertex-jump"
+    )
+
+
+def _resolve_curvature_requests(
+    requests: Sequence[_CorrectionRequest],
+    states: Dict[CellIndex, _CellState],
+    joins: List[QuasiJoin],
+    policy: QuasiPolicy,
+    geometry_tolerance: float,
+    root_tolerance: float,
+) -> Tuple[List[str], int, int]:
+    unresolved: List[str] = []
+    updates = 0
+    jumps = 0
+    occupied = {
+        (cell, slot) for join in joins for cell, slot in zip(join.cells, join.slots)
+    }
+    for request in sorted(requests, key=lambda item: (item.cells, item.reason)):
+        first, second = (states[index] for index in request.cells)
+        if request.reason == "multiply-claimed-endpoint":
+            unresolved.append(
+                "Section 2.5 fallback retained a conservative local quadratic "
+                f"for multiply claimed endpoint {request.cells}"
+            )
+            continue
+
+        eligible = [
+            policy.target_fraction_lower
+            < _volume_fraction(state)
+            < policy.target_fraction_upper
+            for state in (first, second)
+        ]
+        if eligible == [True, False]:
+            source, preferred = second, first
+        elif eligible == [False, True]:
+            source, preferred = first, second
+        else:
+            source, preferred = second, first
+        target = _select_curvature_target(source, preferred, states, policy)
+        if target is None:
+            unresolved.append(
+                f"No eligible Section 2.5 target for {source.index} ({request.reason})"
+            )
+            continue
+
+        if request.reason == "diagonal-vertex-jump":
+            vertex = _shared_vertex(source, target, geometry_tolerance)
+            join = (
+                None
+                if vertex is None
+                else _apply_vertex_jump(
+                    source, target, vertex, occupied, geometry_tolerance
+                )
+            )
+            jumped = join is not None
+        else:
+            edge = _shared_edge(
+                source.polygon.points, target.polygon.points, geometry_tolerance
+            )
+            if edge is None:
+                join, jumped = None, False
+            else:
+                join, jumped = _apply_curvature_correction(
+                    source,
+                    target,
+                    edge,
+                    occupied,
+                    geometry_tolerance,
+                    root_tolerance,
+                )
+
+        if join is not None and not any(
+            (cell, slot) in occupied for cell, slot in zip(join.cells, join.slots)
+        ):
+            joins.append(join)
+            occupied.update(zip(join.cells, join.slots))
+            updates += 1
+            jumps += int(jumped)
+        else:
+            unresolved.append(
+                "Section 2.5 correction retained the area-preserving local "
+                f"quadratic in {source.index} ({request.reason})"
+            )
+    return unresolved, updates, jumps
 
 
 def _edge_parameter(point: Sequence[float], edge: Tuple[Point, Point]) -> float:
@@ -405,50 +820,54 @@ def _candidate_c1_roots(
     states: Dict[CellIndex, _CellState],
     root_tolerance: float,
 ) -> List[float]:
-    # Eq. (16) is a cubic. Evaluating the equivalent slope mismatch and
-    # bracketing all roots avoids copying its frame-dependent expanded
-    # coefficients while preserving the same C1 condition.
-    samples = np.linspace(0.0, 1.0, 65)
-    values = [_join_mismatch(float(alpha), join, states) for alpha in samples]
-    roots: List[float] = []
-    for alpha, value in zip(samples, values):
-        if math.isfinite(value) and abs(value) <= root_tolerance:
-            roots.append(float(alpha))
-    for left, right, f_left, f_right in zip(
-        samples[:-1], samples[1:], values[:-1], values[1:]
-    ):
-        if not (math.isfinite(f_left) and math.isfinite(f_right)):
-            continue
-        if f_left * f_right < 0.0:
-            roots.append(
-                float(
-                    brentq(
-                        lambda alpha: _join_mismatch(alpha, join, states),
-                        float(left),
-                        float(right),
-                        xtol=root_tolerance,
-                    )
-                )
-            )
-    unique: List[float] = []
-    for root in roots:
-        if not any(
-            abs(root - existing) <= 10.0 * root_tolerance for existing in unique
-        ):
-            unique.append(root)
-    return unique
+    if join.kind != "edge" or getDistance(*join.edge) == 0.0:
+        return []
+
+    tangent_numerators = []
+    for cell, slot in zip(join.cells, join.slots):
+        state = states[cell]
+        chord, squared_length, area_residual = _moving_endpoint_polynomials(
+            state, slot, join.edge
+        )
+        sign = 1.0 if slot == 0 else -1.0
+        tangent_x = np.polynomial.polynomial.polyadd(
+            np.polynomial.polynomial.polymul(squared_length, chord[0]),
+            sign * 6.0 * np.polynomial.polynomial.polymul(area_residual, -chord[1]),
+        )
+        tangent_y = np.polynomial.polynomial.polyadd(
+            np.polynomial.polynomial.polymul(squared_length, chord[1]),
+            sign * 6.0 * np.polynomial.polynomial.polymul(area_residual, chord[0]),
+        )
+        tangent_numerators.append((tangent_x, tangent_y))
+
+    polynomial = np.polynomial.polynomial.polysub(
+        np.polynomial.polynomial.polymul(
+            tangent_numerators[0][0], tangent_numerators[1][1]
+        ),
+        np.polynomial.polynomial.polymul(
+            tangent_numerators[0][1], tangent_numerators[1][0]
+        ),
+    )
+    current_point = states[join.cells[0]].endpoints[join.slots[0]]
+    current_alpha = min(1.0, max(0.0, _edge_parameter(current_point, join.edge)))
+    return _verified_algebraic_roots(
+        polynomial,
+        lambda alpha: _join_mismatch(alpha, join, states),
+        current_alpha,
+        root_tolerance,
+    )
 
 
 def _apply_c1_join(
     join: QuasiJoin,
     states: Dict[CellIndex, _CellState],
     root_tolerance: float,
-) -> bool:
+) -> Tuple[bool, float]:
     current_point = states[join.cells[0]].endpoints[join.slots[0]]
     current_alpha = min(1.0, max(0.0, _edge_parameter(current_point, join.edge)))
     roots = _candidate_c1_roots(join, states, root_tolerance)
     if not roots:
-        return False
+        return False, 0.0
     # The paper does not state how multiple admissible cubic roots are chosen.
     # Retaining the root nearest the predictor is the least-displacing choice.
     alpha = min(roots, key=lambda candidate: abs(candidate - current_alpha))
@@ -460,26 +879,29 @@ def _apply_c1_join(
     for cell, slot in zip(join.cells, join.slots):
         states[cell].endpoints[slot] = list(target)
         states[cell].facet = _make_quadratic(states[cell])
-    return True
+    return True, abs(alpha - current_alpha) * getDistance(*join.edge)
 
 
 def reconstruct_quasi(
     mesh: Any,
     *,
-    iterations: int = 10,
+    policy: QuasiPolicy = DEFAULT_QUASI_POLICY,
+    iterations: Optional[int] = None,
     threshold: float = 1.0e-6,
     geometry_tolerance: float = 1.0e-10,
     root_tolerance: float = 1.0e-12,
-    strict: bool = True,
+    strict: bool = False,
 ) -> QuasiResult:
-    """Reconstruct static mixed cells using the connected QUASI core.
+    """Reconstruct static mixed cells with the frozen QUASI port.
 
-    The source method and this prototype are restricted to an axis-aligned
-    Cartesian mesh. ``strict=True`` prevents an incomplete result from being
-    mistaken for full QUASI when Section 2.5 curvature correction is needed.
+    The method is restricted to an axis-aligned Cartesian mesh. Physical-domain
+    boundary endpoints remain open because the article's static reconstruction
+    does not prescribe ghost-cell geometry. ``strict=True`` raises after the
+    documented conservative fallback instead of returning fallback diagnostics.
     """
 
-    if iterations < 0:
+    sweep_limit = policy.max_sweeps if iterations is None else iterations
+    if sweep_limit < 0:
         raise ValueError("iterations must be nonnegative")
     states: Dict[CellIndex, _CellState] = {}
     for x, column in enumerate(mesh.polys):
@@ -496,21 +918,43 @@ def reconstruct_quasi(
                 (x, y), polygon, [list(plic.pLeft), list(plic.pRight)]
             )
 
-    joins, unresolved = _establish_c0(states, geometry_tolerance)
+    joins, _, correction_requests = _establish_c0(states, geometry_tolerance)
     for state in states.values():
         state.facet = _make_quadratic(state)
 
+    unresolved, curvature_updates, vertex_jumps = _resolve_curvature_requests(
+        correction_requests,
+        states,
+        joins,
+        policy,
+        geometry_tolerance,
+        root_tolerance,
+    )
     if unresolved and strict:
         raise QuasiTopologyError("; ".join(unresolved))
 
     c1_updates = 0
     c1_misses = 0
-    for _ in range(iterations):
-        for join in joins:
-            if _apply_c1_join(join, states, root_tolerance):
-                c1_updates += 1
-            else:
-                c1_misses += 1
+    sweeps_completed = 0
+    converged = not any(join.kind == "edge" for join in joins)
+    ordered_joins = sorted(
+        (join for join in joins if join.kind == "edge"),
+        key=lambda join: (join.cells, join.slots),
+    )
+    if ordered_joins:
+        for _ in range(sweep_limit):
+            max_displacement = 0.0
+            for join in ordered_joins:
+                updated, displacement = _apply_c1_join(join, states, root_tolerance)
+                if updated:
+                    c1_updates += 1
+                    max_displacement = max(max_displacement, displacement)
+                else:
+                    c1_misses += 1
+            sweeps_completed += 1
+            if max_displacement <= policy.convergence_tolerance:
+                converged = True
+                break
 
     return QuasiResult(
         facets={index: state.facet for index, state in states.items()},
@@ -518,11 +962,29 @@ def reconstruct_quasi(
         unresolved=unresolved,
         c1_updates=c1_updates,
         c1_misses=c1_misses,
+        curvature_updates=curvature_updates,
+        vertex_jumps=vertex_jumps,
+        sweeps_completed=sweeps_completed,
+        converged=converged,
+        policy={
+            "target_neighbor": (
+                "triggering eligible neighbor, then nearest eligible 8-neighbor; "
+                "tangent alignment and lexicographic index break ties"
+            ),
+            "multiple_root": "least displacement from the current predictor",
+            "update_order": "lexicographic Gauss-Seidel",
+            "max_sweeps": sweep_limit,
+            "convergence_tolerance": policy.convergence_tolerance,
+            "boundary": "retain open physical-boundary endpoints",
+            "fallback": policy.fallback,
+        },
     )
 
 
 __all__ = [
     "QuadraticFacet",
+    "DEFAULT_QUASI_POLICY",
+    "QuasiPolicy",
     "QuasiJoin",
     "QuasiResult",
     "QuasiTopologyError",
