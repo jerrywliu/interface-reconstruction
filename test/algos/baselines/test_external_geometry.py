@@ -121,6 +121,8 @@ def test_duck_typed_adapters_preserve_published_kernel_parameters():
         objective=0.0,
         optimizer_success=True,
         optimizer_message="test",
+        curvature_source="exact-curvature-oracle",
+        ghf_diagnostics=None,
     )
     parabola = adapt_parabolic_interval(interface, -0.4, 0.6)
 
