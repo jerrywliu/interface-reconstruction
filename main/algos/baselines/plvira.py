@@ -503,6 +503,15 @@ class ParabolicInterface:
             polygon, self.center, self.angle, self.curvature, self.shift
         )
 
+    def intervals_in_polygon(self, polygon: Polygon) -> Tuple[Tuple[float, float], ...]:
+        """Return every retained tangent-coordinate interval in ``polygon``."""
+
+        return tuple(
+            _interface_intervals(
+                polygon, self.center, self.angle, self.curvature, self.shift
+            )
+        )
+
 
 def _reconstruct_plvira_with_curvature(
     polygons: Sequence[Sequence[Polygon]],
