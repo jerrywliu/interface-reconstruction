@@ -376,21 +376,21 @@ def _plot_all_benchmarks(summary: Sequence[Mapping[str, Any]], path: Path) -> No
         if index == 0:
             curvature.set_title("Unsigned local curvature error")
 
-        width = np.asarray(resolutions, dtype=float) * 0.10
-        operations.bar(
-            np.asarray(resolutions) - width / 2.0,
-            [row["curvature_updates_median"] for row in rows],
-            width=width,
-            label="curvature updates",
+        operations.plot(
+            resolutions,
+            [row["c1_updates_total"] / row["mixed_cells_total"] for row in rows],
+            marker="o",
+            label="C1 updates / mixed cell",
             color="#357266",
         )
-        operations.bar(
-            np.asarray(resolutions) + width / 2.0,
-            [row["vertex_jumps_median"] for row in rows],
-            width=width,
-            label="vertex jumps",
+        operations.plot(
+            resolutions,
+            [row["c1_misses_total"] / row["mixed_cells_total"] for row in rows],
+            marker="s",
+            label="C1 misses / mixed cell",
             color="#d08c60",
         )
+        operations.set_yscale("log")
         operations.text(
             0.98,
             0.95,
@@ -399,16 +399,20 @@ def _plot_all_benchmarks(summary: Sequence[Mapping[str, Any]], path: Path) -> No
                 f"{100.0 * row['sweep_converged_fraction']:.0f}%" for row in rows
             )
             + "\nfallback cells: "
-            + ", ".join(str(row["conservative_fallback_cells_total"]) for row in rows),
+            + ", ".join(str(row["conservative_fallback_cells_total"]) for row in rows)
+            + "\ncurvature updates: "
+            + ", ".join(str(row["curvature_updates_total"]) for row in rows)
+            + "; vertex jumps: "
+            + ", ".join(str(row["vertex_jumps_total"]) for row in rows),
             transform=operations.transAxes,
             ha="right",
             va="top",
             fontsize=6.8,
             color="#444444",
         )
-        operations.grid(True, axis="y", alpha=0.25)
+        operations.grid(True, which="both", alpha=0.25)
         if index == 0:
-            operations.set_title("Median correction incidence")
+            operations.set_title("Frozen sweep diagnostics")
             operations.legend(frameon=False, fontsize=6.8, loc="upper left")
 
         for axis in (geometry, curvature, operations):
