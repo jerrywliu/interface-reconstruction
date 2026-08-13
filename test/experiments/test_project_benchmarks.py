@@ -55,6 +55,31 @@ def test_first_canonical_case_parameters_match_static_driver_draw_order():
 
 
 @pytest.mark.parametrize("benchmark", DEFAULT_BENCHMARKS)
+def test_selected_cases_retain_the_full_25_case_rng_draw_order(benchmark):
+    selected = canonical_benchmark_cases(benchmark, (0, 4, 24))
+    rng = np.random.default_rng(SEEDS[benchmark])
+    expected = {}
+    for index in range(25):
+        if benchmark in ("lines", "circles"):
+            values = (rng.uniform(50, 51), rng.uniform(50, 51))
+        else:
+            values = (
+                rng.uniform(50, 51),
+                rng.uniform(50, 51),
+                rng.uniform(0, math.pi / 2),
+            )
+        if index in (0, 4, 24):
+            expected[index] = values
+
+    for case in selected:
+        parameters = case.parameters
+        center = parameters.get("center", parameters.get("p_left"))
+        assert center[:2] == pytest.approx(expected[case.case_index][:2])
+        if len(expected[case.case_index]) == 3:
+            assert parameters["theta"] == pytest.approx(expected[case.case_index][2])
+
+
+@pytest.mark.parametrize("benchmark", DEFAULT_BENCHMARKS)
 def test_fixture_initializes_nonempty_canonical_mixed_cells(benchmark):
     case = canonical_benchmark_cases(benchmark, (0,))[0]
     mesh = case.build_mesh(32)

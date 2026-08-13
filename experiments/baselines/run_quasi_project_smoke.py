@@ -106,32 +106,52 @@ def _external_result(
 ) -> ExternalBaselineResult:
     fallback_reasons = _fallback_reasons_by_cell(quasi_result.unresolved)
     cells = {}
-    for cell_index, facet in sorted(quasi_result.facets.items()):
-        polygon = mesh.polys[cell_index[0]][cell_index[1]]
-        record = adapt_quasi_cell(
-            facet,
-            cell_index=cell_index,
-            polygon=polygon.points,
-            target_phase_area=polygon.getArea(),
-        )
-        reasons = fallback_reasons.get(cell_index, ())
-        diagnostics = {
-            **dict(record.diagnostics),
-            "bulge": facet.bulge,
-            "chord_length": facet.chord_length,
-            "curvature_midpoint": facet.curvature(0.5),
-            "conservative_fallback": bool(reasons),
-            "fallback_reasons": list(reasons),
-        }
-        if reasons:
-            record = replace(
-                record,
-                status=ExternalReconstructionStatus.PAPER_FALLBACK,
-                diagnostics=diagnostics,
+    for x, column in enumerate(mesh.polys):
+        for y, polygon in enumerate(column):
+            if not polygon.isMixed(tolerance=1.0e-10):
+                continue
+            cell_index = (x, y)
+            facet = quasi_result.facets.get(cell_index)
+            if facet is None:
+                record = adapt_quasi_cell(
+                    None,
+                    cell_index=cell_index,
+                    polygon=polygon.points,
+                    target_phase_area=polygon.getArea(),
+                    unresolved_reason="QUASI returned no facet for a mixed cell",
+                )
+                cells[cell_index] = replace(
+                    record,
+                    diagnostics={
+                        **dict(record.diagnostics),
+                        "missing_facet": True,
+                    },
+                )
+                continue
+            record = adapt_quasi_cell(
+                facet,
+                cell_index=cell_index,
+                polygon=polygon.points,
+                target_phase_area=polygon.getArea(),
             )
-        else:
-            record = replace(record, diagnostics=diagnostics)
-        cells[cell_index] = record
+            reasons = fallback_reasons.get(cell_index, ())
+            diagnostics = {
+                **dict(record.diagnostics),
+                "bulge": facet.bulge,
+                "chord_length": facet.chord_length,
+                "curvature_midpoint": facet.curvature(0.5),
+                "conservative_fallback": bool(reasons),
+                "fallback_reasons": list(reasons),
+            }
+            if reasons:
+                record = replace(
+                    record,
+                    status=ExternalReconstructionStatus.PAPER_FALLBACK,
+                    diagnostics=diagnostics,
+                )
+            else:
+                record = replace(record, diagnostics=diagnostics)
+            cells[cell_index] = record
 
     status_counts = {status.value: 0 for status in ExternalReconstructionStatus}
     for record in cells.values():
@@ -169,10 +189,16 @@ def _cell_rows(result, quasi_result, case, resolution: int) -> list[Dict[str, An
     fallback_reasons = _fallback_reasons_by_cell(quasi_result.unresolved)
     rows = []
     for (x, y), record in sorted(result.cells.items()):
-        facet = quasi_result.facets[(x, y)]
-        curvature = abs(float(facet.curvature(0.5)))
-        true_curvature = abs(float(case.true_curvature_at(facet.midpoint)))
-        reconstructed_area = record.exact_phase_area()
+        facet = quasi_result.facets.get((x, y))
+        curvature = None
+        true_curvature = None
+        curvature_error = None
+        reconstructed_area = None
+        if facet is not None:
+            curvature = abs(float(facet.curvature(0.5)))
+            true_curvature = abs(float(case.true_curvature_at(facet.midpoint)))
+            curvature_error = abs(curvature - true_curvature)
+            reconstructed_area = record.exact_phase_area()
         reasons = fallback_reasons.get((x, y), ())
         rows.append(
             {
@@ -186,18 +212,20 @@ def _cell_rows(result, quasi_result, case, resolution: int) -> list[Dict[str, An
                 "status": record.status.value,
                 "target_phase_area": record.target_phase_area,
                 "reconstructed_phase_area": reconstructed_area,
-                "absolute_area_residual": abs(
-                    reconstructed_area - record.target_phase_area
+                "absolute_area_residual": (
+                    None
+                    if reconstructed_area is None
+                    else abs(reconstructed_area - record.target_phase_area)
                 ),
                 "curvature_estimate": curvature,
                 "true_curvature": true_curvature,
-                "curvature_absolute_error": abs(curvature - true_curvature),
+                "curvature_absolute_error": curvature_error,
                 "objective": None,
                 "optimizer_success": None,
                 "ghf_method": None,
                 "diagnostics_json": json.dumps(record.diagnostics, sort_keys=True),
-                "bulge": facet.bulge,
-                "chord_length": facet.chord_length,
+                "bulge": None if facet is None else facet.bulge,
+                "chord_length": None if facet is None else facet.chord_length,
                 "conservative_fallback": bool(reasons),
                 "fallback_reasons_json": json.dumps(list(reasons), sort_keys=True),
             }
@@ -225,7 +253,12 @@ def run_case(case, resolution: int, output_directory: Path) -> Dict[str, Any]:
     )
     status = result.metadata["status_counts"]
     curvature_errors = np.asarray(
-        [row["curvature_absolute_error"] for row in cell_rows], dtype=float
+        [
+            row["curvature_absolute_error"]
+            for row in cell_rows
+            if row["curvature_absolute_error"] is not None
+        ],
+        dtype=float,
     )
     fallback_cells = sum(row["conservative_fallback"] for row in cell_rows)
     row = {
@@ -250,9 +283,15 @@ def run_case(case, resolution: int, output_directory: Path) -> Dict[str, Any]:
         "unmatched_crossings": gaps["unmatched_count"],
         "conservation_mean_absolute_residual": conservation["mean_absolute_residual"],
         "conservation_max_absolute_residual": conservation["max_absolute_residual"],
-        "curvature_estimator_mean_absolute_error": float(np.mean(curvature_errors)),
-        "curvature_estimator_median_absolute_error": float(np.median(curvature_errors)),
-        "curvature_estimator_max_absolute_error": float(np.max(curvature_errors)),
+        "curvature_estimator_mean_absolute_error": (
+            float(np.mean(curvature_errors)) if len(curvature_errors) else math.nan
+        ),
+        "curvature_estimator_median_absolute_error": (
+            float(np.median(curvature_errors)) if len(curvature_errors) else math.nan
+        ),
+        "curvature_estimator_max_absolute_error": (
+            float(np.max(curvature_errors)) if len(curvature_errors) else math.nan
+        ),
         "curvature_estimator_samples": len(curvature_errors),
         "parameters_json": json.dumps(case.to_dict(), sort_keys=True),
         "status_message": (

@@ -7,9 +7,11 @@ from experiments.baselines.project_benchmarks import canonical_benchmark_cases
 from experiments.baselines.run_quasi_project_smoke import (
     QUASI_CASE_FIELDS,
     _aggregate,
+    _external_result,
     _fallback_reasons_by_cell,
     run_case,
 )
+from main.algos.baselines.quasi import reconstruct_quasi
 
 
 def test_fallback_messages_map_to_every_referenced_cell():
@@ -84,3 +86,25 @@ def test_single_case_writes_native_quadratics_and_conservative_metrics(tmp_path)
         cell_rows = list(csv.DictReader(stream))
     assert len(cell_rows) == row["mixed_cells"]
     assert all("curvature_absolute_error" in item for item in cell_rows)
+
+
+def test_external_result_accounts_for_every_mixed_cell_when_quasi_omits_a_facet():
+    case = canonical_benchmark_cases("lines", (2,))[0]
+    mesh = case.build_mesh(64)
+    case.initialize_fractions(mesh)
+    quasi_result = reconstruct_quasi(mesh)
+
+    result = _external_result(mesh, quasi_result, case, 64)
+    expected = {
+        (x, y)
+        for x, column in enumerate(mesh.polys)
+        for y, polygon in enumerate(column)
+        if polygon.isMixed(tolerance=1.0e-10)
+    }
+    missing = expected - set(quasi_result.facets)
+
+    assert set(result.cells) == expected
+    assert result.metadata["status_counts"]["unresolved"] == len(missing)
+    assert all(
+        result.cells[index].diagnostics["missing_facet"] for index in missing
+    )

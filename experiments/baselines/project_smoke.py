@@ -150,12 +150,20 @@ def sampled_directed_hausdorff(
 
 
 def aggregate_case_rows(rows: Sequence[Mapping[str, Any]]) -> list:
-    grouped: Dict[Tuple[str, int], list] = {}
+    grouped: Dict[Tuple[str, str, str, int], list] = {}
     for row in rows:
-        grouped.setdefault((str(row["benchmark"]), int(row["cells_per_side"])), []).append(row)
+        key = (
+            str(row["method"]),
+            str(row["variant"]),
+            str(row["benchmark"]),
+            int(row["cells_per_side"]),
+        )
+        grouped.setdefault(key, []).append(row)
     summary = []
-    for (benchmark, resolution), group in sorted(grouped.items()):
+    for (method, variant, benchmark, resolution), group in sorted(grouped.items()):
         item: Dict[str, Any] = {
+            "method": method,
+            "variant": variant,
             "benchmark": benchmark,
             "cells_per_side": resolution,
             "cases": len(group),
@@ -173,6 +181,7 @@ def aggregate_case_rows(rows: Sequence[Mapping[str, Any]]) -> list:
             finite = values[np.isfinite(values)]
             item[field + "_median"] = float(np.median(finite)) if len(finite) else None
             item[field + "_max"] = float(np.max(finite)) if len(finite) else None
+            item[field + "_nonfinite_cases"] = int(len(values) - len(finite))
         for field in (
             "mixed_cells",
             "reconstructed_cells",
