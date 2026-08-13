@@ -105,6 +105,4 @@ def test_external_result_accounts_for_every_mixed_cell_when_quasi_omits_a_facet(
 
     assert set(result.cells) == expected
     assert result.metadata["status_counts"]["unresolved"] == len(missing)
-    assert all(
-        result.cells[index].diagnostics["missing_facet"] for index in missing
-    )
+    assert all(result.cells[index].diagnostics["missing_facet"] for index in missing)
