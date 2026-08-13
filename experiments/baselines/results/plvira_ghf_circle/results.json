@@ -1,0 +1,127 @@
+{
+  "curvature_source": "cartesian-ghf",
+  "domain": [
+    -0.5,
+    0.5,
+    -0.5,
+    0.5
+  ],
+  "exact_curvature": 5.0,
+  "fraction_initialization": "analytic circle-square intersection",
+  "implementation_sha256": "bd4f6ef4b34067ece5632b54c503cc2bac544bf2c9ee69ee52d2d275e5eedfe5",
+  "offsets_in_cell_widths": [
+    [
+      -0.31,
+      0.17
+    ],
+    [
+      0.13,
+      -0.27
+    ],
+    [
+      0.37,
+      0.41
+    ],
+    [
+      -0.43,
+      -0.11
+    ]
+  ],
+  "radius": 0.2,
+  "rows": [
+    {
+      "method_counts": {
+        "degenerate_zero": 1,
+        "height_function": 203,
+        "mixed_height_parabola": 0,
+        "plic_centroid_parabola": 0
+      },
+      "mixed_cells_per_offset": [
+        52,
+        52,
+        50,
+        50
+      ],
+      "radius_over_h": 6.4,
+      "relative_l1": 0.0179836962378593,
+      "relative_l1_order": null,
+      "relative_l2": 0.07139450324018308,
+      "relative_l2_order": null,
+      "relative_linf": 1.0,
+      "relative_linf_order": null,
+      "resolution": 32,
+      "samples": 204
+    },
+    {
+      "method_counts": {
+        "degenerate_zero": 0,
+        "height_function": 410,
+        "mixed_height_parabola": 0,
+        "plic_centroid_parabola": 0
+      },
+      "mixed_cells_per_offset": [
+        102,
+        102,
+        104,
+        102
+      ],
+      "radius_over_h": 12.8,
+      "relative_l1": 0.003021781323331542,
+      "relative_l1_order": 2.573218406195225,
+      "relative_l2": 0.0031037320922846206,
+      "relative_l2_order": 4.523737065909523,
+      "relative_linf": 0.005040293073099456,
+      "relative_linf_order": 7.632276661489584,
+      "resolution": 64,
+      "samples": 410
+    },
+    {
+      "method_counts": {
+        "degenerate_zero": 0,
+        "height_function": 820,
+        "mixed_height_parabola": 0,
+        "plic_centroid_parabola": 0
+      },
+      "mixed_cells_per_offset": [
+        204,
+        204,
+        206,
+        206
+      ],
+      "radius_over_h": 25.6,
+      "relative_l1": 0.0007446994439751185,
+      "relative_l1_order": 2.020669075560782,
+      "relative_l2": 0.0007626398896476363,
+      "relative_l2_order": 2.024930134580526,
+      "relative_linf": 0.001194636499705659,
+      "relative_linf_order": 2.0769359169734876,
+      "resolution": 128,
+      "samples": 820
+    },
+    {
+      "method_counts": {
+        "degenerate_zero": 0,
+        "height_function": 1638,
+        "mixed_height_parabola": 0,
+        "plic_centroid_parabola": 0
+      },
+      "mixed_cells_per_offset": [
+        410,
+        410,
+        408,
+        410
+      ],
+      "radius_over_h": 51.2,
+      "relative_l1": 0.00018555062165226665,
+      "relative_l1_order": 2.004845445851534,
+      "relative_l2": 0.00018988415589504983,
+      "relative_l2_order": 2.005882462027042,
+      "relative_linf": 0.0002939408127684118,
+      "relative_linf_order": 2.0229741144662223,
+      "resolution": 256,
+      "samples": 1638
+    }
+  ],
+  "scope": "uniform Cartesian circles; no perturbed grids",
+  "study": "Popinet 2009 Section 6.1/Figure 5 deterministic 2D subset"
+}

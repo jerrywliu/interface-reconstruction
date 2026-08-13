@@ -7,6 +7,10 @@ from typing import Optional, Sequence, Tuple
 import numpy as np
 from scipy.optimize import brentq, minimize
 
+from main.algos.baselines.plvira_ghf import (
+    CartesianGHFCurvature,
+    cartesian_ghf_curvature,
+)
 from main.geoms.geoms import getArea, getCentroid
 
 
@@ -345,6 +349,56 @@ def _validate_stencil(
                 raise ValueError("all PLVIRA stencil polygons must have positive area")
 
 
+def _validate_cartesian_stencil(
+    polygons: Sequence[Sequence[Polygon]], cell_size: float
+) -> None:
+    """Reject mesh geometry outside the source method's Cartesian scope."""
+    if not math.isfinite(cell_size) or cell_size <= 0.0:
+        raise ValueError("PLVIRA cell_size must be a positive finite scalar")
+    center = getCentroid(polygons[1][1])
+    tolerance = (
+        128.0
+        * np.finfo(float).eps
+        * max(abs(center[0]), abs(center[1]), cell_size, 1.0)
+    )
+    half = 0.5 * cell_size
+    for row in range(3):
+        for column in range(3):
+            polygon = polygons[row][column]
+            expected_center = (
+                center[0] + (column - 1) * cell_size,
+                center[1] + (row - 1) * cell_size,
+            )
+            actual_center = getCentroid(polygon)
+            if (
+                math.hypot(
+                    actual_center[0] - expected_center[0],
+                    actual_center[1] - expected_center[1],
+                )
+                > tolerance
+            ):
+                raise ValueError(
+                    "PLVIRA is restricted to a uniform Cartesian 3 x 3 stencil"
+                )
+            expected_vertices = [
+                (expected_center[0] - half, expected_center[1] - half),
+                (expected_center[0] + half, expected_center[1] - half),
+                (expected_center[0] + half, expected_center[1] + half),
+                (expected_center[0] - half, expected_center[1] + half),
+            ]
+            if len(polygon) != 4 or any(
+                not any(
+                    math.hypot(point[0] - expected[0], point[1] - expected[1])
+                    <= tolerance
+                    for expected in expected_vertices
+                )
+                for point in polygon
+            ):
+                raise ValueError(
+                    "PLVIRA is restricted to axis-aligned square Cartesian cells"
+                )
+
+
 def plvira_objective_and_gradient(
     polygons: Sequence[Sequence[Polygon]],
     fractions: Sequence[Sequence[float]],
@@ -428,6 +482,8 @@ class ParabolicInterface:
     objective: float
     optimizer_success: bool
     optimizer_message: str
+    curvature_source: str
+    ghf_diagnostics: Optional[CartesianGHFCurvature]
 
     @property
     def normal(self) -> Tuple[float, float]:
@@ -448,30 +504,29 @@ class ParabolicInterface:
         )
 
 
-def reconstruct_plvira(
+def _reconstruct_plvira_with_curvature(
     polygons: Sequence[Sequence[Polygon]],
     fractions: Sequence[Sequence[float]],
     curvature: float,
     *,
+    curvature_source: str,
+    ghf_diagnostics: Optional[CartesianGHFCurvature],
+    cell_size: float,
     initial_angle: Optional[float] = None,
-    cell_widths: Optional[Sequence[float]] = None,
-    cell_heights: Optional[Sequence[float]] = None,
     gradient_tolerance: float = 1.0e-8,
     root_tolerance: float = 1.0e-13,
     max_iterations: int = 100,
 ) -> ParabolicInterface:
-    """Reconstruct the center-cell PLVIRA parabola from a complete stencil."""
+    """Shared fixed-curvature search; callers name the curvature source."""
     _validate_stencil(polygons, fractions)
+    _validate_cartesian_stencil(polygons, cell_size)
     if not math.isfinite(curvature):
-        raise ValueError("PLVIRA requires a finite caller-supplied GHF curvature")
+        raise ValueError("PLVIRA requires a finite curvature")
     if initial_angle is None:
-        if cell_widths is None or cell_heights is None:
-            raise ValueError(
-                "provide initial_angle, or rectilinear cell_widths and cell_heights "
-                "for the paper-associated LVIRA angle guess"
-            )
         initial_angle = rectilinear_lvira_angle_guess(
-            fractions, cell_widths, cell_heights
+            fractions,
+            (cell_size, cell_size, cell_size),
+            (cell_size, cell_size, cell_size),
         )
 
     latest_shift = None
@@ -511,4 +566,83 @@ def reconstruct_plvira(
         objective=final_objective,
         optimizer_success=bool(result.success),
         optimizer_message=str(result.message),
+        curvature_source=curvature_source,
+        ghf_diagnostics=ghf_diagnostics,
+    )
+
+
+def reconstruct_plvira(
+    polygons: Sequence[Sequence[Polygon]],
+    fractions: Sequence[Sequence[float]],
+    *,
+    cartesian_fractions: Sequence[Sequence[float]],
+    target_index: Tuple[int, int],
+    cell_size: float,
+    initial_angle: Optional[float] = None,
+    gradient_tolerance: float = 1.0e-8,
+    root_tolerance: float = 1.0e-13,
+    max_iterations: int = 100,
+) -> ParabolicInterface:
+    """Run operational Cartesian PLVIRA with source-paper GHF curvature."""
+    _validate_stencil(polygons, fractions)
+    _validate_cartesian_stencil(polygons, cell_size)
+    grid = np.asarray(cartesian_fractions, dtype=float)
+    if grid.ndim != 2:
+        raise ValueError("cartesian_fractions must be a two-dimensional grid")
+    target_row, target_column = target_index
+    if (
+        target_row - 1 < 0
+        or target_row + 1 >= grid.shape[0]
+        or target_column - 1 < 0
+        or target_column + 1 >= grid.shape[1]
+    ):
+        raise ValueError("target_index does not contain the PLVIRA 3 x 3 stencil")
+    local_grid = grid[
+        target_row - 1 : target_row + 2,
+        target_column - 1 : target_column + 2,
+    ]
+    local_fractions = np.asarray(fractions, dtype=float)
+    if not np.array_equal(local_grid, local_fractions):
+        raise ValueError(
+            "PLVIRA 3 x 3 fractions must exactly match cartesian_fractions "
+            "around target_index"
+        )
+    ghf = cartesian_ghf_curvature(cartesian_fractions, target_index, cell_size)
+    return _reconstruct_plvira_with_curvature(
+        polygons,
+        fractions,
+        ghf.curvature,
+        curvature_source="cartesian-ghf",
+        ghf_diagnostics=ghf,
+        cell_size=cell_size,
+        initial_angle=initial_angle,
+        gradient_tolerance=gradient_tolerance,
+        root_tolerance=root_tolerance,
+        max_iterations=max_iterations,
+    )
+
+
+def reconstruct_plvira_exact_curvature_oracle(
+    polygons: Sequence[Sequence[Polygon]],
+    fractions: Sequence[Sequence[float]],
+    exact_curvature: float,
+    *,
+    cell_size: float,
+    initial_angle: Optional[float] = None,
+    gradient_tolerance: float = 1.0e-8,
+    root_tolerance: float = 1.0e-13,
+    max_iterations: int = 100,
+) -> ParabolicInterface:
+    """Run the explicitly named exact-curvature diagnostic oracle mode."""
+    return _reconstruct_plvira_with_curvature(
+        polygons,
+        fractions,
+        exact_curvature,
+        curvature_source="exact-curvature-oracle",
+        ghf_diagnostics=None,
+        cell_size=cell_size,
+        initial_angle=initial_angle,
+        gradient_tolerance=gradient_tolerance,
+        root_tolerance=root_tolerance,
+        max_iterations=max_iterations,
     )

@@ -1,35 +1,89 @@
-# PLVIRA static reconstruction prototype
+# PLVIRA Cartesian static baseline
 
 ## Scope and status
 
-This module is a static-only prototype of the parabolic LVIRA (PLVIRA)
-reconstruction of Remmerswaal and Veldman. It reconstructs one mixed cell from
-a complete `3 x 3` stencil of convex polygonal cells and their volume
-fractions. The curvature is a required input. The prototype does not compute
-the generalized-height-function (GHF) curvature, advect the reconstruction,
-or integrate with the repository's experiment drivers.
+The operational entry point now implements the two-dimensional uniform-
+Cartesian PLVIRA path specified by Remmerswaal and Veldman:
 
-The implementation is intentionally isolated in
-`main/algos/baselines/plvira.py`. It does not use the repository's circular or
-three-cell reconstruction methods as substitutes for any PLVIRA step.
+1. compute curvature from the Cartesian generalized-height-function (GHF)
+   hierarchy;
+2. hold that curvature fixed in the restricted parabolic search space;
+3. impose the target-cell volume constraint for every normal-angle trial;
+4. minimize the squared `3 x 3` LVIRA volume-fraction objective from the
+   paper-associated LVIRA initialization.
 
-Primary sources:
+`reconstruct_plvira(...)` accepts no curvature argument. Analytic target
+curvature is available only through the explicitly named diagnostic entry
+point `reconstruct_plvira_exact_curvature_oracle(...)`. Both entry points
+reject non-square, nonuniform, or perturbed geometry. No shared driver or
+other baseline is changed.
+
+This is a static reconstruction baseline. It does not implement advection,
+surface tension, adaptive grids, or a perturbed-grid extension.
+
+## Primary sources
 
 - R. A. Remmerswaal and A. E. P. Veldman, *Parabolic interface
   reconstruction for 2D volume of fluid methods*, Journal of Computational
-  Physics 469 (2022), 111473, DOI: 10.1016/j.jcp.2022.111473. Equations and
-  sections below refer to the arXiv v2 text (arXiv:2111.09627).
-- The paper-linked reference implementation,
-  `ronaldremmerswaal/piecewise_parabolic_vof`, inspected at commit
-  `4ee19e3f5b0fc946e3243c961aa2e6d7d35b9087` only where the article leaves a
-  software-level choice unstated.
+  Physics 469 (2022), 111473, DOI `10.1016/j.jcp.2022.111473`. Equation and
+  section references below use arXiv v2, `arXiv:2111.09627`.
+- S. Popinet, *An accurate adaptive solver for surface-tension-driven
+  interfacial flows*, Journal of Computational Physics 228 (2009),
+  5838--5866, DOI `10.1016/j.jcp.2009.04.042`. Algorithms 4--7 define the GHF
+  hierarchy cited by Remmerswaal and Veldman.
+- The Remmerswaal--Veldman paper-linked implementation,
+  `ronaldremmerswaal/piecewise_parabolic_vof`, inspected at immutable commit
+  `4ee19e3f5b0fc946e3243c961aa2e6d7d35b9087`.
+- Popinet's Gerris implementation is used only to resolve MYC algebra,
+  coordinate ordering, and singular-fit behavior. Its later numerical-policy
+  differences from the published algorithm are listed below and are not
+  silently imported.
 
-## Paper-to-code specification
+## GHF source mapping
 
-For a center cell `c` with centroid `xc`, prescribed curvature `kappa`, unit
-normal `eta = (cos(theta), sin(theta))`, and tangent
-`tau = (-sin(theta), cos(theta))`, PLVIRA searches the restricted parabolic
-space
+`main/algos/baselines/plvira_ghf.py` takes a bounded volume-fraction grid
+indexed `[row][column]`, with `row` increasing in `y` and `column` increasing
+in `x`. The represented liquid is the phase with fraction one.
+
+| Decision | Controlling source | Implemented rule |
+| --- | --- | --- |
+| Mesh class | Remmerswaal--Veldman Section 3.1; Popinet Algorithms 4--7 | Uniform square Cartesian cells only. |
+| Normal | Popinet Algorithm 7 step 1 and Algorithm 3 | Two-dimensional Mixed-Youngs-Centered (MYC), pointing from liquid to empty phase. |
+| Direction order | Popinet Algorithm 7 step 2 | Decreasing absolute MYC-normal component; coordinate order (`x`, then `y`) breaks exact ties. |
+| Column construction | Popinet Algorithm 4 | Independently extend each column until an empty terminal cell and a full terminal cell are found; no periodic or boundary completion is invented. |
+| Column validity | Remmerswaal--Veldman Section 3.1 | Full/empty terminal cells and monotonically decreasing fractions toward the empty side. |
+| Standard curvature | Remmerswaal--Veldman equations in Section 3.1; Popinet Algorithm 5 | Three consecutive heights and centered second-order first/second differences. |
+| Mixed-height fallback | Popinet Algorithms 5--7 | Collect consistent height positions from both Cartesian directions and fit the published unweighted quadratic. |
+| Independent positions | Popinet Algorithm 6 | Greedy source ordering with the published separation threshold `distance >= h`. |
+| Final fallback | Popinet Algorithm 7 step 4 | Replace mixed heights with MYC-PLIC fragment barycentres from the target `3 x 3`; return zero only when fewer than three independent points or a singular fit remains. |
+| Sign convention | Remmerswaal--Veldman equation (22) and the linked `levelSet_curvature` routine | Heights are expressed in the inward coordinate, so a convex liquid domain supplies positive `kappa` to the PLVIRA level set. |
+
+The volume-fraction grid is assumed already geometrically bounded and clipped.
+Following the source algorithms, mixed/full/empty classification uses exact
+comparisons with zero and one; no benchmark-tuned fraction threshold is
+introduced.
+
+### Material paper/code discrepancy
+
+Popinet's published Algorithm 6 uses a one-cell independence distance and an
+unweighted least-squares fit. The later Gerris/Basilisk implementation uses a
+half-cell distance, adds the target PLIC-fragment center with a non-unit
+weight, limits the column search, and caps fitted curvature. None of those
+changes is stated in the Remmerswaal--Veldman article or present in its linked
+repository. The published algorithm therefore controls this baseline.
+
+This choice is visible numerically: the deterministic circle check has one
+published-rule `degenerate_zero` fallback at `R/h = 6.4`; the asymptotic
+`R/h >= 12.8` rows use complete height functions and recover the reported
+second-order scale. An exact executable match to the unpublished GHF path used
+inside the Remmerswaal--Veldman flow solver remains blocked by the absence of
+that code and the policy conflict above.
+
+## Restricted PLVIRA search
+
+For target cell centroid `xc`, prescribed GHF curvature `kappa`, normal
+`eta = (cos(theta), sin(theta))`, and tangent
+`tau = (-sin(theta), cos(theta))`, PLVIRA searches
 
 ```text
 q(x) = eta . (x - xc) - phi
@@ -37,115 +91,86 @@ q(x) = eta . (x - xc) - phi
 liquid = {x: q(x) <= 0}.
 ```
 
-This is the paper's `Q_2^kappa` search space (Section 5.1, equation (22)). The
-curvature is fixed, so the normal angle is the sole optimization variable.
-The tangential origin is fixed at `xc`; no tangential-shift degree of freedom
-is introduced.
+This is `Q_2^kappa` from Section 5.1, equation (22). Curvature is fixed, the
+normal angle is the only optimization variable, and the tangential origin is
+fixed at `xc`. No tangential-shift degree of freedom is added.
 
-For every trial angle, `phi` is chosen so the reconstructed liquid volume in
-the center cell exactly equals its reference volume. This is equation (23) in
-Section 5.5. The implementation brackets the monotone volume equation using
-the exact extrema of `eta . (x - xc) + 0.5*kappa*(tau . (x - xc))**2` on the
-center polygon and solves it with Brent's method.
+For each angle, `phi` is selected so the target-cell liquid volume is exact
+(equation (23)). The monotone equation is bracketed with exact extrema of the
+same level-set expression on the square and solved with Brent's method.
 
-The objective is the squared form of the LVIRA cost from Section 4.1,
-equation (16):
+The objective is the squared LVIRA cost from Section 4.1, equation (16):
 
 ```text
-f_L2(theta)**2 = sum over the 3 x 3 vertex-sharing stencil of
+sum over the 3 x 3 vertex-sharing stencil of
     (reconstructed volume fraction - reference volume fraction)**2.
 ```
 
-The center contribution is omitted in code because volume enforcement makes
-it identically zero. The same reconstructed parabola is extended into every
-neighboring cell.
+The target term is omitted because volume enforcement makes it zero. The same
+parabola is extended into all eight neighbors. Polygon/parabola intersection
+areas and the Appendix C.2 angle derivative are analytic.
 
-Polygon/parabola intersection volumes are evaluated analytically. Polygon
-edges are split at the roots of `q`, retained boundary pieces are combined
-with exact line integrals along the parabolic boundary, and Green's theorem
-gives the enclosed area. This implements the exact edge splitting and
-polynomial correction described in Section 5.4 without numerical quadrature.
+Initialization uses `lvira_angle_guess` from the linked implementation: the
+centered volume-fraction gradient. The article specifies limited-memory BFGS
+with a More--Thuente line search. The Python port retains the checkpointed
+SciPy `L-BFGS-B` solve with the analytic gradient because SciPy 1.9.2 does not
+expose that line-search choice. No restart, multi-start, alternative minimum,
+or result-driven tuning is added.
 
-The derivative with respect to the normal angle uses Appendix C.2. The center
-cell first determines `dphi/dtheta` from volume conservation (equation (C.9));
-the same derivative is used when differentiating neighboring reconstructed
-volumes and the squared LVIRA objective.
+## Oracle separation
 
-The objective is minimized with limited-memory BFGS from the LVIRA angle
-guess. This follows Section 5.6. The paper-associated code supplies the
-otherwise unstated initial guess: the angle of the centered volume-fraction
-gradient. The helper in this prototype supports that initialization for a
-rectilinear `3 x 3` stencil. A caller using another mesh must provide the
-angle produced by its faithful LVIRA initialization explicitly.
+- `reconstruct_plvira(...)`: operational row, always obtains curvature from
+  `cartesian_ghf_curvature(...)` and records `curvature_source="cartesian-ghf"`
+  plus full GHF diagnostics.
+- `reconstruct_plvira_exact_curvature_oracle(...)`: diagnostic only, requires
+  the caller's analytic curvature and records
+  `curvature_source="exact-curvature-oracle"`.
 
-## Decisions where the article is not fully explicit
+The lower-level objective and analytic area helpers accept fixed curvature
+because both modes share the restricted-search kernel. They are not baseline
+dispatch modes. Exact curvature must never be reported under the unqualified
+PLVIRA name.
 
-1. **Curvature acquisition.** PLVIRA uses a GHF curvature (Sections 3.1 and
-   5.2), but this paper does not fully specify the multidirectional GHF
-   fallback and the repository's target experiments include perturbed
-   polygons. The prototype therefore requires `curvature` from the caller.
-   It does not estimate, repair, or replace it. End-to-end PLVIRA experiments
-   remain blocked until a paper-faithful curvature provider is selected.
+## Static source check
 
-2. **Initial angle.** Section 5.6 does not state an initialization formula.
-   The paper-linked implementation initializes PLVIRA with its
-   `lvira_angle_guess`, a centered volume-fraction gradient. This prototype
-   implements that formula for rectilinear stencils and accepts an explicit
-   `initial_angle` otherwise.
+`experiments/baselines/run_plvira_ghf_circle_convergence.py` is a deterministic
+subset of Popinet's Section 6.1/Figure 5 circle study. It uses one circle
+radius, four fixed cell-relative translations, exact analytic circle-square
+fractions, and Cartesian resolutions `32, 64, 128, 256`. It records relative
+curvature norms, pairwise orders, sample counts, and GHF fallback counts in
+JSON and CSV.
 
-3. **Optimizer details.** The article specifies limited-memory BFGS with a
-   More-Thuente line search. SciPy 1.9.2, already pinned by this repository,
-   exposes L-BFGS-B but does not expose the line-search selection through that
-   interface. The prototype uses unconstrained `L-BFGS-B` with the exact
-   analytic gradient. This is a porting deviation; no alternative search,
-   restart, or multi-start heuristic is added.
-
-4. **Stopping tolerance.** Section 5.6 gives a problem-scale-dependent error
-   estimate `min(1e-2, (h/L)^2)`, but a standalone static cell call has no
-   global length `L`. The API therefore exposes `gradient_tolerance` and uses
-   `1e-8` by default, matching the paper-linked reconstruction code. No claim
-   is made that this reproduces a particular paper figure's global tolerance.
-
-5. **Volume-root bracket.** Appendix B writes the bracket for rectangular
-   cells. The search equation is monotone for any polygon. For the accepted
-   convex polygon input, the code computes exact boundary extrema of the same
-   level-set expression, which is the direct polygonal bracket for equation
-   (23), not a change to the search space or objective.
-
-6. **Output representation.** The repository has no parabolic facet class and
-   the allowed write scope excludes shared geometry types. The result is a
-   method-local `ParabolicInterface` containing `center`, `angle`, `normal`,
-   `tangent`, `curvature`, and `shift`, plus level-set and intersection-area
-   evaluation. It is not silently converted to a circular arc.
-
-## Validation
-
-Focused tests cover:
-
-- analytic line and parabola cuts of a unit square;
-- exact center-cell volume enforcement;
-- the Appendix C angle derivative against a centered finite difference;
-- numerical recovery of an identifiable parabola from an exact uniform
-  `3 x 3` volume-fraction stencil;
-- input validation for the complete stencil and initialization contract.
-
-Run with:
+Run:
 
 ```bash
-PYTHONPATH=. pytest -q test/algos/baselines/test_plvira.py
+PYTHONPATH=. python experiments/baselines/run_plvira_ghf_circle_convergence.py
 ```
 
-## Completeness checkpoint
+Tracked results and the numerical interpretation are in
+`experiments/baselines/results/plvira_ghf_circle/` and
+`experiments/baselines/PLVIRA_GHF_CIRCLE_REPRODUCTION.md`.
 
-The restricted-search PLVIRA reconstruction kernel is implemented and tested.
-It is not yet an experiment-ready baseline because the following scientifically
-material pieces are outside this isolated prototype:
+Focused validation:
 
-- a faithful GHF curvature implementation for the intended mesh class;
-- a shared parabolic facet/serialization representation;
-- driver and metric integration;
-- reproduction of the paper's flower reconstruction convergence study.
+```bash
+PYTHONPATH=. python -m pytest -q \
+  test/algos/baselines/test_plvira.py \
+  test/algos/baselines/test_plvira_ghf.py
+```
 
-Those items should be reviewed before continuing. In particular, applying a
-new curvature estimator to perturbed Cartesian cells would be an extension of
-the published baseline and should not be done implicitly.
+## Remaining blockers
+
+1. The Remmerswaal--Veldman linked flower benchmark supplies level-set-based
+   exact curvature, not GHF curvature. It is therefore an oracle check and
+   cannot validate the operational baseline.
+2. The exact GHF fallback policies used for the article's flow results are not
+   published in its linked code. The published Popinet algorithm and later
+   Gerris/Basilisk implementation materially disagree as described above.
+3. The optimizer remains a transparent porting deviation: article-level
+   L-BFGS/More--Thuente, linked-code one-dimensional `brent_min`, and this
+   pinned SciPy `L-BFGS-B` path are not identical.
+4. Shared parabolic serialization and component-aware project metrics remain
+   outside this isolated write scope. No full project sweep should be launched
+   until that adapter is approved.
+5. No perturbed-grid result is supported. A future adaptation would require a
+   separate method name and is not part of PLVIRA.

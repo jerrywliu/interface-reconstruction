@@ -7,6 +7,7 @@ from main.algos.baselines.plvira import (
     parabolic_polygon_area,
     plvira_objective_and_gradient,
     reconstruct_plvira,
+    reconstruct_plvira_exact_curvature_oracle,
     solve_volume_shift,
 )
 
@@ -36,6 +37,27 @@ def _exact_fractions(polygons, angle, curvature, shift):
         ]
         for row in polygons
     ]
+
+
+def _exact_cartesian_grid(size, angle, curvature, shift):
+    center = size // 2
+    fractions = []
+    for row in range(size):
+        fraction_row = []
+        for column in range(size):
+            x = column - center
+            y = row - center
+            polygon = [
+                (x - 0.5, y - 0.5),
+                (x + 0.5, y - 0.5),
+                (x + 0.5, y + 0.5),
+                (x - 0.5, y + 0.5),
+            ]
+            fraction_row.append(
+                parabolic_polygon_area(polygon, (0.0, 0.0), angle, curvature, shift)
+            )
+        fractions.append(fraction_row)
+    return fractions
 
 
 def _angle_error(actual, expected):
@@ -95,22 +117,68 @@ def test_plvira_recovers_identifiable_parabola_from_exact_stencil():
     curvature = 0.2
     exact_shift = 0.07
     fractions = _exact_fractions(polygons, exact_angle, curvature, exact_shift)
-    reconstruction = reconstruct_plvira(
+    reconstruction = reconstruct_plvira_exact_curvature_oracle(
         polygons,
         fractions,
         curvature,
-        cell_widths=(1.0, 1.0, 1.0),
-        cell_heights=(1.0, 1.0, 1.0),
+        cell_size=1.0,
         gradient_tolerance=1.0e-11,
     )
     assert reconstruction.optimizer_success, reconstruction.optimizer_message
     assert _angle_error(reconstruction.angle, exact_angle) < 2.0e-7
     assert reconstruction.shift == pytest.approx(exact_shift, abs=2.0e-7)
     assert reconstruction.objective < 1.0e-13
+    assert reconstruction.curvature_source == "exact-curvature-oracle"
+    assert reconstruction.ghf_diagnostics is None
 
 
-def test_nonrectilinear_call_requires_explicit_lvira_initial_angle():
+def test_operational_plvira_uses_cartesian_ghf_curvature():
     polygons = _uniform_stencil()
+    curvature = 0.2
+    exact_shift = 0.07
+    grid = _exact_cartesian_grid(15, 0.0, curvature, exact_shift)
+    center = len(grid) // 2
+    fractions = [row[center - 1 : center + 2] for row in grid[center - 1 : center + 2]]
+    reconstruction = reconstruct_plvira(
+        polygons,
+        fractions,
+        cartesian_fractions=grid,
+        target_index=(center, center),
+        cell_size=1.0,
+        gradient_tolerance=1.0e-11,
+    )
+    assert reconstruction.optimizer_success, reconstruction.optimizer_message
+    assert reconstruction.curvature == pytest.approx(curvature, abs=2.0e-13)
+    assert _angle_error(reconstruction.angle, 0.0) < 2.0e-7
+    assert reconstruction.shift == pytest.approx(exact_shift, abs=2.0e-7)
+    assert reconstruction.objective < 1.0e-13
+    assert reconstruction.curvature_source == "cartesian-ghf"
+    assert reconstruction.ghf_diagnostics.method == "height_function"
+
+
+def test_operational_plvira_rejects_mismatched_local_and_ghf_fractions():
+    polygons = _uniform_stencil()
+    grid = _exact_cartesian_grid(15, 0.0, 0.2, 0.07)
+    center = len(grid) // 2
+    fractions = np.asarray(
+        [row[center - 1 : center + 2] for row in grid[center - 1 : center + 2]]
+    )
+    fractions[0, 1] += 1.0e-15
+    with pytest.raises(ValueError, match="exactly match"):
+        reconstruct_plvira(
+            polygons,
+            fractions.tolist(),
+            cartesian_fractions=grid,
+            target_index=(center, center),
+            cell_size=1.0,
+        )
+
+
+def test_oracle_mode_rejects_perturbed_cells():
+    polygons = _uniform_stencil()
+    polygons[1][1][0] = (-0.45, -0.5)
     fractions = np.full((3, 3), 0.5).tolist()
-    with pytest.raises(ValueError, match="initial_angle"):
-        reconstruct_plvira(polygons, fractions, curvature=0.0)
+    with pytest.raises(ValueError, match="Cartesian"):
+        reconstruct_plvira_exact_curvature_oracle(
+            polygons, fractions, 0.0, cell_size=1.0, initial_angle=0.0
+        )
