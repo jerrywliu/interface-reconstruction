@@ -1,0 +1,45 @@
+{
+  "benchmarks": [
+    "lines",
+    "squares",
+    "circles",
+    "ellipses",
+    "zalesak"
+  ],
+  "case_indices": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "curvature_metric": "unsigned midpoint curvature error |abs(kappa_quadratic)-abs(kappa_truth)| per mixed cell",
+  "geometry_error_metric": "sampled reconstruction-to-truth maximum with the same spacing",
+  "git_head_at_launch": "5ddc11723659ec9fad0f2fea8cc5592b5fa5047d",
+  "hausdorff_metric": "symmetric sampled point-cloud diagnostic with spacing min(h/128, 2.5e-3)",
+  "implementation_sha256": {
+    "experiments/baselines/project_benchmarks.py": "96af4d38bdc83aaf691b0087286deb393153977e1c26030f1f9af309fcc81ae2",
+    "experiments/baselines/project_smoke.py": "ec28e45619c70d36bd98f7844eae1ac4cdbc843a132c3550d16e5bb5f5d8e0f7",
+    "experiments/baselines/run_quasi_project_smoke.py": "3cd91f3b160a5d506b16f8f4b24326f4cd8d37d8ec7f943100efd75dafc7aca9",
+    "main/algos/baselines/external_method_adapters.py": "9cfb8026f7405fa387141bcec44b959f348fc2fd2043fef4240df0b6310c39df",
+    "main/algos/baselines/quasi.py": "6f5b7140400138e4550b2abfc0eaacdee6849be39a233ca29ddc70d3c830d058",
+    "main/algos/baselines/quasi_roots.py": "666f5b7d091f22bcfb8dcece80bd0d69ce611a7fc523be6ee1aa87532b268ad0"
+  },
+  "mesh": "uniform axis-aligned Cartesian",
+  "method": "QUASI",
+  "policy": {
+    "convergence_tolerance": 1e-11,
+    "fallback": "retain-area-preserving-quadratic",
+    "max_sweeps": 10,
+    "target_fraction_lower": 0.02,
+    "target_fraction_upper": 0.98
+  },
+  "resolutions": [
+    32,
+    64,
+    128
+  ],
+  "resume_policy": "completed benchmark/case/resolution keys in case_results.csv are skipped",
+  "study": "QUASI five-benchmark Cartesian mini resolution study",
+  "variant": "QUASI (frozen Cartesian port)"
+}

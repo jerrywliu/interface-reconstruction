@@ -1,0 +1,1368 @@
+{
+  "cells": [
+    {
+      "cell_index": [
+        13,
+        15
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "bulge": 0.030195952380844885,
+              "kind": "quadratic",
+              "metadata": {},
+              "p_left": [
+                42.55762191534678,
+                50.0
+              ],
+              "p_right": [
+                43.75,
+                48.70745579683963
+              ]
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "bulge": 0.030195952380844885,
+        "chord_length": 1.7585323465562852,
+        "conservative_fallback": false,
+        "curvature_midpoint": -0.07811564021442725,
+        "fallback_reasons": []
+      },
+      "exact_phase_area": 0.7352003179823896,
+      "polygon": [
+        [
+          40.625,
+          46.875
+        ],
+        [
+          43.75,
+          46.875
+        ],
+        [
+          43.75,
+          50.0
+        ],
+        [
+          40.625,
+          50.0
+        ]
+      ],
+      "source_method": "QUASI",
+      "source_variant": "QUASI (frozen Cartesian port)",
+      "status": "reconstructed",
+      "target_phase_area": 0.7352003179823896
+    },
+    {
+      "cell_index": [
+        13,
+        16
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "bulge": -1.050798431642059,
+              "kind": "quadratic",
+              "metadata": {},
+              "p_left": [
+                42.9174270444541,
+                53.125
+              ],
+              "p_right": [
+                42.55762191534678,
+                50.0
+              ]
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "bulge": -1.050798431642059,
+        "chord_length": 3.1456453600067404,
+        "conservative_fallback": false,
+        "curvature_midpoint": 0.8495518413155361,
+        "fallback_reasons": []
+      },
+      "exact_phase_area": 5.367612140842766,
+      "polygon": [
+        [
+          40.625,
+          50.0
+        ],
+        [
+          43.75,
+          50.0
+        ],
+        [
+          43.75,
+          53.125
+        ],
+        [
+          40.625,
+          53.125
+        ]
+      ],
+      "source_method": "QUASI",
+      "source_variant": "QUASI (frozen Cartesian port)",
+      "status": "reconstructed",
+      "target_phase_area": 5.367612140842766
+    },
+    {
+      "cell_index": [
+        13,
+        17
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "bulge": 0.02427220453195902,
+              "kind": "quadratic",
+              "metadata": {},
+              "p_left": [
+                43.75,
+                53.722289476477656
+              ],
+              "p_right": [
+                42.9174270444541,
+                53.125
+              ]
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "bulge": 0.02427220453195902,
+        "chord_length": 1.0246621126095108,
+        "conservative_fallback": false,
+        "curvature_midpoint": -0.18494298102432366,
+        "fallback_reasons": []
+      },
+      "exact_phase_area": 0.23206299345793013,
+      "polygon": [
+        [
+          40.625,
+          53.125
+        ],
+        [
+          43.75,
+          53.125
+        ],
+        [
+          43.75,
+          56.25
+        ],
+        [
+          40.625,
+          56.25
+        ]
+      ],
+      "source_method": "QUASI",
+      "source_variant": "QUASI (frozen Cartesian port)",
+      "status": "reconstructed",
+      "target_phase_area": 0.23206299345793013
+    },
+    {
+      "cell_index": [
+        14,
+        14
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "bulge": -0.02674608688553043,
+              "kind": "quadratic",
+              "metadata": {},
+              "p_left": [
+                45.230140640861876,
+                46.875
+              ],
+              "p_right": [
+                46.875,
+                45.02016091137085
+              ]
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "bulge": -0.02674608688553043,
+        "chord_length": 2.4791107994704253,
+        "conservative_fallback": false,
+        "curvature_midpoint": 0.03481435581388206,
+        "fallback_reasons": []
+      },
+      "exact_phase_area": 1.5696790592076013,
+      "polygon": [
+        [
+          43.75,
+          43.75
+        ],
+        [
+          46.875,
+          43.75
+        ],
+        [
+          46.875,
+          46.875
+        ],
+        [
+          43.75,
+          46.875
+        ]
+      ],
+      "source_method": "QUASI",
+      "source_variant": "QUASI (frozen Cartesian port)",
+      "status": "reconstructed",
+      "target_phase_area": 1.5696790592076013
+    },
+    {
+      "cell_index": [
+        14,
+        15
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "bulge": -0.0017103353315132044,
+              "kind": "quadratic",
+              "metadata": {},
+              "p_left": [
+                43.75,
+                48.70745579683963
+              ],
+              "p_right": [
+                45.230140640861876,
+                46.875
+              ]
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "bulge": -0.0017103353315132044,
+        "chord_length": 2.355570114452587,
+        "conservative_fallback": false,
+        "curvature_midpoint": 0.0024659211350159167,
+        "fallback_reasons": []
+      },
+      "exact_phase_area": 8.412164727785694,
+      "polygon": [
+        [
+          43.75,
+          46.875
+        ],
+        [
+          46.875,
+          46.875
+        ],
+        [
+          46.875,
+          50.0
+        ],
+        [
+          43.75,
+          50.0
+        ]
+      ],
+      "source_method": "QUASI",
+      "source_variant": "QUASI (frozen Cartesian port)",
+      "status": "reconstructed",
+      "target_phase_area": 8.412164727785694
+    },
+    {
+      "cell_index": [
+        14,
+        17
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "bulge": -0.014990169755692206,
+              "kind": "quadratic",
+              "metadata": {},
+              "p_left": [
+                46.74205087446826,
+                56.25
+              ],
+              "p_right": [
+                43.75,
+                53.722289476477656
+              ]
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "bulge": -0.014990169755692206,
+        "chord_length": 3.916846809122345,
+        "conservative_fallback": false,
+        "curvature_midpoint": 0.007816698580119982,
+        "fallback_reasons": []
+      },
+      "exact_phase_area": 6.023248557896977,
+      "polygon": [
+        [
+          43.75,
+          53.125
+        ],
+        [
+          46.875,
+          53.125
+        ],
+        [
+          46.875,
+          56.25
+        ],
+        [
+          43.75,
+          56.25
+        ]
+      ],
+      "source_method": "QUASI",
+      "source_variant": "QUASI (frozen Cartesian port)",
+      "status": "reconstructed",
+      "target_phase_area": 6.023248557896977
+    },
+    {
+      "cell_index": [
+        14,
+        18
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "bulge": 0.0009259366352704642,
+              "kind": "quadratic",
+              "metadata": {},
+              "p_left": [
+                46.875,
+                56.363660023991436
+              ],
+              "p_right": [
+                46.74205087446826,
+                56.25
+              ]
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "bulge": 0.0009259366352704642,
+        "chord_length": 0.1749116092012979,
+        "conservative_fallback": false,
+        "curvature_midpoint": -0.24212185014801912,
+        "fallback_reasons": []
+      },
+      "exact_phase_area": 0.00744752902073742,
+      "polygon": [
+        [
+          43.75,
+          56.25
+        ],
+        [
+          46.875,
+          56.25
+        ],
+        [
+          46.875,
+          59.375
+        ],
+        [
+          43.75,
+          59.375
+        ]
+      ],
+      "source_method": "QUASI",
+      "source_variant": "QUASI (frozen Cartesian port)",
+      "status": "reconstructed",
+      "target_phase_area": 0.00744752902073742
+    },
+    {
+      "cell_index": [
+        15,
+        13
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "bulge": -0.5060248516304986,
+              "kind": "quadratic",
+              "metadata": {},
+              "p_left": [
+                47.68139423513015,
+                43.75
+              ],
+              "p_right": [
+                50.0,
+                42.243688408415075
+              ]
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "bulge": -0.5060248516304986,
+        "chord_length": 2.7649425498246463,
+        "conservative_fallback": false,
+        "curvature_midpoint": 0.5295288290827884,
+        "fallback_reasons": []
+      },
+      "exact_phase_area": 2.679024465664156,
+      "polygon": [
+        [
+          46.875,
+          40.625
+        ],
+        [
+          50.0,
+          40.625
+        ],
+        [
+          50.0,
+          43.75
+        ],
+        [
+          46.875,
+          43.75
+        ]
+      ],
+      "source_method": "QUASI",
+      "source_variant": "QUASI (frozen Cartesian port)",
+      "status": "reconstructed",
+      "target_phase_area": 2.679024465664156
+    },
+    {
+      "cell_index": [
+        15,
+        14
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "bulge": 0.07739339878409796,
+              "kind": "quadratic",
+              "metadata": {},
+              "p_left": [
+                46.875,
+                45.02016091137085
+              ],
+              "p_right": [
+                47.68139423513015,
+                43.75
+              ]
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "bulge": 0.07739339878409796,
+        "chord_length": 1.5045199909690699,
+        "conservative_fallback": false,
+        "curvature_midpoint": -0.2735256010303445,
+        "fallback_reasons": []
+      },
+      "exact_phase_area": 9.175873171265039,
+      "polygon": [
+        [
+          46.875,
+          43.75
+        ],
+        [
+          50.0,
+          43.75
+        ],
+        [
+          50.0,
+          46.875
+        ],
+        [
+          46.875,
+          46.875
+        ]
+      ],
+      "source_method": "QUASI",
+      "source_variant": "QUASI (frozen Cartesian port)",
+      "status": "reconstructed",
+      "target_phase_area": 9.175873171265039
+    },
+    {
+      "cell_index": [
+        15,
+        18
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "bulge": -0.04911020670764467,
+              "kind": "quadratic",
+              "metadata": {},
+              "p_left": [
+                50.0,
+                58.88895784783714
+              ],
+              "p_right": [
+                46.875,
+                56.363660023991436
+              ]
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "bulge": -0.04911020670764467,
+        "chord_length": 4.01780463675374,
+        "conservative_fallback": false,
+        "curvature_midpoint": 0.024337956909259877,
+        "fallback_reasons": []
+      },
+      "exact_phase_area": 4.432508902213158,
+      "polygon": [
+        [
+          46.875,
+          56.25
+        ],
+        [
+          50.0,
+          56.25
+        ],
+        [
+          50.0,
+          59.375
+        ],
+        [
+          46.875,
+          59.375
+        ]
+      ],
+      "source_method": "QUASI",
+      "source_variant": "QUASI (frozen Cartesian port)",
+      "status": "reconstructed",
+      "target_phase_area": 4.432508902213158
+    },
+    {
+      "cell_index": [
+        16,
+        13
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "bulge": -0.3777908546918058,
+              "kind": "quadratic",
+              "metadata": {},
+              "p_left": [
+                50.0,
+                42.243688408415075
+              ],
+              "p_right": [
+                52.667555060183766,
+                43.75
+              ]
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "bulge": -0.3777908546918058,
+        "chord_length": 3.0634661104792924,
+        "conservative_fallback": false,
+        "curvature_midpoint": 0.32204404057762076,
+        "fallback_reasons": []
+      },
+      "exact_phase_area": 2.780650874304456,
+      "polygon": [
+        [
+          50.0,
+          40.625
+        ],
+        [
+          53.125,
+          40.625
+        ],
+        [
+          53.125,
+          43.75
+        ],
+        [
+          50.0,
+          43.75
+        ]
+      ],
+      "source_method": "QUASI",
+      "source_variant": "QUASI (frozen Cartesian port)",
+      "status": "reconstructed",
+      "target_phase_area": 2.780650874304456
+    },
+    {
+      "cell_index": [
+        16,
+        14
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "bulge": 0.024744003675675634,
+              "kind": "quadratic",
+              "metadata": {},
+              "p_left": [
+                52.667555060183766,
+                43.75
+              ],
+              "p_right": [
+                53.125,
+                44.24699268785802
+              ]
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "bulge": 0.024744003675675634,
+        "chord_length": 0.6754684335687463,
+        "conservative_fallback": true,
+        "curvature_midpoint": -0.4338602301540107,
+        "fallback_reasons": [
+          "Section 2.5 correction retained the area-preserving local quadratic in (16, 14) (no-common-edge-endpoint)"
+        ]
+      },
+      "exact_phase_area": 9.640809075971674,
+      "polygon": [
+        [
+          50.0,
+          43.75
+        ],
+        [
+          53.125,
+          43.75
+        ],
+        [
+          53.125,
+          46.875
+        ],
+        [
+          50.0,
+          46.875
+        ]
+      ],
+      "source_method": "QUASI",
+      "source_variant": "QUASI (frozen Cartesian port)",
+      "status": "paper_fallback",
+      "target_phase_area": 9.640809075971674
+    },
+    {
+      "cell_index": [
+        16,
+        18
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "bulge": -0.8138245086214899,
+              "kind": "quadratic",
+              "metadata": {},
+              "p_left": [
+                53.125,
+                58.359176328329546
+              ],
+              "p_right": [
+                50.0,
+                58.88895784783714
+              ]
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "bulge": -0.8138245086214899,
+        "chord_length": 3.169588846902982,
+        "conservative_fallback": false,
+        "curvature_midpoint": 0.6480595152753167,
+        "fallback_reasons": []
+      },
+      "exact_phase_area": 9.138619040835692,
+      "polygon": [
+        [
+          50.0,
+          56.25
+        ],
+        [
+          53.125,
+          56.25
+        ],
+        [
+          53.125,
+          59.375
+        ],
+        [
+          50.0,
+          59.375
+        ]
+      ],
+      "source_method": "QUASI",
+      "source_variant": "QUASI (frozen Cartesian port)",
+      "status": "reconstructed",
+      "target_phase_area": 9.138619040835692
+    },
+    {
+      "cell_index": [
+        16,
+        19
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "bulge": -2.4725397157216474e-11,
+              "kind": "quadratic",
+              "metadata": {},
+              "p_left": [
+                53.125,
+                59.4265261356213
+              ],
+              "p_right": [
+                50.0,
+                59.78079664576911
+              ]
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "bulge": -2.4725397157216474e-11,
+        "chord_length": 3.145017105575165,
+        "conservative_fallback": true,
+        "curvature_midpoint": 1.999803110217256e-11,
+        "fallback_reasons": [
+          "Section 2.5 correction retained the area-preserving local quadratic in (16, 19) (no-common-edge-endpoint)"
+        ]
+      },
+      "exact_phase_area": 0.7145668459745593,
+      "polygon": [
+        [
+          50.0,
+          59.375
+        ],
+        [
+          53.125,
+          59.375
+        ],
+        [
+          53.125,
+          62.5
+        ],
+        [
+          50.0,
+          62.5
+        ]
+      ],
+      "source_method": "QUASI",
+      "source_variant": "QUASI (frozen Cartesian port)",
+      "status": "paper_fallback",
+      "target_phase_area": 0.7145668459745593
+    },
+    {
+      "cell_index": [
+        17,
+        14
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "bulge": 0.00012694339788070342,
+              "kind": "quadratic",
+              "metadata": {},
+              "p_left": [
+                53.125,
+                44.24699268785802
+              ],
+              "p_right": [
+                56.25,
+                46.7802152613099
+              ]
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "bulge": 0.00012694339788070342,
+        "chord_length": 4.022790276244359,
+        "conservative_fallback": false,
+        "curvature_midpoint": -6.275456484901578e-05,
+        "fallback_reasons": []
+      },
+      "exact_phase_area": 4.254022134980687,
+      "polygon": [
+        [
+          53.125,
+          43.75
+        ],
+        [
+          56.25,
+          43.75
+        ],
+        [
+          56.25,
+          46.875
+        ],
+        [
+          53.125,
+          46.875
+        ]
+      ],
+      "source_method": "QUASI",
+      "source_variant": "QUASI (frozen Cartesian port)",
+      "status": "reconstructed",
+      "target_phase_area": 4.254022134980687
+    },
+    {
+      "cell_index": [
+        17,
+        17
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "bulge": -0.011559485612464672,
+              "kind": "quadratic",
+              "metadata": {},
+              "p_left": [
+                56.25,
+                54.51146138411536
+              ],
+              "p_right": [
+                54.77529460559649,
+                56.25
+              ]
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "bulge": -0.011559485612464672,
+        "chord_length": 2.2797527320314575,
+        "conservative_fallback": false,
+        "curvature_midpoint": 0.0177931568063829,
+        "fallback_reasons": []
+      },
+      "exact_phase_area": 8.501277374992014,
+      "polygon": [
+        [
+          53.125,
+          53.125
+        ],
+        [
+          56.25,
+          53.125
+        ],
+        [
+          56.25,
+          56.25
+        ],
+        [
+          53.125,
+          56.25
+        ]
+      ],
+      "source_method": "QUASI",
+      "source_variant": "QUASI (frozen Cartesian port)",
+      "status": "reconstructed",
+      "target_phase_area": 8.501277374992014
+    },
+    {
+      "cell_index": [
+        17,
+        18
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "bulge": 0.04009445045942371,
+              "kind": "quadratic",
+              "metadata": {},
+              "p_left": [
+                54.77529460559649,
+                56.25
+              ],
+              "p_right": [
+                53.125,
+                58.359176328329546
+              ]
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "bulge": 0.04009445045942371,
+        "chord_length": 2.6780771216017265,
+        "conservative_fallback": false,
+        "curvature_midpoint": -0.04472270809757519,
+        "fallback_reasons": []
+      },
+      "exact_phase_area": 1.6687971381279567,
+      "polygon": [
+        [
+          53.125,
+          56.25
+        ],
+        [
+          56.25,
+          56.25
+        ],
+        [
+          56.25,
+          59.375
+        ],
+        [
+          53.125,
+          59.375
+        ]
+      ],
+      "source_method": "QUASI",
+      "source_variant": "QUASI (frozen Cartesian port)",
+      "status": "reconstructed",
+      "target_phase_area": 1.6687971381279567
+    },
+    {
+      "cell_index": [
+        18,
+        14
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "bulge": 0.06426707413200258,
+              "kind": "quadratic",
+              "metadata": {},
+              "p_left": [
+                56.25,
+                46.7802152613099
+              ],
+              "p_right": [
+                56.72809632073266,
+                46.875
+              ]
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "bulge": 0.06426707413200258,
+        "chord_length": 0.4874015168079169,
+        "conservative_fallback": false,
+        "curvature_midpoint": -2.164236726292359,
+        "fallback_reasons": []
+      },
+      "exact_phase_area": 0.0017755378062247473,
+      "polygon": [
+        [
+          56.25,
+          43.75
+        ],
+        [
+          59.375,
+          43.75
+        ],
+        [
+          59.375,
+          46.875
+        ],
+        [
+          56.25,
+          46.875
+        ]
+      ],
+      "source_method": "QUASI",
+      "source_variant": "QUASI (frozen Cartesian port)",
+      "status": "reconstructed",
+      "target_phase_area": 0.0017755378062247475
+    },
+    {
+      "cell_index": [
+        18,
+        15
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "bulge": 0.1475816726862461,
+              "kind": "quadratic",
+              "metadata": {},
+              "p_left": [
+                56.72809632073266,
+                46.875
+              ],
+              "p_right": [
+                59.375,
+                49.55337588569131
+              ]
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "bulge": 0.1475816726862461,
+        "chord_length": 3.765607052305336,
+        "conservative_fallback": true,
+        "curvature_midpoint": -0.08326306966326263,
+        "fallback_reasons": [
+          "Section 2.5 fallback retained a conservative local quadratic for multiply claimed endpoint ((18, 15), (18, 16))"
+        ]
+      },
+      "exact_phase_area": 5.850433781879019,
+      "polygon": [
+        [
+          56.25,
+          46.875
+        ],
+        [
+          59.375,
+          46.875
+        ],
+        [
+          59.375,
+          50.0
+        ],
+        [
+          56.25,
+          50.0
+        ]
+      ],
+      "source_method": "QUASI",
+      "source_variant": "QUASI (frozen Cartesian port)",
+      "status": "paper_fallback",
+      "target_phase_area": 5.850433781879019
+    },
+    {
+      "cell_index": [
+        18,
+        16
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "bulge": -0.040348154974172656,
+              "kind": "quadratic",
+              "metadata": {},
+              "p_left": [
+                59.375,
+                50.66959002586428
+              ],
+              "p_right": [
+                57.42475362668277,
+                53.125
+              ]
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "bulge": -0.040348154974172656,
+        "chord_length": 3.135681593804156,
+        "conservative_fallback": true,
+        "curvature_midpoint": 0.03282840281991938,
+        "fallback_reasons": [
+          "Section 2.5 fallback retained a conservative local quadratic for multiply claimed endpoint ((18, 15), (18, 16))"
+        ]
+      },
+      "exact_phase_area": 7.455643779398316,
+      "polygon": [
+        [
+          56.25,
+          50.0
+        ],
+        [
+          59.375,
+          50.0
+        ],
+        [
+          59.375,
+          53.125
+        ],
+        [
+          56.25,
+          53.125
+        ]
+      ],
+      "source_method": "QUASI",
+      "source_variant": "QUASI (frozen Cartesian port)",
+      "status": "paper_fallback",
+      "target_phase_area": 7.455643779398316
+    },
+    {
+      "cell_index": [
+        18,
+        17
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "bulge": 0.008965562263692554,
+              "kind": "quadratic",
+              "metadata": {},
+              "p_left": [
+                57.42475362668277,
+                53.125
+              ],
+              "p_right": [
+                56.25,
+                54.51146138411536
+              ]
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "bulge": 0.008965562263692554,
+        "chord_length": 1.8172290040188654,
+        "conservative_fallback": false,
+        "curvature_midpoint": -0.021719418740182447,
+        "fallback_reasons": []
+      },
+      "exact_phase_area": 0.8035136164339747,
+      "polygon": [
+        [
+          56.25,
+          53.125
+        ],
+        [
+          59.375,
+          53.125
+        ],
+        [
+          59.375,
+          56.25
+        ],
+        [
+          56.25,
+          56.25
+        ]
+      ],
+      "source_method": "QUASI",
+      "source_variant": "QUASI (frozen Cartesian port)",
+      "status": "reconstructed",
+      "target_phase_area": 0.8035136164339747
+    },
+    {
+      "cell_index": [
+        19,
+        15
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "bulge": 0.11212914021464944,
+              "kind": "quadratic",
+              "metadata": {},
+              "p_left": [
+                59.375,
+                49.55337588569131
+              ],
+              "p_right": [
+                60.699318736464186,
+                50.0
+              ]
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "bulge": 0.11212914021464944,
+        "chord_length": 1.3976026671526207,
+        "conservative_fallback": false,
+        "curvature_midpoint": -0.45924140560258736,
+        "fallback_reasons": []
+      },
+      "exact_phase_area": 0.19126168441471236,
+      "polygon": [
+        [
+          59.375,
+          46.875
+        ],
+        [
+          62.5,
+          46.875
+        ],
+        [
+          62.5,
+          50.0
+        ],
+        [
+          59.375,
+          50.0
+        ]
+      ],
+      "source_method": "QUASI",
+      "source_variant": "QUASI (frozen Cartesian port)",
+      "status": "reconstructed",
+      "target_phase_area": 0.19126168441471236
+    },
+    {
+      "cell_index": [
+        19,
+        16
+      ],
+      "components": [
+        {
+          "closed": false,
+          "metadata": {},
+          "primitives": [
+            {
+              "bulge": 0.19449359651506062,
+              "kind": "quadratic",
+              "metadata": {},
+              "p_left": [
+                60.699318736464186,
+                50.0
+              ],
+              "p_right": [
+                59.375,
+                50.66959002586428
+              ]
+            }
+          ]
+        }
+      ],
+      "diagnostics": {
+        "bulge": 0.19449359651506062,
+        "chord_length": 1.4839713334451665,
+        "conservative_fallback": false,
+        "curvature_midpoint": -0.7065522294652226,
+        "fallback_reasons": []
+      },
+      "exact_phase_area": 0.2509600273228898,
+      "polygon": [
+        [
+          59.375,
+          50.0
+        ],
+        [
+          62.5,
+          50.0
+        ],
+        [
+          62.5,
+          53.125
+        ],
+        [
+          59.375,
+          53.125
+        ]
+      ],
+      "source_method": "QUASI",
+      "source_variant": "QUASI (frozen Cartesian port)",
+      "status": "reconstructed",
+      "target_phase_area": 0.2509600273228898
+    }
+  ],
+  "metadata": {
+    "config": {
+      "benchmark": "squares",
+      "case_index": 4,
+      "cell_size": 3.125,
+      "cells_per_side": 32
+    },
+    "mesh_class": "axis_aligned_cartesian",
+    "mesh_shape": [
+      32,
+      32
+    ],
+    "quasi": {
+      "c1_misses": 10,
+      "c1_updates": 210,
+      "converged": false,
+      "curvature_updates": 0,
+      "joins": 22,
+      "policy": {
+        "boundary": "retain open physical-boundary endpoints",
+        "convergence_tolerance": 1e-11,
+        "fallback": "retain-area-preserving-quadratic",
+        "max_sweeps": 10,
+        "multiple_root": "least displacement from the current predictor",
+        "target_neighbor": "triggering eligible neighbor, then nearest eligible 8-neighbor; tangent alignment and lexicographic index break ties",
+        "update_order": "lexicographic Gauss-Seidel"
+      },
+      "sweeps_completed": 10,
+      "unresolved": [
+        "Section 2.5 correction retained the area-preserving local quadratic in (16, 14) (no-common-edge-endpoint)",
+        "Section 2.5 correction retained the area-preserving local quadratic in (16, 19) (no-common-edge-endpoint)",
+        "Section 2.5 fallback retained a conservative local quadratic for multiply claimed endpoint ((18, 15), (18, 16))"
+      ],
+      "vertex_jumps": 0
+    },
+    "status_counts": {
+      "paper_fallback": 4,
+      "reconstructed": 19,
+      "unresolved": 0,
+      "unsupported": 0
+    }
+  },
+  "schema_version": 1,
+  "source_method": "QUASI",
+  "source_variant": "QUASI (frozen Cartesian port)"
+}

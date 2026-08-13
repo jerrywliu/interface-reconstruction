@@ -14,7 +14,7 @@ MPLBACKEND=Agg PYTHONPATH=. python -m \
   experiments.baselines.run_quasi_project_smoke \
   --benchmarks lines,squares,circles,ellipses,zalesak \
   --resolutions 32,64,128 --cases 0,1,2,3,4 \
-  --output experiments/baselines/results/quasi_project_smoke_20260813_final
+  --output experiments/baselines/results/quasi_project_smoke_20260813_qa_fixed
 ```
 
 The runner records native quadratic coefficients, the exact owning-cell
@@ -24,15 +24,18 @@ every conservative fallback event.
 
 ## Completion and conservation
 
-- Completed `75/75` benchmark/case/resolution settings in `107.6 s` summed
+- Completed `75/75` benchmark/case/resolution settings in `105.5 s` summed
   reconstruction time.
-- Reconstructed all `7,375` mixed cells as native quadratics. There were no
-  unsupported cells and no cells without geometry.
+- Accounted for all `7,380` canonical mixed cells. QUASI returned `7,375`
+  native quadratics; the five near-pure cells excluded by its frozen `1e-6`
+  mixed-cell threshold are explicit unresolved records rather than omitted
+  rows. There were no unsupported cells.
 - `159` cells (`2.16%`) were explicitly classified as the paper-port's
   conservative local-quadratic fallback, arising from `131` unresolved
   correction events.
-- The maximum absolute owning-cell area residual was `8.88e-16`.
-- The reconstructed interfaces had zero measured shared-edge gap. `37`
+- The maximum absolute owning-cell area residual among reconstructed cells was
+  `8.88e-16`.
+- The active reconstructed interfaces had zero measured shared-edge gap. `37`
   unmatched crossing diagnostics remain and are retained case by case.
 
 ## Numerical signal
@@ -80,7 +83,8 @@ corners, particularly Zalesak (`94` fallback cells) and squares (`42`).
   exact conservation, unsigned curvature error, and fallback attribution.
 - `geometry/*.json`: exact cell polygons and native quadratic primitives.
 - `summary.csv` and `summary.json`: five-case resolution aggregates.
-- `quasi_all_benchmarks_summary.pdf`: vector-only all-benchmark summary.
+- `quasi_all_benchmarks_summary.pdf`: vector-only all-benchmark summary. Its
+  coverage annotation includes the five unresolved cells.
 - `run_manifest.json`: source commit, implementation checksums, frozen policy,
   cases, resolutions, and metric definitions.
 
