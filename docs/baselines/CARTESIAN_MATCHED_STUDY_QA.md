@@ -35,8 +35,9 @@ pinned to its launch code through its manifest.
 The same audit found a QUASI-specific accounting defect: five canonical mixed
 cells had no returned facet and were absent from the external result instead of
 being recorded as unresolved. The runner now enumerates the mesh's mixed cells
-and creates an explicit unresolved record for every missing facet. The initial
-QUASI output must be rerun under this correction before use.
+and creates an explicit unresolved record for every missing facet. A corrected
+replay accounts for all 7,380 canonical mixed cells and marks those five cells
+as unresolved.
 
 ## Canonical benchmark fixture
 
@@ -215,16 +216,16 @@ every comparison.
 The frozen port now includes the Section 2.5-style correction, algebraic root
 enumeration, deterministic Gauss--Seidel order, ten-sweep cap, and conservative
 fallback. These are documented best-judgment decisions where the article is
-ambiguous. The focused kernel tests pass, and an initial 75-row smoke
-completed. That output reports 7,375 cells, while the canonical fixture
-contains 7,380 mixed cells. The five omitted facets occur in line case 2 at
-`N=64`, square case 2 at `N=128`, ellipse case 3 at `N=128`, Zalesak case 0 at
-`N=64`, and Zalesak case 3 at `N=128`. The corrected runner records them as
-unresolved.
+ambiguous. The focused kernel tests pass, and the corrected 75-row smoke
+accounts for all 7,380 canonical mixed cells: 7,216 reconstructed, 159 retained
+as conservative paper fallbacks, and five explicitly unresolved. The five
+unresolved facets occur in line case 2 at `N=64`, square case 2 at `N=128`,
+ellipse case 3 at `N=128`, Zalesak case 0 at `N=64`, and Zalesak case 3 at
+`N=128`.
 
 More importantly, none of the 75 cases satisfies the frozen `1e-11`
 endpoint-displacement convergence criterion before the ten-sweep cap. The
-initial output contains 131 reported fallback events and marks 159 involved
+corrected output contains 131 reported fallback events and marks 159 involved
 cells as conservative fallbacks. Exact per-cell area residuals are small and
 shared-edge matched gaps are zero, but straight-line geometry error remains
 large and only first-order-like (`1.80`, `0.90`, `0.45`). These signals make
@@ -252,10 +253,10 @@ aggregation code and a new output directory.
 ## Gates for the five-case matched run
 
 1. Keep the canonical fixture and Cartesian indexing unchanged.
-2. Regenerate PCIC summaries under the method/variant and non-finite accounting
-   fix; retain both corrections as separate variants.
-3. Rerun QUASI under explicit missing-facet accounting, then diagnose why all
-   cases exhaust the ten-sweep cap before considering a full 25-case run.
+2. PCIC summaries have been regenerated under the method/variant and non-finite
+   accounting fix; retain both corrections as separate diagnostic variants.
+3. QUASI has been rerun with explicit missing-facet accounting; diagnose why
+   all cases exhaust the ten-sweep cap before considering a full 25-case run.
 4. Replace the point-cloud distance with a native, partition-invariant metric
    before making paper comparisons or fitting rates.
 5. Add normalized conservation residual and active-edge coverage.
