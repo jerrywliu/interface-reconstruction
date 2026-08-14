@@ -4,6 +4,7 @@ import pytest
 
 from experiments.baselines.run_ellipse_circular_variant_metrics import (
     VARIANTS,
+    _manifest_case_indices,
     build_reconstruction_command,
     compare_native_geometry,
     signed_arc_diagnostics,
@@ -59,6 +60,12 @@ def test_matched_commands_keep_exact_variant_contract():
         ]
         == "0.64"
     )
+
+
+def test_manifest_case_subset_accepts_driver_and_json_encodings():
+    expected = (0, 1, 2, 3, 4)
+    assert _manifest_case_indices("0,1,2,3,4") == expected
+    assert _manifest_case_indices([0, 1, 2, 3, 4]) == expected
 
 
 def test_signed_arc_diagnostics_preserve_concavity_information():

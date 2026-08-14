@@ -90,6 +90,14 @@ def _parse_ints(raw: str) -> tuple[int, ...]:
     return tuple(int(item) for item in raw.split(",") if item.strip())
 
 
+def _manifest_case_indices(raw: Any) -> tuple[int, ...]:
+    if raw is None:
+        return ()
+    if isinstance(raw, str):
+        return _parse_ints(raw)
+    return tuple(int(value) for value in raw)
+
+
 def _run_name(prefix: str, variant_key: str, resolution: int) -> str:
     return f"{prefix}_{variant_key}_n{resolution}"
 
@@ -194,7 +202,7 @@ def _validate_run_manifest(
         abs_tol=1.0e-15,
     ):
         raise ValueError(f"{run_dir.name}: resolution does not encode N={resolution}")
-    if tuple(parameters.get("case_indices") or ()) != tuple(case_indices):
+    if _manifest_case_indices(parameters.get("case_indices")) != tuple(case_indices):
         raise ValueError(f"{run_dir.name}: case-index subset differs")
     return manifest
 
