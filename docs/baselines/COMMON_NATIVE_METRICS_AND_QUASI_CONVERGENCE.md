@@ -98,8 +98,8 @@ Two cases stop by displacement while retaining C1 mismatches of `7.9e-2` and
 `6.0e-3`. A missing root produces zero displacement, so displacement alone is
 not a valid continuity convergence test for this port.
 
-Root-branch switching is transient: all 88 observed branch changes occur before
-sweep 30. Root misses persist instead. There are 4,873 misses across the study,
+Root-branch switching is transient: all 88 observed branch changes occur by
+sweep 16. Root misses persist instead. There are 4,873 misses across the study,
 including 3,419 at sweep 30 or later. Exact local area conservation remains
 intact throughout, with maximum residual `4.44e-16`.
 
@@ -111,14 +111,46 @@ in each case retains a nonzero attainable mismatch; the largest per-case minima
 range from about `1.9e-3` to `2.9e-1`. This is not explained by too few sweeps or
 late root-branch switching.
 
+## Source fidelity and root policy
+
+The paper's Section 2.4 parameterizes a shared endpoint by an edge coordinate
+`alpha`. Re-fitting both neighboring parabolas to preserve their respective
+cell volumes and equating their endpoint slopes gives the cubic in Eq. (16).
+The paper says that the cubic is solved directly and that the correction is
+iterated, but it does not specify which in-edge root to select when several are
+admissible, what to do when no root lies in `0 <= alpha <= 1`, whether pair
+updates are simultaneous or in-place, their ordering, or a numerical stopping
+criterion.
+
+The frozen port enumerates and verifies every admissible real root, chooses the
+one nearest the current endpoint, and applies joins in lexicographic in-place
+Gauss--Seidel order. A recorded root switch means only that the selected root's
+ordinal in the sorted admissible-root list changed since that join's previous
+successful update. It is therefore a policy diagnostic, not proof that a
+mathematically continuous root branch crossed another. Multiple admissible
+roots are common (`63,038/172,526` successful updates), but selected-root
+switches are rare and early.
+
+Section 2.5 is a separate curvature correction for endpoints that could not be
+connected during the earlier continuity stage or that lie at a boundary. The
+paper says that this correction is used iteratively in conjunction with Eq.
+(16), but it does not prescribe the schedule or the selection among eligible
+neighboring cells. The frozen port applies this correction once before the C1
+sweeps. This is an additional fidelity uncertainty, distinct from the
+persistent no-root events observed for the Section 2.4 cubic itself.
+
 ## Recommendation
 
 Retain QUASI as a qualified diagnostic prototype. Increasing the sweep count or
 relaxing `1e-11` alone is not enough: the one-parameter, area-preserving C1 update
 can have no verified root, and the displacement stop can report convergence in
-that state. Before using QUASI in a manuscript comparison, reconcile the
-Section 2.5 correction, no-root policy, and convergence criterion with an author
-implementation or author guidance.
+that state. At a frozen no-root state, moving only one shared endpoint while
+preserving both cell volumes and holding the other endpoints fixed cannot
+achieve exact tangent continuity. This is a limitation of that pairwise update,
+but not yet evidence that every faithful QUASI implementation reaches the same
+state. Before using QUASI in a manuscript comparison, reconcile the Section 2.4
+multiple-root and no-root policies, update ordering, Section 2.5 schedule, and
+convergence criterion with an author implementation or author guidance.
 
 PLVIRA remains the strongest operational higher-order baseline in the current
 ports. PCIC remains usable only with explicit missing-interval/status reporting.
