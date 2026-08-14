@@ -1,9 +1,11 @@
 import copy
+import math
 
 import pytest
 
 from experiments.baselines.run_ellipse_circular_variant_metrics import (
     VARIANTS,
+    _float_or_nan,
     _manifest_case_indices,
     build_reconstruction_command,
     compare_native_geometry,
@@ -66,6 +68,11 @@ def test_manifest_case_subset_accepts_driver_and_json_encodings():
     expected = (0, 1, 2, 3, 4)
     assert _manifest_case_indices("0,1,2,3,4") == expected
     assert _manifest_case_indices([0, 1, 2, 3, 4]) == expected
+
+
+def test_optional_blank_static_metric_is_preserved_as_nan():
+    assert _float_or_nan(1.25) == pytest.approx(1.25)
+    assert math.isnan(_float_or_nan(""))
 
 
 def test_signed_arc_diagnostics_preserve_concavity_information():

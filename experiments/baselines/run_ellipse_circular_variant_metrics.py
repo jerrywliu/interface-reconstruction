@@ -98,6 +98,10 @@ def _manifest_case_indices(raw: Any) -> tuple[int, ...]:
     return tuple(int(value) for value in raw)
 
 
+def _float_or_nan(raw: Any) -> float:
+    return float(raw) if raw not in (None, "") else math.nan
+
+
 def _run_name(prefix: str, variant_key: str, resolution: int) -> str:
     return f"{prefix}_{variant_key}_n{resolution}"
 
@@ -362,7 +366,9 @@ def _evaluate_case(
         "geometric_curvature_reconstructed_length": curvature["reconstructed_length"],
         "geometric_curvature_quadrature_samples": curvature["quadrature_samples"],
         "production_facet_gap": float(diagnostics["facet_gap"]),
-        "production_global_relative_area_error": float(diagnostics["area_error"]),
+        "production_global_relative_area_error": _float_or_nan(
+            diagnostics["area_error"]
+        ),
     }
 
 
