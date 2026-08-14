@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import ProcessPoolExecutor, as_completed
+import csv
 import json
 import math
 from pathlib import Path
@@ -18,6 +19,7 @@ from experiments.baselines.project_benchmarks import (
     canonical_benchmark_cases,
 )
 from experiments.baselines.project_smoke import write_csv, write_json
+from experiments.plotting import add_convergence_order_triangle
 from main.algos.baselines.external_geometry import ExternalBaselineResult
 from main.algos.baselines.external_metrics import (
     directed_hausdorff_external,
@@ -29,6 +31,12 @@ DEFAULT_INPUTS = (
     Path("experiments/baselines/results/plvira_project_smoke_20260813_final"),
     Path("experiments/baselines/results/pcic_project_smoke_20260813_final"),
     Path("experiments/baselines/results/quasi_project_smoke_20260813_qa_fixed"),
+)
+DEFAULT_SUPPLEMENTAL_CASE_RESULTS = (
+    Path(
+        "experiments/baselines/results/"
+        "graph_circular_ellipse_common_metrics_20260814/case_results.csv"
+    ),
 )
 SMOOTH_BENCHMARKS = {"circles", "ellipses"}
 CASE_FIELDS = (
@@ -210,17 +218,57 @@ def _label(method: str, variant: str) -> str:
             return "PCIC center translation"
         if "radius adjustment" in variant:
             return "PCIC radius adjustment"
+    if method == "Ours" and variant == "graph-coordinated circular":
+        return "Ours (circular)"
     return method
+
+
+def _supplemental_case_rows(paths: Iterable[Path]) -> list[Dict[str, Any]]:
+    rows: list[Dict[str, Any]] = []
+    for path in paths:
+        if not path.exists():
+            continue
+        with path.open(newline="", encoding="utf-8") as stream:
+            for source in csv.DictReader(stream):
+                row = dict(source)
+                row.setdefault("geometry_file", row.get("source_run", str(path)))
+                row.setdefault("metric_status", "complete")
+                rows.append(row)
+    return rows
+
+
+def _curve_styles(
+    summary: Sequence[Mapping[str, Any]],
+) -> list[tuple[str, str, Dict[str, Any]]]:
+    curves = sorted({(str(row["method"]), str(row["variant"])) for row in summary})
+    markers = ("o", "s", "^", "D", "P", "X")
+    colors = plt.get_cmap("tab10").colors
+    return [
+        (
+            method,
+            variant,
+            {"marker": markers[index % len(markers)], "color": colors[index]},
+        )
+        for index, (method, variant) in enumerate(curves)
+    ]
+
+
+def _unique_legend_entries(axes: Iterable[Any]) -> tuple[list[Any], list[str]]:
+    entries: Dict[str, Any] = {}
+    for axis in axes:
+        handles, labels = axis.get_legend_handles_labels()
+        for handle, label in zip(handles, labels):
+            entries.setdefault(label, handle)
+    return list(entries.values()), list(entries)
 
 
 def _plot_geometry(summary: Sequence[Mapping[str, Any]], path: Path) -> None:
     plt.rcParams.update({"pdf.fonttype": 42, "ps.fonttype": 42, "font.size": 8})
     fig, axes = plt.subplots(3, 2, figsize=(8.0, 8.6), sharex=True)
     axes = axes.ravel()
-    styles = ("o", "s", "^", "D")
-    curves = sorted({(row["method"], row["variant"]) for row in summary})
+    curves = _curve_styles(summary)
     for axis, benchmark in zip(axes, DEFAULT_BENCHMARKS):
-        for (method, variant), marker in zip(curves, styles):
+        for method, variant, style in curves:
             rows = sorted(
                 (
                     row
@@ -236,7 +284,7 @@ def _plot_geometry(summary: Sequence[Mapping[str, Any]], path: Path) -> None:
             axis.plot(
                 [row["cells_per_side"] for row in rows],
                 [row["native_symmetric_hausdorff_median"] for row in rows],
-                marker=marker,
+                **style,
                 label=_label(method, variant),
             )
         axis.set_title(benchmark.capitalize())
@@ -244,8 +292,10 @@ def _plot_geometry(summary: Sequence[Mapping[str, Any]], path: Path) -> None:
         axis.set_yscale("log")
         axis.set_xticks((32, 64, 128), ("32", "64", "128"))
         axis.grid(True, which="both", alpha=0.25)
+        add_convergence_order_triangle(axis, 1.0)
     axes[5].axis("off")
-    axes[0].legend(frameon=False, fontsize=7)
+    handles, labels = _unique_legend_entries(axes[:5])
+    axes[5].legend(handles, labels, frameon=False, fontsize=7, loc="center")
     for axis in axes[::2]:
         axis.set_ylabel("Native symmetric Hausdorff")
     for axis in axes[4:5]:
@@ -259,10 +309,9 @@ def _plot_geometry(summary: Sequence[Mapping[str, Any]], path: Path) -> None:
 def _plot_smooth(summary: Sequence[Mapping[str, Any]], path: Path) -> None:
     plt.rcParams.update({"pdf.fonttype": 42, "ps.fonttype": 42, "font.size": 8})
     fig, axes = plt.subplots(2, 2, figsize=(8.0, 6.2), sharex=True)
-    styles = ("o", "s", "^", "D")
-    curves = sorted({(row["method"], row["variant"]) for row in summary})
+    curves = _curve_styles(summary)
     for row_index, benchmark in enumerate(("circles", "ellipses")):
-        for (method, variant), marker in zip(curves, styles):
+        for method, variant, style in curves:
             rows = sorted(
                 (
                     row
@@ -279,13 +328,13 @@ def _plot_smooth(summary: Sequence[Mapping[str, Any]], path: Path) -> None:
             axes[row_index, 0].plot(
                 x,
                 [row["native_symmetric_hausdorff_median"] for row in rows],
-                marker=marker,
+                **style,
                 label=_label(method, variant),
             )
             axes[row_index, 1].plot(
                 x,
                 [row["geometric_curvature_mean_absolute_error_median"] for row in rows],
-                marker=marker,
+                **style,
                 label=_label(method, variant),
             )
         axes[row_index, 0].set_ylabel(
@@ -297,13 +346,23 @@ def _plot_smooth(summary: Sequence[Mapping[str, Any]], path: Path) -> None:
         axis.set_yscale("log")
         axis.set_xticks((32, 64, 128), ("32", "64", "128"))
         axis.grid(True, which="both", alpha=0.25)
+        add_convergence_order_triangle(axis, 2.0)
     axes[0, 0].set_title("Geometry")
     axes[0, 1].set_title("Geometric curvature")
-    axes[0, 0].legend(frameon=False, fontsize=7)
+    handles, labels = _unique_legend_entries(axes.ravel())
+    fig.legend(
+        handles,
+        labels,
+        frameon=False,
+        fontsize=7,
+        ncol=3,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.91),
+    )
     axes[1, 0].set_xlabel("Cells per side")
     axes[1, 1].set_xlabel("Cells per side")
-    fig.suptitle("Common smooth-interface observables", fontsize=11)
-    fig.tight_layout()
+    fig.suptitle("Common smooth-interface observables", fontsize=11, y=0.965)
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.83))
     fig.savefig(path, bbox_inches="tight")
     plt.close(fig)
 
@@ -317,6 +376,12 @@ def _input_geometry(paths: Iterable[Path]) -> list[Path]:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--inputs", nargs="+", type=Path, default=list(DEFAULT_INPUTS))
+    parser.add_argument(
+        "--supplemental-case-results",
+        nargs="*",
+        type=Path,
+        default=list(DEFAULT_SUPPLEMENTAL_CASE_RESULTS),
+    )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--workers", type=int, default=4)
     args = parser.parse_args()
@@ -349,11 +414,17 @@ def main() -> None:
     summary = _aggregate(rows)
     summary_fields = tuple(summary[0])
     write_csv(args.output / "summary.csv", summary, summary_fields)
+    supplemental_rows = _supplemental_case_rows(args.supplemental_case_results)
+    plotting_summary = _aggregate([*rows, *supplemental_rows])
     write_json(
         args.output / "manifest.json",
         {
             "inputs": [str(path) for path in args.inputs],
+            "supplemental_case_results": [
+                str(path) for path in args.supplemental_case_results if path.exists()
+            ],
             "case_count": len(rows),
+            "supplemental_case_count": len(supplemental_rows),
             "geometry_metric": (
                 "symmetric supremum of exact/native point-to-curve distances; "
                 "source intervals use projected target endpoints and bounded optimization"
@@ -365,8 +436,8 @@ def main() -> None:
             "curvature_benchmarks": sorted(SMOOTH_BENCHMARKS),
         },
     )
-    _plot_geometry(summary, args.output / "native_geometry_all_methods.pdf")
-    _plot_smooth(summary, args.output / "smooth_observables_all_methods.pdf")
+    _plot_geometry(plotting_summary, args.output / "native_geometry_all_methods.pdf")
+    _plot_smooth(plotting_summary, args.output / "smooth_observables_all_methods.pdf")
 
 
 if __name__ == "__main__":
