@@ -1,0 +1,30 @@
+{
+  "benchmark": "canonical Cartesian ellipses",
+  "canonical_geometry_absolute_tolerance": 1e-12,
+  "case_count": 15,
+  "case_indices": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "cells_per_side": [
+    32,
+    64,
+    128
+  ],
+  "curvature_metric": "arc-length-weighted mean absolute geometric-curvature error against nearest analytic ellipse truth",
+  "geometry_metric": "partition-invariant native symmetric Hausdorff distance with projected target endpoints and bounded interval optimization",
+  "geometry_source": "exact schema-v2 writeFacets primitive metadata",
+  "method": "Ours (graph-coordinated circular)",
+  "source_commits": [
+    "505aefa454328d4ba34ade5e7247050a0acfc793"
+  ],
+  "source_root": "results/static/submission_static_20260731_012430_505aefa45432.sealed/raw_runs",
+  "source_runs": [
+    "submission_static_20260731_012430_505aefa45432_perturb_sweep_ellipses_circular_r0p32_w0p0_s0",
+    "submission_static_20260731_012430_505aefa45432_perturb_sweep_ellipses_circular_r0p64_w0p0_s0",
+    "submission_static_20260731_012430_505aefa45432_perturb_sweep_ellipses_circular_r1p28_w0p0_s0"
+  ]
+}
