@@ -672,6 +672,9 @@ def _plot_summary(summary: Sequence[Mapping[str, Any]], path: Path) -> None:
     add_convergence_order_triangle(
         axes[0, 1], 1.0, order_label="1", anchor=(0.76, 0.16), width=0.13
     )
+    add_convergence_order_triangle(
+        axes[1, 0], 3.0, order_label="3", anchor=(0.75, 0.12), width=0.13
+    )
     axes[1, 1].text(
         0.5,
         0.72,
