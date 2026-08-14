@@ -121,6 +121,8 @@ class ExternalPrimitive(Protocol):
 
     def length(self) -> float: ...
 
+    def closest_parameter(self, point: Sequence[float]) -> float: ...
+
     def distance_to_point(self, point: Sequence[float]) -> float: ...
 
     def sample(self, count: int) -> Tuple[Point, ...]: ...
@@ -151,7 +153,7 @@ class _ParametricPrimitiveMixin:
                 crossings.append(candidate)
         return tuple(crossings)
 
-    def distance_to_point(self, point: Sequence[float]) -> float:
+    def closest_parameter(self, point: Sequence[float]) -> float:
         target = _point(point)
 
         def squared(parameter: float) -> float:
@@ -164,10 +166,14 @@ class _ParametricPrimitiveMixin:
             method="bounded",
             options={"xatol": 1.0e-13},
         )
-        candidates = [squared(0.0), squared(1.0)]
+        candidates = [(squared(0.0), 0.0), (squared(1.0), 1.0)]
         if result.success:
-            candidates.append(float(result.fun))
-        return math.sqrt(max(0.0, min(candidates)))
+            candidates.append((float(result.fun), float(result.x)))
+        return min(candidates)[1]
+
+    def distance_to_point(self, point: Sequence[float]) -> float:
+        target = _point(point)
+        return _distance(target, self.point(self.closest_parameter(target)))
 
     def length(self) -> float:
         # Native quadrature of the parametric speed; no lower-order conversion.
@@ -209,7 +215,7 @@ class ExternalLinePrimitive(_ParametricPrimitiveMixin):
     def length(self) -> float:
         return _distance(self.p_left, self.p_right)
 
-    def distance_to_point(self, point: Sequence[float]) -> float:
+    def closest_parameter(self, point: Sequence[float]) -> float:
         point = _point(point)
         dx = self.p_right[0] - self.p_left[0]
         dy = self.p_right[1] - self.p_left[1]
@@ -217,7 +223,7 @@ class ExternalLinePrimitive(_ParametricPrimitiveMixin):
         parameter = (
             (point[0] - self.p_left[0]) * dx + (point[1] - self.p_left[1]) * dy
         ) / denominator
-        return _distance(point, self.point(min(1.0, max(0.0, parameter))))
+        return min(1.0, max(0.0, parameter))
 
     def bbox_points(self) -> Tuple[Point, ...]:
         return self.p_left, self.p_right
@@ -276,7 +282,7 @@ class ExternalArcPrimitive(_ParametricPrimitiveMixin):
     def length(self) -> float:
         return self.radius * abs(self.sweep_angle)
 
-    def distance_to_point(self, point: Sequence[float]) -> float:
+    def closest_parameter(self, point: Sequence[float]) -> float:
         point = _point(point)
         angle = math.atan2(point[1] - self.center[1], point[0] - self.center[0])
         candidates = [0.0, 1.0]
@@ -286,7 +292,9 @@ class ExternalArcPrimitive(_ParametricPrimitiveMixin):
             ) / self.sweep_angle
             if 0.0 <= candidate <= 1.0:
                 candidates.append(candidate)
-        return min(_distance(point, self.point(parameter)) for parameter in candidates)
+        return min(
+            candidates, key=lambda parameter: _distance(point, self.point(parameter))
+        )
 
     def bbox_points(self) -> Tuple[Point, ...]:
         parameters = [0.0, 1.0]
@@ -363,7 +371,7 @@ class ExternalParabolicPrimitive(_ParametricPrimitiveMixin):
             ds * (tangent[1] - self.curvature * s * normal[1]),
         )
 
-    def distance_to_point(self, point: Sequence[float]) -> float:
+    def closest_parameter(self, point: Sequence[float]) -> float:
         target = _point(point)
         normal, tangent = self._frame()
         displacement = (
@@ -387,11 +395,26 @@ class ExternalParabolicPrimitive(_ParametricPrimitiveMixin):
                 if lower <= value <= upper:
                     candidates.append(value)
 
-        def point_at_s(s: float) -> Point:
-            parameter = (s - self.s_start) / (self.s_end - self.s_start)
-            return self.point(parameter)
+        parameters = [
+            (candidate - self.s_start) / (self.s_end - self.s_start)
+            for candidate in candidates
+        ]
+        return min(
+            parameters,
+            key=lambda parameter: _distance(target, self.point(parameter)),
+        )
 
-        return min(_distance(target, point_at_s(candidate)) for candidate in candidates)
+    def bbox_points(self) -> Tuple[Point, ...]:
+        parameters = [0.0, 1.0]
+        tangent_start = self.tangent(0.0)
+        tangent_end = self.tangent(1.0)
+        for coordinate in (0, 1):
+            change = tangent_end[coordinate] - tangent_start[coordinate]
+            if change != 0.0:
+                parameter = -tangent_start[coordinate] / change
+                if 0.0 < parameter < 1.0:
+                    parameters.append(parameter)
+        return tuple(self.point(parameter) for parameter in sorted(set(parameters)))
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -445,7 +468,7 @@ class ExternalQuadraticPrimitive(_ParametricPrimitiveMixin):
         derivative = 4.0 * self.bulge * (1.0 - 2.0 * float(parameter))
         return chord[0] + derivative * normal[0], chord[1] + derivative * normal[1]
 
-    def distance_to_point(self, point: Sequence[float]) -> float:
+    def closest_parameter(self, point: Sequence[float]) -> float:
         target = _point(point)
         chord, normal, length = self._frame()
         tangent = (chord[0] / length, chord[1] / length)
@@ -469,7 +492,21 @@ class ExternalQuadraticPrimitive(_ParametricPrimitiveMixin):
                 parameter = float(root.real)
                 if 0.0 <= parameter <= 1.0:
                     candidates.append(parameter)
-        return min(_distance(target, self.point(parameter)) for parameter in candidates)
+        return min(
+            candidates, key=lambda parameter: _distance(target, self.point(parameter))
+        )
+
+    def bbox_points(self) -> Tuple[Point, ...]:
+        parameters = [0.0, 1.0]
+        tangent_start = self.tangent(0.0)
+        tangent_end = self.tangent(1.0)
+        for coordinate in (0, 1):
+            change = tangent_end[coordinate] - tangent_start[coordinate]
+            if change != 0.0:
+                parameter = -tangent_start[coordinate] / change
+                if 0.0 < parameter < 1.0:
+                    parameters.append(parameter)
+        return tuple(self.point(parameter) for parameter in sorted(set(parameters)))
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -481,11 +518,137 @@ class ExternalQuadraticPrimitive(_ParametricPrimitiveMixin):
         }
 
 
+@dataclass(frozen=True)
+class ExternalEllipsePrimitive(_ParametricPrimitiveMixin):
+    """Analytic ellipse truth primitive, optionally restricted to an arc."""
+
+    center: Point
+    major_axis: float
+    minor_axis: float
+    angle: float = 0.0
+    start_angle: float = 0.0
+    sweep_angle: float = 2.0 * math.pi
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+    kind: str = field(default="ellipse", init=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "center", _point(self.center))
+        for name in (
+            "major_axis",
+            "minor_axis",
+            "angle",
+            "start_angle",
+            "sweep_angle",
+        ):
+            if not math.isfinite(float(getattr(self, name))):
+                raise ValueError(f"{name} must be finite")
+        if self.major_axis <= 0.0 or self.minor_axis <= 0.0:
+            raise ValueError("ellipse semiaxes must be positive")
+        if self.sweep_angle == 0.0 or abs(self.sweep_angle) > 2.0 * math.pi + 1.0e-12:
+            raise ValueError("ellipse sweep must span at most one revolution")
+        object.__setattr__(self, "metadata", _json_value(self.metadata))
+
+    def _world_point(self, theta: float) -> Point:
+        cosine, sine = math.cos(self.angle), math.sin(self.angle)
+        local_x = self.major_axis * math.cos(theta)
+        local_y = self.minor_axis * math.sin(theta)
+        return (
+            self.center[0] + cosine * local_x - sine * local_y,
+            self.center[1] + sine * local_x + cosine * local_y,
+        )
+
+    @property
+    def p_left(self) -> Point:
+        return self.point(0.0)
+
+    @property
+    def p_right(self) -> Point:
+        return self.point(1.0)
+
+    def point(self, parameter: float) -> Point:
+        return self._world_point(self.start_angle + float(parameter) * self.sweep_angle)
+
+    def tangent(self, parameter: float) -> Point:
+        theta = self.start_angle + float(parameter) * self.sweep_angle
+        cosine, sine = math.cos(self.angle), math.sin(self.angle)
+        local_x = -self.major_axis * math.sin(theta) * self.sweep_angle
+        local_y = self.minor_axis * math.cos(theta) * self.sweep_angle
+        return (
+            cosine * local_x - sine * local_y,
+            sine * local_x + cosine * local_y,
+        )
+
+    def closest_parameter(self, point: Sequence[float]) -> float:
+        target = _point(point)
+        dx = target[0] - self.center[0]
+        dy = target[1] - self.center[1]
+        cosine, sine = math.cos(self.angle), math.sin(self.angle)
+        target_x = cosine * dx + sine * dy
+        target_y = -sine * dx + cosine * dy
+        a, b = self.major_axis, self.minor_axis
+        delta = b * b - a * a
+        coefficients = (
+            b * target_y,
+            -2.0 * delta + 2.0 * a * target_x,
+            0.0,
+            2.0 * delta + 2.0 * a * target_x,
+            -b * target_y,
+        )
+        angles = [0.0, 0.5 * math.pi, math.pi, 1.5 * math.pi]
+        for root in np.roots(coefficients):
+            if abs(float(root.imag)) <= 1.0e-10 * max(1.0, abs(float(root.real))):
+                angles.append(2.0 * math.atan(float(root.real)))
+
+        candidates = [0.0, 1.0]
+        for theta in angles:
+            for turns in range(-2, 3):
+                parameter = (
+                    theta + 2.0 * math.pi * turns - self.start_angle
+                ) / self.sweep_angle
+                if 0.0 <= parameter <= 1.0:
+                    candidates.append(parameter)
+        return min(
+            candidates,
+            key=lambda parameter: _distance(target, self.point(parameter)),
+        )
+
+    def bbox_points(self) -> Tuple[Point, ...]:
+        cosine, sine = math.cos(self.angle), math.sin(self.angle)
+        critical_angles = (
+            math.atan2(-self.minor_axis * sine, self.major_axis * cosine),
+            math.atan2(-self.minor_axis * sine, self.major_axis * cosine) + math.pi,
+            math.atan2(self.minor_axis * cosine, self.major_axis * sine),
+            math.atan2(self.minor_axis * cosine, self.major_axis * sine) + math.pi,
+        )
+        parameters = [0.0, 1.0]
+        for theta in critical_angles:
+            for turns in range(-2, 3):
+                parameter = (
+                    theta + 2.0 * math.pi * turns - self.start_angle
+                ) / self.sweep_angle
+                if 0.0 < parameter < 1.0:
+                    parameters.append(parameter)
+        return tuple(self.point(parameter) for parameter in sorted(set(parameters)))
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "kind": self.kind,
+            "center": list(self.center),
+            "major_axis": self.major_axis,
+            "minor_axis": self.minor_axis,
+            "angle": self.angle,
+            "start_angle": self.start_angle,
+            "sweep_angle": self.sweep_angle,
+            "metadata": _json_value(self.metadata),
+        }
+
+
 PrimitiveTypes = (
     ExternalLinePrimitive,
     ExternalArcPrimitive,
     ExternalParabolicPrimitive,
     ExternalQuadraticPrimitive,
+    ExternalEllipsePrimitive,
 )
 
 
@@ -567,6 +730,16 @@ def primitive_from_dict(payload: Mapping[str, Any]) -> ExternalPrimitive:
             payload["p_left"],
             payload["p_right"],
             float(payload["bulge"]),
+            metadata,
+        )
+    if kind == "ellipse":
+        return ExternalEllipsePrimitive(
+            payload["center"],
+            float(payload["major_axis"]),
+            float(payload["minor_axis"]),
+            float(payload.get("angle", 0.0)),
+            float(payload.get("start_angle", 0.0)),
+            float(payload.get("sweep_angle", 2.0 * math.pi)),
             metadata,
         )
     raise ValueError(f"unknown external primitive kind: {kind!r}")

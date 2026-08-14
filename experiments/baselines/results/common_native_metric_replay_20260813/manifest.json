@@ -1,0 +1,14 @@
+{
+  "case_count": 300,
+  "curvature_benchmarks": [
+    "circles",
+    "ellipses"
+  ],
+  "curvature_metric": "arc-length-weighted mean absolute geometric-curvature error on native reconstructed primitives; nearest analytic truth branch",
+  "geometry_metric": "symmetric supremum of exact/native point-to-curve distances; source intervals use projected target endpoints and bounded optimization",
+  "inputs": [
+    "experiments/baselines/results/plvira_project_smoke_20260813_final",
+    "experiments/baselines/results/pcic_project_smoke_20260813_final",
+    "experiments/baselines/results/quasi_project_smoke_20260813_qa_fixed"
+  ]
+}

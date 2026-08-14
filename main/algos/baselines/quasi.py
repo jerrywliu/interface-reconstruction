@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import math
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -146,6 +146,7 @@ class QuasiResult:
     vertex_jumps: int = 0
     sweeps_completed: int = 0
     converged: bool = False
+    sweep_diagnostics: Tuple["QuasiSweepDiagnostic", ...] = ()
     policy: Dict[str, Any] = field(default_factory=dict)
 
     def facet_grid(self, shape: Tuple[int, int]) -> List[List[List[QuadraticFacet]]]:
@@ -169,6 +170,52 @@ class _CellState:
 class _CorrectionRequest:
     cells: Tuple[CellIndex, CellIndex]
     reason: str
+
+
+@dataclass(frozen=True)
+class QuasiSweepDiagnostic:
+    sweep: int
+    updates: int
+    misses: int
+    multiple_root_updates: int
+    root_branch_switches: int
+    max_update_displacement: float
+    mean_update_displacement: float
+    max_net_endpoint_displacement: float
+    max_two_sweep_endpoint_displacement: float
+    mean_c1_mismatch_before: float
+    max_c1_mismatch_before: float
+    mean_c1_mismatch_after: float
+    max_c1_mismatch_after: float
+    max_area_residual: float
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "sweep": self.sweep,
+            "updates": self.updates,
+            "misses": self.misses,
+            "multiple_root_updates": self.multiple_root_updates,
+            "root_branch_switches": self.root_branch_switches,
+            "max_update_displacement": self.max_update_displacement,
+            "mean_update_displacement": self.mean_update_displacement,
+            "max_net_endpoint_displacement": self.max_net_endpoint_displacement,
+            "max_two_sweep_endpoint_displacement": (
+                self.max_two_sweep_endpoint_displacement
+            ),
+            "mean_c1_mismatch_before": self.mean_c1_mismatch_before,
+            "max_c1_mismatch_before": self.max_c1_mismatch_before,
+            "mean_c1_mismatch_after": self.mean_c1_mismatch_after,
+            "max_c1_mismatch_after": self.max_c1_mismatch_after,
+            "max_area_residual": self.max_area_residual,
+        }
+
+
+@dataclass(frozen=True)
+class _C1UpdateResult:
+    updated: bool
+    displacement: float
+    root_count: int = 0
+    selected_root_ordinal: Optional[int] = None
 
 
 def _cross(a: Sequence[float], b: Sequence[float]) -> float:
@@ -862,15 +909,18 @@ def _apply_c1_join(
     join: QuasiJoin,
     states: Dict[CellIndex, _CellState],
     root_tolerance: float,
-) -> Tuple[bool, float]:
+) -> _C1UpdateResult:
     current_point = states[join.cells[0]].endpoints[join.slots[0]]
     current_alpha = min(1.0, max(0.0, _edge_parameter(current_point, join.edge)))
     roots = _candidate_c1_roots(join, states, root_tolerance)
     if not roots:
-        return False, 0.0
+        return _C1UpdateResult(False, 0.0)
     # The paper does not state how multiple admissible cubic roots are chosen.
     # Retaining the root nearest the predictor is the least-displacing choice.
-    alpha = min(roots, key=lambda candidate: abs(candidate - current_alpha))
+    selected_root_ordinal, alpha = min(
+        enumerate(roots),
+        key=lambda item: (abs(item[1] - current_alpha), item[1]),
+    )
     target = [
         join.edge[0][coordinate]
         + alpha * (join.edge[1][coordinate] - join.edge[0][coordinate])
@@ -879,7 +929,55 @@ def _apply_c1_join(
     for cell, slot in zip(join.cells, join.slots):
         states[cell].endpoints[slot] = list(target)
         states[cell].facet = _make_quadratic(states[cell])
-    return True, abs(alpha - current_alpha) * getDistance(*join.edge)
+    return _C1UpdateResult(
+        True,
+        abs(alpha - current_alpha) * getDistance(*join.edge),
+        len(roots),
+        selected_root_ordinal,
+    )
+
+
+def _endpoint_snapshot(
+    states: Dict[CellIndex, _CellState],
+) -> Dict[Tuple[CellIndex, int], Tuple[float, float]]:
+    return {
+        (index, slot): (float(point[0]), float(point[1]))
+        for index, state in states.items()
+        for slot, point in enumerate(state.endpoints)
+    }
+
+
+def _max_snapshot_displacement(
+    first: Mapping[Tuple[CellIndex, int], Tuple[float, float]],
+    second: Mapping[Tuple[CellIndex, int], Tuple[float, float]],
+) -> float:
+    return max((getDistance(first[key], second[key]) for key in first), default=0.0)
+
+
+def _current_join_mismatches(
+    joins: Sequence[QuasiJoin], states: Dict[CellIndex, _CellState]
+) -> Tuple[float, ...]:
+    values = []
+    for join in joins:
+        point = states[join.cells[0]].endpoints[join.slots[0]]
+        alpha = min(1.0, max(0.0, _edge_parameter(point, join.edge)))
+        value = _join_mismatch(alpha, join, states)
+        if math.isfinite(value):
+            values.append(abs(value))
+    return tuple(values)
+
+
+def _max_area_residual(states: Dict[CellIndex, _CellState]) -> float:
+    return max(
+        (
+            abs(
+                state.facet.represented_area(state.polygon.points)
+                - state.polygon.getArea()
+            )
+            for state in states.values()
+        ),
+        default=0.0,
+    )
 
 
 def reconstruct_quasi(
@@ -891,6 +989,7 @@ def reconstruct_quasi(
     geometry_tolerance: float = 1.0e-10,
     root_tolerance: float = 1.0e-12,
     strict: bool = False,
+    trace_sweeps: bool = False,
 ) -> QuasiResult:
     """Reconstruct static mixed cells with the frozen QUASI port.
 
@@ -941,17 +1040,78 @@ def reconstruct_quasi(
         (join for join in joins if join.kind == "edge"),
         key=lambda join: (join.cells, join.slots),
     )
+    sweep_diagnostics: List[QuasiSweepDiagnostic] = []
+    endpoint_history = [_endpoint_snapshot(states)] if trace_sweeps else []
+    previous_root_ordinals: Dict[
+        Tuple[Tuple[CellIndex, CellIndex], Tuple[int, int]], int
+    ] = {}
     if ordered_joins:
-        for _ in range(sweep_limit):
+        for sweep_index in range(sweep_limit):
             max_displacement = 0.0
+            displacements = []
+            sweep_updates = 0
+            sweep_misses = 0
+            multiple_root_updates = 0
+            root_branch_switches = 0
+            mismatch_before = (
+                _current_join_mismatches(ordered_joins, states) if trace_sweeps else ()
+            )
             for join in ordered_joins:
-                updated, displacement = _apply_c1_join(join, states, root_tolerance)
-                if updated:
+                update = _apply_c1_join(join, states, root_tolerance)
+                if update.updated:
                     c1_updates += 1
-                    max_displacement = max(max_displacement, displacement)
+                    sweep_updates += 1
+                    displacements.append(update.displacement)
+                    max_displacement = max(max_displacement, update.displacement)
+                    multiple_root_updates += int(update.root_count > 1)
+                    if update.selected_root_ordinal is not None:
+                        join_key = (join.cells, join.slots)
+                        previous = previous_root_ordinals.get(join_key)
+                        root_branch_switches += int(
+                            previous is not None
+                            and previous != update.selected_root_ordinal
+                        )
+                        previous_root_ordinals[join_key] = update.selected_root_ordinal
                 else:
                     c1_misses += 1
+                    sweep_misses += 1
             sweeps_completed += 1
+            if trace_sweeps:
+                current_snapshot = _endpoint_snapshot(states)
+                mismatch_after = _current_join_mismatches(ordered_joins, states)
+                sweep_diagnostics.append(
+                    QuasiSweepDiagnostic(
+                        sweep=sweep_index + 1,
+                        updates=sweep_updates,
+                        misses=sweep_misses,
+                        multiple_root_updates=multiple_root_updates,
+                        root_branch_switches=root_branch_switches,
+                        max_update_displacement=max_displacement,
+                        mean_update_displacement=(
+                            float(np.mean(displacements)) if displacements else 0.0
+                        ),
+                        max_net_endpoint_displacement=_max_snapshot_displacement(
+                            endpoint_history[-1], current_snapshot
+                        ),
+                        max_two_sweep_endpoint_displacement=(
+                            _max_snapshot_displacement(
+                                endpoint_history[-2], current_snapshot
+                            )
+                            if len(endpoint_history) >= 2
+                            else 0.0
+                        ),
+                        mean_c1_mismatch_before=(
+                            float(np.mean(mismatch_before)) if mismatch_before else 0.0
+                        ),
+                        max_c1_mismatch_before=max(mismatch_before, default=0.0),
+                        mean_c1_mismatch_after=(
+                            float(np.mean(mismatch_after)) if mismatch_after else 0.0
+                        ),
+                        max_c1_mismatch_after=max(mismatch_after, default=0.0),
+                        max_area_residual=_max_area_residual(states),
+                    )
+                )
+                endpoint_history.append(current_snapshot)
             if max_displacement <= policy.convergence_tolerance:
                 converged = True
                 break
@@ -966,6 +1126,7 @@ def reconstruct_quasi(
         vertex_jumps=vertex_jumps,
         sweeps_completed=sweeps_completed,
         converged=converged,
+        sweep_diagnostics=tuple(sweep_diagnostics),
         policy={
             "target_neighbor": (
                 "triggering eligible neighbor, then nearest eligible 8-neighbor; "
@@ -977,6 +1138,7 @@ def reconstruct_quasi(
             "convergence_tolerance": policy.convergence_tolerance,
             "boundary": "retain open physical-boundary endpoints",
             "fallback": policy.fallback,
+            "trace_sweeps": trace_sweeps,
         },
     )
 
@@ -987,6 +1149,7 @@ __all__ = [
     "QuasiPolicy",
     "QuasiJoin",
     "QuasiResult",
+    "QuasiSweepDiagnostic",
     "QuasiTopologyError",
     "reconstruct_quasi",
 ]

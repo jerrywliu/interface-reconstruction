@@ -8,6 +8,7 @@ from main.algos.baselines.external_geometry import (
     ExternalArcPrimitive,
     ExternalBaselineResult,
     ExternalCellReconstruction,
+    ExternalEllipsePrimitive,
     ExternalInterfaceComponent,
     ExternalLinePrimitive,
     ExternalParabolicPrimitive,
@@ -16,6 +17,7 @@ from main.algos.baselines.external_geometry import (
     adapt_linear_facet,
     adapt_parabolic_interval,
     adapt_quadratic_facet,
+    primitive_from_dict,
 )
 from main.algos.baselines.plvira import ParabolicInterface
 from main.algos.baselines.quasi import QuadraticFacet
@@ -148,3 +150,18 @@ def test_high_order_point_distance_enumerates_global_stationary_points(primitive
         native_distance = primitive.distance_to_point(target)
         assert native_distance <= dense_distance + 1.0e-10
         assert dense_distance - native_distance < 1.0e-6
+
+
+def test_analytic_ellipse_nearest_point_and_json_round_trip():
+    ellipse = ExternalEllipsePrimitive((1.0, -2.0), 3.0, 1.5, angle=0.4)
+    point = ellipse.point(0.317)
+
+    assert ellipse.distance_to_point(point) < 1.0e-10
+    assert ellipse.distance_to_point(ellipse.center) == pytest.approx(
+        ellipse.minor_axis
+    )
+    assert ellipse.length() > 2.0 * math.pi * ellipse.minor_axis
+
+    payload = ellipse.to_dict()
+    restored = primitive_from_dict(payload)
+    assert restored.point(0.317) == pytest.approx(point)

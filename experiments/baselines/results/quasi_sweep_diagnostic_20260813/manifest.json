@@ -1,0 +1,19 @@
+{
+  "benchmarks": [
+    "lines",
+    "squares",
+    "circles",
+    "ellipses",
+    "zalesak"
+  ],
+  "case_indices": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "max_sweeps": 100,
+  "purpose": "diagnostic extension of the frozen QUASI iteration; no porting policy or published update equation was tuned",
+  "resolution": 64
+}

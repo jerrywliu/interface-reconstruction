@@ -7,14 +7,19 @@ import math
 from typing import Any, Iterable, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
-from scipy.optimize import linear_sum_assignment
+from scipy.optimize import linear_sum_assignment, minimize_scalar
 from scipy.spatial import cKDTree
 
 from main.algos.baselines.external_geometry import (
     CellIndex,
     ExternalBaselineResult,
     ExternalCellReconstruction,
+    ExternalArcPrimitive,
+    ExternalEllipsePrimitive,
+    ExternalLinePrimitive,
+    ExternalParabolicPrimitive,
     ExternalPrimitive,
+    ExternalQuadraticPrimitive,
     ExternalReconstructionStatus,
     Point,
 )
@@ -58,11 +63,89 @@ def _bbox_scale(primitives: Sequence[ExternalPrimitive]) -> float:
     return max(1.0, float(np.linalg.norm(array.max(axis=0) - array.min(axis=0))))
 
 
-def _sample_by_spacing(
-    primitive: ExternalPrimitive, max_spacing: float, minimum_count: int = 2
-) -> Tuple[Point, ...]:
-    count = max(minimum_count, int(math.ceil(primitive.length() / max_spacing)) + 1)
-    return primitive.sample(count)
+@dataclass(frozen=True)
+class _NativeTargetIndex:
+    primitives: Tuple[ExternalPrimitive, ...]
+    bbox_minimum: np.ndarray
+    bbox_maximum: np.ndarray
+
+    @classmethod
+    def build(cls, primitives: Sequence[ExternalPrimitive]) -> "_NativeTargetIndex":
+        minimum = []
+        maximum = []
+        for primitive in primitives:
+            points = np.asarray(primitive.bbox_points(), dtype=float)
+            minimum.append(points.min(axis=0))
+            maximum.append(points.max(axis=0))
+        return cls(
+            tuple(primitives),
+            np.asarray(minimum, dtype=float),
+            np.asarray(maximum, dtype=float),
+        )
+
+    def distance_to_point(self, point: Sequence[float]) -> float:
+        query = np.asarray(point, dtype=float)
+        offsets = np.maximum(
+            np.maximum(self.bbox_minimum - query, query - self.bbox_maximum),
+            0.0,
+        )
+        lower_bounds = np.linalg.norm(offsets, axis=1)
+        best = float("inf")
+        for index in np.argsort(lower_bounds):
+            if lower_bounds[index] >= best:
+                break
+            best = min(best, self.primitives[int(index)].distance_to_point(query))
+        return best
+
+
+def _native_supremum_on_primitive(
+    source: ExternalPrimitive,
+    target: _NativeTargetIndex,
+    *,
+    tolerance: float,
+    minimum_spacing: Optional[float],
+    initial_samples: int,
+) -> float:
+    """Maximize distance to a native target union without point-cloud conversion.
+
+    Projected target endpoints partition the source wherever the nearest target
+    primitive can plausibly change. Uniform subdivisions guard long intervals.
+    Each resulting interval is optimized independently, making the estimate
+    insensitive to an equivalent source or target curve being split into more
+    primitives.
+    """
+
+    source_length = source.length()
+    interval_count = max(4, int(initial_samples))
+    if minimum_spacing is not None and minimum_spacing > 0.0:
+        interval_count = max(
+            interval_count, int(math.ceil(source_length / minimum_spacing))
+        )
+    breaks = {index / interval_count for index in range(interval_count + 1)}
+    for primitive in target.primitives:
+        breaks.add(source.closest_parameter(primitive.p_left))
+        breaks.add(source.closest_parameter(primitive.p_right))
+    ordered = sorted(min(1.0, max(0.0, float(value))) for value in breaks)
+
+    def distance(parameter: float) -> float:
+        return target.distance_to_point(source.point(parameter))
+
+    best = max(distance(parameter) for parameter in ordered)
+    parameter_tolerance = max(1.0e-13, tolerance / max(source_length, 1.0))
+    for lower, upper in zip(ordered[:-1], ordered[1:]):
+        if upper - lower <= parameter_tolerance:
+            continue
+        midpoint = 0.5 * (lower + upper)
+        best = max(best, distance(midpoint))
+        result = minimize_scalar(
+            lambda parameter: -distance(float(parameter)),
+            bounds=(lower, upper),
+            method="bounded",
+            options={"xatol": parameter_tolerance},
+        )
+        if result.success:
+            best = max(best, -float(result.fun))
+    return best
 
 
 def directed_hausdorff_external(
@@ -71,41 +154,27 @@ def directed_hausdorff_external(
     *,
     tolerance: Optional[float] = None,
     minimum_spacing: Optional[float] = None,
-    initial_samples_per_primitive: int = 8,
+    initial_samples_per_primitive: int = 16,
 ) -> float:
-    """Estimate one directed supremum using native target-curve distances."""
+    """Estimate one directed supremum using native curves on both sides."""
 
     source_primitives = _as_primitives(source)
     target_primitives = _as_primitives(target)
     if not source_primitives or not target_primitives:
         return float("inf")
     scale = _bbox_scale(source_primitives + target_primitives)
-    tolerance = 1.0e-12 * scale if tolerance is None else float(tolerance)
-    minimum_spacing = (
-        1.0e-4 * scale if minimum_spacing is None else float(minimum_spacing)
-    )
-    maximum_length = max(primitive.length() for primitive in source_primitives)
-    spacing = max(
-        maximum_length / max(1, int(initial_samples_per_primitive) - 1),
-        minimum_spacing,
-    )
-    previous = None
-    while True:
-        points = [
-            point
-            for primitive in source_primitives
-            for point in _sample_by_spacing(primitive, spacing)
-        ]
-        estimate = max(
-            min(primitive.distance_to_point(point) for primitive in target_primitives)
-            for point in points
+    tolerance = 1.0e-10 * scale if tolerance is None else float(tolerance)
+    target_index = _NativeTargetIndex.build(target_primitives)
+    return max(
+        _native_supremum_on_primitive(
+            primitive,
+            target_index,
+            tolerance=tolerance,
+            minimum_spacing=minimum_spacing,
+            initial_samples=initial_samples_per_primitive,
         )
-        if previous is not None and abs(estimate - previous) <= tolerance:
-            return max(estimate, previous)
-        if spacing <= minimum_spacing * (1.0 + 1.0e-12):
-            return estimate if previous is None else max(estimate, previous)
-        previous = estimate
-        spacing = max(0.5 * spacing, minimum_spacing)
+        for primitive in source_primitives
+    )
 
 
 def symmetric_hausdorff_external(source: Any, target: Any, **kwargs: Any) -> float:
@@ -113,6 +182,104 @@ def symmetric_hausdorff_external(source: Any, target: Any, **kwargs: Any) -> flo
         directed_hausdorff_external(source, target, **kwargs),
         directed_hausdorff_external(target, source, **kwargs),
     )
+
+
+def unsigned_curvature_external(
+    primitive: ExternalPrimitive, parameter: float
+) -> float:
+    """Return geometric curvature of any native external primitive."""
+
+    parameter = float(parameter)
+    if isinstance(primitive, ExternalLinePrimitive):
+        return 0.0
+    if isinstance(primitive, ExternalArcPrimitive):
+        return 1.0 / primitive.radius
+    if isinstance(primitive, ExternalParabolicPrimitive):
+        s = primitive.s_start + parameter * (primitive.s_end - primitive.s_start)
+        return abs(primitive.curvature) / (1.0 + (primitive.curvature * s) ** 2) ** 1.5
+    if isinstance(primitive, ExternalQuadraticPrimitive):
+        chord_length = _distance(primitive.p_left, primitive.p_right)
+        transverse_speed = 4.0 * primitive.bulge * (1.0 - 2.0 * parameter)
+        return (
+            abs(8.0 * primitive.bulge * chord_length)
+            / (chord_length * chord_length + transverse_speed * transverse_speed) ** 1.5
+        )
+    if isinstance(primitive, ExternalEllipsePrimitive):
+        theta = primitive.start_angle + parameter * primitive.sweep_angle
+        denominator = (
+            primitive.major_axis**2 * math.sin(theta) ** 2
+            + primitive.minor_axis**2 * math.cos(theta) ** 2
+        ) ** 1.5
+        return primitive.major_axis * primitive.minor_axis / denominator
+    raise TypeError(f"unsupported native primitive {type(primitive).__name__}")
+
+
+def geometric_curvature_error_external(
+    reconstruction: Any,
+    truth: Any,
+    *,
+    quadrature_order: int = 16,
+) -> Mapping[str, float]:
+    """Arc-length-weighted native-curvature error against nearest truth geometry.
+
+    The observable integrates the actual curvature of every reconstructed
+    primitive, rather than a method-specific stencil estimate. Its additive
+    arc-length quadrature is invariant, to quadrature accuracy, to splitting an
+    otherwise identical curve into a different number of facets.
+    """
+
+    if quadrature_order < 2:
+        raise ValueError("quadrature_order must be at least two")
+    source_primitives = _as_primitives(reconstruction)
+    truth_primitives = _as_primitives(truth)
+    if not source_primitives or not truth_primitives:
+        return {
+            "mean_absolute_error": float("nan"),
+            "rms_error": float("nan"),
+            "max_absolute_error": float("nan"),
+            "relative_l1_error": float("nan"),
+            "reconstructed_length": 0.0,
+            "quadrature_samples": 0,
+        }
+
+    nodes, weights = np.polynomial.legendre.leggauss(quadrature_order)
+    absolute_integral = 0.0
+    squared_integral = 0.0
+    truth_integral = 0.0
+    total_length = 0.0
+    maximum = 0.0
+    sample_count = 0
+    for primitive in source_primitives:
+        for node, weight in zip(nodes, weights):
+            parameter = 0.5 * (float(node) + 1.0)
+            point = primitive.point(parameter)
+            nearest = min(
+                truth_primitives,
+                key=lambda candidate: candidate.distance_to_point(point),
+            )
+            truth_parameter = nearest.closest_parameter(point)
+            reconstructed_curvature = unsigned_curvature_external(primitive, parameter)
+            truth_curvature = unsigned_curvature_external(nearest, truth_parameter)
+            error = abs(reconstructed_curvature - truth_curvature)
+            tangent = primitive.tangent(parameter)
+            ds = 0.5 * float(weight) * math.hypot(*tangent)
+            absolute_integral += ds * error
+            squared_integral += ds * error * error
+            truth_integral += ds * abs(truth_curvature)
+            total_length += ds
+            maximum = max(maximum, error)
+            sample_count += 1
+
+    return {
+        "mean_absolute_error": absolute_integral / total_length,
+        "rms_error": math.sqrt(squared_integral / total_length),
+        "max_absolute_error": maximum,
+        "relative_l1_error": (
+            absolute_integral / truth_integral if truth_integral > 0.0 else float("nan")
+        ),
+        "reconstructed_length": total_length,
+        "quadrature_samples": sample_count,
+    }
 
 
 def tangent_error_external(
@@ -333,7 +500,9 @@ __all__ = [
     "SharedEdgeGap",
     "conservation_metrics",
     "directed_hausdorff_external",
+    "geometric_curvature_error_external",
     "shared_edge_gap_metrics",
     "symmetric_hausdorff_external",
     "tangent_error_external",
+    "unsigned_curvature_external",
 ]

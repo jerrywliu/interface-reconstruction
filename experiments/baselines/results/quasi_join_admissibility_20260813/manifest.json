@@ -1,0 +1,28 @@
+{
+  "cases": [
+    [
+      "circles",
+      2
+    ],
+    [
+      "ellipses",
+      3
+    ],
+    [
+      "lines",
+      3
+    ],
+    [
+      "squares",
+      4
+    ],
+    [
+      "zalesak",
+      2
+    ]
+  ],
+  "dense_samples_per_missed_join": 513,
+  "interpretation": "For every final edge join, enumerate verified algebraic C1 roots. For joins with none, scan the whole shared edge to distinguish a root-enumeration miss from an incompatible one-parameter update.",
+  "max_sweeps": 100,
+  "resolution": 64
+}

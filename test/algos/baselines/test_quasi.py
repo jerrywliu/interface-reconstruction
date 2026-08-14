@@ -184,3 +184,16 @@ def test_policy_validation_and_zero_sweep_override():
     result = reconstruct_quasi(_horizontal_interface_mesh(), iterations=0)
     assert result.sweeps_completed == 0
     assert not result.converged
+
+
+def test_optional_sweep_trace_records_convergence_observables_without_changing_geometry():
+    mesh = _horizontal_interface_mesh()
+    plain = reconstruct_quasi(mesh, iterations=3)
+    traced = reconstruct_quasi(mesh, iterations=3, trace_sweeps=True)
+
+    assert len(traced.sweep_diagnostics) == traced.sweeps_completed
+    assert plain.facets == traced.facets
+    assert traced.sweep_diagnostics[0].updates > 0
+    assert traced.sweep_diagnostics[0].max_area_residual < 1.0e-12
+    assert traced.sweep_diagnostics[-1].max_update_displacement >= 0.0
+    assert traced.sweep_diagnostics[-1].max_c1_mismatch_after >= 0.0

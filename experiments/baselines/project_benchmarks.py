@@ -15,6 +15,7 @@ from experiments.static.zalesak import (
 )
 from main.algos.baselines.external_geometry import (
     ExternalArcPrimitive,
+    ExternalEllipsePrimitive,
     ExternalLinePrimitive,
     ExternalPrimitive,
 )
@@ -141,24 +142,14 @@ class ProjectBenchmarkCase:
                 ExternalArcPrimitive(center, radius, math.pi, math.pi),
             )
         if self.benchmark == "ellipses":
-            if ellipse_segments < 32:
-                raise ValueError("ellipse_segments must be at least 32")
-            center = np.asarray(p["center"], dtype=float)
-            cosine, sine = math.cos(p["theta"]), math.sin(p["theta"])
-            points = []
-            for index in range(ellipse_segments + 1):
-                angle = 2.0 * math.pi * index / ellipse_segments
-                local_x = p["major_axis"] * math.cos(angle)
-                local_y = p["minor_axis"] * math.sin(angle)
-                points.append(
-                    (
-                        center[0] + cosine * local_x - sine * local_y,
-                        center[1] + sine * local_x + cosine * local_y,
-                    )
-                )
-            return tuple(
-                ExternalLinePrimitive(points[i], points[i + 1], {"truth": "sampled ellipse"})
-                for i in range(ellipse_segments)
+            return (
+                ExternalEllipsePrimitive(
+                    p["center"],
+                    p["major_axis"],
+                    p["minor_axis"],
+                    p["theta"],
+                    metadata={"truth": "analytic ellipse"},
+                ),
             )
         if self.benchmark == "zalesak":
             facets = create_true_facets_zalesak(
