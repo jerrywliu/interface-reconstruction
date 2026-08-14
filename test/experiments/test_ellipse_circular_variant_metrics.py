@@ -112,6 +112,9 @@ def test_summary_recovers_variant_specific_orders():
                     "cell_size": h,
                     "num_mixed_cells": 20,
                     "num_merged_cells": 0,
+                    "arc_count": 20,
+                    "line_count": 0,
+                    "concave_arc_count": 0,
                     "c0_adjustment_events": 2 if variant["do_c0"] else 0,
                     "c0_rejection_events": 0,
                 }

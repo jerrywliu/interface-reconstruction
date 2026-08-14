@@ -1,0 +1,60 @@
+{
+  "benchmark": "canonical Cartesian ellipses",
+  "c0_definition": "production guarded single-pass endpoint averaging followed by independent conservative line/arc curvature refit",
+  "case_count": 45,
+  "case_indices": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "cells_per_side": [
+    32,
+    64,
+    128
+  ],
+  "curvature_metric": "arc-length-weighted mean absolute unsigned geometric-curvature error against nearest analytic ellipse truth",
+  "figure": "/Users/wei/Code/Interface/active/interface-reconstruction/experiments/baselines/results/ellipse_circular_variants_common_metrics_20260814/ellipse_circular_variants_all_methods.pdf",
+  "method": "matched finalized project circular variants",
+  "native_geometry_tolerance": 1e-12,
+  "report": "/Users/wei/Code/Interface/active/interface-reconstruction/docs/baselines/ELLIPSE_CIRCULAR_VARIANTS_COMMON_METRICS.md",
+  "signed_curvature_diagnostic": "project radius sign; negative-radius arcs are counted as concave",
+  "source_commits": [
+    "ad3f3cb9034e649cb79931d848e5e498ae41c34c"
+  ],
+  "source_runs": [
+    "/Users/wei/Code/Interface/active/interface-reconstruction/plots/ellipse_circular_variants_common_metrics_20260814_per_cell_circular_n32",
+    "/Users/wei/Code/Interface/active/interface-reconstruction/plots/ellipse_circular_variants_common_metrics_20260814_per_cell_circular_n64",
+    "/Users/wei/Code/Interface/active/interface-reconstruction/plots/ellipse_circular_variants_common_metrics_20260814_per_cell_circular_n128",
+    "/Users/wei/Code/Interface/active/interface-reconstruction/plots/ellipse_circular_variants_common_metrics_20260814_graph_coordinated_circular_n32",
+    "/Users/wei/Code/Interface/active/interface-reconstruction/plots/ellipse_circular_variants_common_metrics_20260814_graph_coordinated_circular_n64",
+    "/Users/wei/Code/Interface/active/interface-reconstruction/plots/ellipse_circular_variants_common_metrics_20260814_graph_coordinated_circular_n128",
+    "/Users/wei/Code/Interface/active/interface-reconstruction/plots/ellipse_circular_variants_common_metrics_20260814_graph_coordinated_circular_guarded_c0_n32",
+    "/Users/wei/Code/Interface/active/interface-reconstruction/plots/ellipse_circular_variants_common_metrics_20260814_graph_coordinated_circular_guarded_c0_n64",
+    "/Users/wei/Code/Interface/active/interface-reconstruction/plots/ellipse_circular_variants_common_metrics_20260814_graph_coordinated_circular_guarded_c0_n128"
+  ],
+  "variants": [
+    {
+      "display": "Ours (per-cell circular)",
+      "do_c0": false,
+      "facet_algo": "safe_circle",
+      "key": "per_cell_circular",
+      "label": "per-cell circular"
+    },
+    {
+      "display": "Ours (graph-coordinated circular)",
+      "do_c0": false,
+      "facet_algo": "circular",
+      "key": "graph_coordinated_circular",
+      "label": "graph-coordinated circular"
+    },
+    {
+      "display": "Ours (graph-coordinated circular + guarded C0)",
+      "do_c0": true,
+      "facet_algo": "circular",
+      "key": "graph_coordinated_circular_guarded_c0",
+      "label": "graph-coordinated circular + guarded C0"
+    }
+  ]
+}

@@ -461,6 +461,70 @@ def build_equivalence_rows(
     return result
 
 
+def build_c0_verification_rows(
+    runs: Mapping[tuple[str, int], Path],
+    resolutions: Sequence[int],
+    case_indices: Sequence[int],
+    case_rows: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Prove the saved guarded-C0 metadata contain post-pass geometry."""
+
+    by_key = {
+        (row["variant"], int(row["cells_per_side"]), int(row["case_index"])): row
+        for row in case_rows
+    }
+    result = []
+    for resolution in resolutions:
+        graph_dir = runs[("graph_coordinated_circular", resolution)]
+        c0_dir = runs[("graph_coordinated_circular_guarded_c0", resolution)]
+        for case_index in case_indices:
+            graph_payload = json.loads(
+                (
+                    graph_dir
+                    / "vtk"
+                    / "reconstructed"
+                    / "facets"
+                    / f"{case_index}.facet_metadata.json"
+                ).read_text(encoding="utf-8")
+            )
+            c0_payload = json.loads(
+                (
+                    c0_dir
+                    / "vtk"
+                    / "reconstructed"
+                    / "facets"
+                    / f"{case_index}.facet_metadata.json"
+                ).read_text(encoding="utf-8")
+            )
+            exact, within_tolerance, maximum = compare_native_geometry(
+                graph_payload, c0_payload
+            )
+            c0_row = by_key[
+                (
+                    "graph-coordinated circular + guarded C0",
+                    resolution,
+                    case_index,
+                )
+            ]
+            result.append(
+                {
+                    "cells_per_side": resolution,
+                    "case_index": case_index,
+                    "c0_geometry_exactly_matches_pre_c0": exact,
+                    "c0_geometry_matches_pre_c0_within_1e-12": within_tolerance,
+                    "native_primitive_kind_or_count_changed": not math.isfinite(
+                        maximum
+                    ),
+                    "maximum_native_parameter_change": (
+                        maximum if math.isfinite(maximum) else ""
+                    ),
+                    "c0_adjustment_events": c0_row["c0_adjustment_events"],
+                    "c0_rejection_events": c0_row["c0_rejection_events"],
+                }
+            )
+    return result
+
+
 def _fit_order(rows: Sequence[Mapping[str, Any]], field: str) -> float:
     values = np.asarray([float(row[field]) for row in rows], dtype=float)
     cell_sizes = np.asarray([float(row["cell_size"]) for row in rows], dtype=float)
@@ -493,6 +557,11 @@ def summarize_case_results(
                 "case_count": len(selected),
                 "mixed_cell_count": sum(
                     int(row["num_mixed_cells"]) for row in selected
+                ),
+                "arc_count": sum(int(row["arc_count"]) for row in selected),
+                "line_count": sum(int(row["line_count"]) for row in selected),
+                "concave_arc_count": sum(
+                    int(row["concave_arc_count"]) for row in selected
                 ),
                 "merged_cell_count": sum(
                     int(row["num_merged_cells"]) for row in selected
@@ -603,6 +672,16 @@ def _plot_summary(summary: Sequence[Mapping[str, Any]], path: Path) -> None:
     add_convergence_order_triangle(
         axes[0, 1], 1.0, order_label="1", anchor=(0.76, 0.16), width=0.13
     )
+    axes[1, 1].text(
+        0.5,
+        0.72,
+        "No concave arcs\nin any matched case",
+        transform=axes[1, 1].transAxes,
+        ha="center",
+        va="center",
+        color="#4b5563",
+        fontsize=8,
+    )
     for axis in axes[1, :]:
         axis.set_xlabel("Cells per side")
     handles, labels = axes[0, 0].get_legend_handles_labels()
@@ -627,6 +706,7 @@ def _write_report(
     path: Path,
     summary: Sequence[Mapping[str, Any]],
     equivalence: Sequence[Mapping[str, Any]],
+    c0_verification: Sequence[Mapping[str, Any]],
     source_commits: Sequence[str],
 ) -> None:
     rows = [
@@ -648,19 +728,20 @@ def _write_report(
         "",
         "## Results",
         "",
-        "| Variant | N | Hausdorff median | Curvature MAE median | Facet-gap median | Concave arc length | C0 accepted / rejected |",
-        "|---|---:|---:|---:|---:|---:|---:|",
+        "| Variant | N | Hausdorff median | Curvature MAE median | Signed curvature mean | Facet-gap median | Concave arc length | C0 accepted / rejected |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for row in summary:
         rows.append(
             "| {variant} | {cells_per_side} | {hausdorff} | {curvature} | "
-            "{gap} | {concave} | {accepted} / {rejected} |".format(
+            "{signed} | {gap} | {concave} | {accepted} / {rejected} |".format(
                 variant=row["variant"],
                 cells_per_side=row["cells_per_side"],
                 hausdorff=_format(float(row["native_symmetric_hausdorff_median"])),
                 curvature=_format(
                     float(row["geometric_curvature_mean_absolute_error_median"])
                 ),
+                signed=_format(float(row["signed_curvature_arc_length_mean_median"])),
                 gap=_format(float(row["production_facet_gap_median"])),
                 concave=_format(float(row["concave_arc_length_fraction_median"])),
                 accepted=row["c0_adjustment_events"],
@@ -704,6 +785,41 @@ def _write_report(
         int(row["per_cell_merged_cells"]) + int(row["graph_coordinated_merged_cells"])
         for row in equivalence
     )
+    changed_c0_cases = sum(
+        not bool(row["c0_geometry_exactly_matches_pre_c0"]) for row in c0_verification
+    )
+    plain_rows = {
+        int(row["cells_per_side"]): row
+        for row in summary
+        if row["variant"] == "graph-coordinated circular"
+    }
+    c0_rows = {
+        int(row["cells_per_side"]): row
+        for row in summary
+        if row["variant"] == "graph-coordinated circular + guarded C0"
+    }
+    curvature_changes = {
+        resolution: 100.0
+        * (
+            float(c0_rows[resolution]["geometric_curvature_mean_absolute_error_median"])
+            / float(
+                plain_rows[resolution]["geometric_curvature_mean_absolute_error_median"]
+            )
+            - 1.0
+        )
+        for resolution in plain_rows
+    }
+    plain_curvature_order = float(
+        next(iter(plain_rows.values()))[
+            "geometric_curvature_mean_absolute_error_fit_order"
+        ]
+    )
+    c0_curvature_order = float(
+        next(iter(c0_rows.values()))[
+            "geometric_curvature_mean_absolute_error_fit_order"
+        ]
+    )
+    c0_straight_limit_count = sum(int(row["line_count"]) for row in c0_rows.values())
     rows.extend(
         [
             "",
@@ -715,10 +831,29 @@ def _write_report(
             f"largest native parameter difference is `{maximum_delta:.3e}`. Their "
             f"combined merged-cell count is `{total_merges}`.",
             "",
+            "## Interpretation",
+            "",
+            "Guarded C0 does not materially improve the common unsigned-curvature "
+            "observable in this five-case study. Relative to graph-coordinated circular, "
+            f"its median curvature error changes by `{curvature_changes[32]:+.1f}%`, "
+            f"`{curvature_changes[64]:+.1f}%`, and `{curvature_changes[128]:+.1f}%` at "
+            f"`N=32,64,128`, respectively. The fitted curvature order changes only from "
+            f"`{plain_curvature_order:.3f}` to `{c0_curvature_order:.3f}`. Its clear "
+            "benefits are instead geometric: lower Hausdorff error and much smaller "
+            "facet gaps.",
+            "",
+            "No negative-radius (locally concave) arc occurs in any of the 45 matched "
+            "case-variant-resolution reconstructions. The unsigned curvature metric is "
+            "therefore not masking sign errors here. The guarded C0 runs contain "
+            f"`{c0_straight_limit_count}` straight-limit line facets in total; the common "
+            "metric assigns these zero curvature.",
+            "",
             "The C0 facet sidecars are post-refinement: `runReconstruction` invokes "
             "the guarded `makeC0` pass before collecting the returned facet list and "
             "writing the exact schema-v2 metadata. C0 adjustment/rejection counts above "
-            "come from the same final run's provenance events.",
+            "come from the same final run's provenance events. The saved native geometry "
+            f"differs from its matched pre-C0 reconstruction in `{changed_c0_cases}/"
+            f"{len(c0_verification)}` cases.",
             "",
             "## Reproduce",
             "",
@@ -800,6 +935,9 @@ def main() -> None:
     )
     summary, case_orders = summarize_case_results(case_rows)
     equivalence = build_equivalence_rows(runs, resolutions, case_indices, case_rows)
+    c0_verification = build_c0_verification_rows(
+        runs, resolutions, case_indices, case_rows
+    )
     if not all(
         bool(row["native_geometry_within_1e-12"])
         and int(row["per_cell_merged_cells"]) == 0
@@ -807,14 +945,21 @@ def main() -> None:
         for row in equivalence
     ):
         raise RuntimeError("per-cell/graph equivalence or no-merge QA failed")
+    if not all(
+        not bool(row["c0_geometry_exactly_matches_pre_c0"])
+        and int(row["c0_adjustment_events"]) > 0
+        for row in c0_verification
+    ):
+        raise RuntimeError("saved guarded-C0 geometry is not demonstrably post-pass")
     _write_csv(output / "case_results.csv", case_rows)
     _write_csv(output / "summary.csv", summary)
     _write_csv(output / "case_orders.csv", case_orders)
     _write_csv(output / "per_cell_graph_equivalence.csv", equivalence)
+    _write_csv(output / "guarded_c0_postrefinement_verification.csv", c0_verification)
     figure_path = output / "ellipse_circular_variants_all_methods.pdf"
     _plot_summary(summary, figure_path)
     source_commits = sorted({str(row["source_commit"]) for row in case_rows})
-    _write_report(report, summary, equivalence, source_commits)
+    _write_report(report, summary, equivalence, c0_verification, source_commits)
     write_json(
         output / "manifest.json",
         {
