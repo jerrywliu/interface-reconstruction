@@ -76,6 +76,16 @@ def test_manifest_case_subset_accepts_driver_and_json_encodings():
     assert _manifest_case_indices([0, 1, 2, 3, 4]) == expected
 
 
+def test_matched_command_supports_full_canonical_case_set():
+    case_indices = tuple(range(25))
+    command = build_reconstruction_command(
+        VARIANTS[0], 128, case_indices, "matched_full"
+    )
+    assert command[command.index("--case_indices") + 1] == ",".join(
+        str(value) for value in case_indices
+    )
+
+
 def test_optional_blank_static_metric_is_preserved_as_nan():
     assert _float_or_nan(1.25) == pytest.approx(1.25)
     assert math.isnan(_float_or_nan(""))

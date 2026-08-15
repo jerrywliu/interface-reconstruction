@@ -309,12 +309,16 @@ def signed_arc_diagnostics(payload: Mapping[str, Any]) -> dict[str, float | int]
 
 
 def _evaluate_case(
-    variant_key: str, resolution: int, run_dir_value: str, case_index: int
+    variant_key: str,
+    resolution: int,
+    run_dir_value: str,
+    case_index: int,
+    expected_case_indices: Sequence[int],
 ) -> dict[str, Any]:
     variant = VARIANT_BY_KEY[variant_key]
     run_dir = Path(run_dir_value)
     manifest = _validate_run_manifest(
-        run_dir, variant, resolution, DEFAULT_CASE_INDICES
+        run_dir, variant, resolution, expected_case_indices
     )
     saved_geometry = _load_jsonl(run_dir / "metrics" / "case_geometry.jsonl")[
         case_index
@@ -785,13 +789,21 @@ def _write_report(
     equivalence: Sequence[Mapping[str, Any]],
     c0_verification: Sequence[Mapping[str, Any]],
     source_commits: Sequence[str],
+    case_indices: Sequence[int],
+    resolutions: Sequence[int],
 ) -> None:
+    if tuple(case_indices) == tuple(range(min(case_indices), max(case_indices) + 1)):
+        case_description = f"cases {min(case_indices)}--{max(case_indices)}"
+    else:
+        case_description = "cases " + ",".join(str(value) for value in case_indices)
+    resolution_description = ",".join(str(value) for value in resolutions)
     rows = [
         "# Ellipse Circular-Variant Common-Metric Study",
         "",
         "This fresh matched Cartesian study compares the finalized `per-cell circular`, "
         "`graph-coordinated circular`, and `graph-coordinated circular + joint C0` "
-        "variants on canonical ellipse cases 0--4 at `N=32,64,128`. The joint C0 "
+        f"variants on canonical ellipse {case_description} at "
+        f"`N={resolution_description}`. The joint C0 "
         "variant is the production default: connected rejected-join components are "
         "refined over shared endpoints and conservative per-facet curvatures.",
         "",
@@ -929,7 +941,8 @@ def _write_report(
             "## Interpretation",
             "",
             "Joint C0 does not materially improve the common unsigned-curvature "
-            "observable in this five-case study. Relative to graph-coordinated circular, "
+            f"observable in this {len(case_indices)}-case study. Relative to "
+            "graph-coordinated circular, "
             f"its median curvature error changes by `{curvature_changes[32]:+.1f}%`, "
             f"`{curvature_changes[64]:+.1f}%`, and `{curvature_changes[128]:+.1f}%` at "
             f"`N=32,64,128`, respectively. The fitted curvature order changes only from "
@@ -995,8 +1008,8 @@ def main() -> None:
     report = args.report.resolve()
     resolutions = tuple(int(value) for value in args.resolutions)
     case_indices = tuple(int(value) for value in args.case_indices)
-    if case_indices != DEFAULT_CASE_INDICES:
-        raise ValueError("this matched QA study is pinned to canonical cases 0--4")
+    if not case_indices or len(set(case_indices)) != len(case_indices):
+        raise ValueError("case indices must be a non-empty unique sequence")
     canonical_benchmark_cases("ellipses", case_indices)
     output.mkdir(parents=True, exist_ok=True)
     runs = run_reconstructions(
@@ -1013,6 +1026,7 @@ def main() -> None:
             resolution,
             str(runs[(variant["key"], resolution)]),
             case_index,
+            case_indices,
         )
         for variant in VARIANTS
         for resolution in resolutions
@@ -1040,7 +1054,7 @@ def main() -> None:
     c0_verification = build_c0_verification_rows(
         runs, resolutions, case_indices, case_rows
     )
-    if not all(
+    if case_indices == DEFAULT_CASE_INDICES and not all(
         bool(row["native_geometry_within_1e-12"])
         and int(row["per_cell_merged_cells"]) == 0
         and int(row["graph_coordinated_merged_cells"]) == 0
@@ -1061,7 +1075,15 @@ def main() -> None:
     figure_path = output / "ellipse_circular_variants_all_methods.pdf"
     _plot_summary(summary, figure_path)
     source_commits = sorted({str(row["source_commit"]) for row in case_rows})
-    _write_report(report, summary, equivalence, c0_verification, source_commits)
+    _write_report(
+        report,
+        summary,
+        equivalence,
+        c0_verification,
+        source_commits,
+        case_indices,
+        resolutions,
+    )
     write_json(
         output / "manifest.json",
         {
@@ -1070,7 +1092,8 @@ def main() -> None:
             "variants": list(VARIANTS),
             "cells_per_side": list(resolutions),
             "case_indices": list(case_indices),
-            "case_count": len(case_rows),
+            "case_count": len(case_indices),
+            "result_row_count": len(case_rows),
             "source_commits": source_commits,
             "source_runs": [str(path) for path in runs.values()],
             "native_geometry_tolerance": GEOMETRY_TOLERANCE,
