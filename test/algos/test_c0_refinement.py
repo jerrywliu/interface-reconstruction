@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from main.algos import c0_refinement
 from main.algos.c0_refinement import plan_joint_c0_refinement
 from main.structs.facets.linear_facet import LinearFacet
 from main.structs.meshes.merge_mesh import MergeMesh
@@ -60,6 +61,25 @@ def test_joint_c0_treats_corner_facets_as_fixed_boundaries():
     assert assignments == []
     assert report.eligible_joins == 0
     assert report.components == ()
+
+
+def test_joint_c0_skips_degenerate_initial_seed(monkeypatch):
+    first, second = _two_cell_gap()
+    mesh = SimpleNamespace(merged_polys={0: first, 1: second})
+    original = c0_refinement._initial_values
+
+    def one_degenerate_seed(alpha, *args):
+        if alpha == 0.0:
+            raise ValueError("Cannot parameterize curvature on a zero-length chord")
+        return original(alpha, *args)
+
+    monkeypatch.setattr(c0_refinement, "_initial_values", one_degenerate_seed)
+
+    assignments, report = plan_joint_c0_refinement(mesh, [first, second])
+
+    assert assignments
+    assert report.components_solved == 1
+    assert report.components_failed == 0
 
 
 def test_make_c0_defaults_to_joint_and_keeps_guarded_mode_selectable():

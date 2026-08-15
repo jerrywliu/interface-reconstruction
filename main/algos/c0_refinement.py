@@ -543,11 +543,18 @@ def _solve_component_c0_fallback(
             provisional, component, joins, base_facets
         )
 
-    seeds = [
-        _initial_values(alpha, component, joins, node_ids, base_facets)
-        for alpha in (0.0, 0.25, 0.5, 0.75, 1.0)
-    ]
-    center = seeds[2]
+    seeds = []
+    for alpha in (0.0, 0.25, 0.5, 0.75, 1.0):
+        try:
+            seeds.append(
+                _initial_values(alpha, component, joins, node_ids, base_facets)
+            )
+        except ValueError as error:
+            if "zero-length chord" not in str(error):
+                raise
+    if not seeds:
+        return None
+    center = seeds[len(seeds) // 2]
     seed = 7919 + sum(node_ids) + 1009 * sum(component)
     rng = np.random.default_rng(seed)
     for _ in range(20):
@@ -688,11 +695,21 @@ def _solve_component(
             candidate.score = _solution_score(candidate, component, joins, base_facets)
             candidates.append(candidate)
 
+    initial_values = []
     for alpha in (0.0, 0.25, 0.5, 0.75, 1.0):
-        try_initial(_initial_values(alpha, component, joins, node_ids, base_facets))
+        try:
+            initial = _initial_values(
+                alpha, component, joins, node_ids, base_facets
+            )
+        except ValueError as error:
+            if "zero-length chord" not in str(error):
+                raise
+            continue
+        initial_values.append(initial)
+        try_initial(initial)
 
-    if not candidates:
-        center = _initial_values(0.5, component, joins, node_ids, base_facets)
+    if not candidates and initial_values:
+        center = initial_values[len(initial_values) // 2]
         seed = sum(node_ids) + 1009 * sum(component)
         rng = np.random.default_rng(seed)
         for trial in range(30):
