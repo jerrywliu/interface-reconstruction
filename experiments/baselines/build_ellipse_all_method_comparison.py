@@ -193,6 +193,10 @@ def assemble_case_metrics(
                     native, "geometric_curvature_mean_absolute_error"
                 ),
                 "facet_gap": _float(diagnostic, "shared_edge_gap_mean"),
+                "normalized_conservation_residual": _float(
+                    diagnostic, "conservation_max_absolute_residual"
+                )
+                / _float(native, "cell_size") ** 2,
                 "mixed_cells": mixed,
                 "reconstructed_cells": reconstructed,
                 "unsupported_cells": _int(diagnostic, "unsupported_cells"),
@@ -222,6 +226,9 @@ def assemble_case_metrics(
                     row, "geometric_curvature_mean_absolute_error"
                 ),
                 "facet_gap": _float(row, "production_facet_gap"),
+                "normalized_conservation_residual": _float(
+                    row, "normalized_conservation_residual"
+                ),
                 "mixed_cells": mixed,
                 "reconstructed_cells": mixed,
                 "unsupported_cells": 0,
@@ -303,6 +310,10 @@ def summarize_case_metrics(
                 int(row["unresolved_cells"]) for row in selected
             )
             item["reconstruction_coverage"] = reconstructed / mixed
+            item["normalized_conservation_residual_max"] = max(
+                float(row["normalized_conservation_residual"])
+                for row in selected
+            )
             method_summary.append(item)
         for metric in METRICS:
             order = _observed_order(method_summary, f"{metric}_median")

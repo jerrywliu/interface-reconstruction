@@ -25,6 +25,10 @@ from experiments.baselines.run_graph_circular_ellipse_common_metrics import (
     verify_canonical_ellipse_geometry,
 )
 from experiments.plotting import add_convergence_order_triangle
+from experiments.submission.conservation_analyzer import (
+    analyze_case_records,
+    load_run_grid,
+)
 from main.algos.baselines.external_metrics import (
     directed_hausdorff_external,
     geometric_curvature_error_external,
@@ -101,6 +105,44 @@ def _manifest_case_indices(raw: Any) -> tuple[int, ...]:
 
 def _float_or_nan(raw: Any) -> float:
     return float(raw) if raw not in (None, "") else math.nan
+
+
+def _normalized_conservation_diagnostics(
+    run_dir: Path, case_index: int, *, stage: str
+) -> tuple[float, float]:
+    with (run_dir / "metrics" / "cell_metrics.csv").open(
+        newline="", encoding="utf-8"
+    ) as stream:
+        rows = [
+            row
+            for row in csv.DictReader(stream)
+            if int(row["case_index"]) == case_index
+        ]
+    analysis = analyze_case_records(
+        load_run_grid(run_dir, repo_root=REPO_ROOT),
+        rows,
+        total_prescribed_phase_area=None,
+        stage=stage,
+    )
+    if not analysis.summary["complete"]:
+        raise ValueError(
+            f"{run_dir.name}: incomplete conservation replay for case {case_index}"
+        )
+
+    zone_areas: dict[str, float] = {}
+    for row in analysis.cell_rows:
+        merge_id = str(row["merge_id"])
+        zone_areas[merge_id] = zone_areas.get(merge_id, 0.0) + float(
+            row["cell_area"]
+        )
+    zone_residuals = [
+        float(row["absolute_residual"]) / zone_areas[str(row["merge_id"])]
+        for row in analysis.zone_rows
+    ]
+    global_residual = abs(
+        sum(float(row["signed_residual"]) for row in analysis.zone_rows)
+    ) / sum(zone_areas.values())
+    return max(zone_residuals, default=0.0), global_residual
 
 
 def _run_name(prefix: str, variant_key: str, resolution: int) -> str:
@@ -341,6 +383,13 @@ def _evaluate_case(
     diagnostics = _load_case_metrics(run_dir / "metrics" / "case_metrics.csv")[
         case_index
     ]
+    normalized_conservation, normalized_global_conservation = (
+        _normalized_conservation_diagnostics(
+            run_dir,
+            case_index,
+            stage="after_c0" if variant["do_c0"] else "before_c0",
+        )
+    )
     c0_adjustments, c0_rejections = _load_c0_event_counts(
         run_dir / "metrics" / "merge_events.csv"
     ).get(case_index, (0, 0))
@@ -408,6 +457,8 @@ def _evaluate_case(
         "production_global_relative_area_error": _float_or_nan(
             diagnostics["area_error"]
         ),
+        "normalized_conservation_residual": normalized_conservation,
+        "normalized_global_conservation_residual": normalized_global_conservation,
     }
 
 
@@ -646,6 +697,14 @@ def summarize_case_results(
                     float(row.get("max_c0_tangent_angle_radians", math.nan))
                     for row in selected
                 ),
+                "normalized_conservation_residual_max": max(
+                    float(row["normalized_conservation_residual"])
+                    for row in selected
+                ),
+                "normalized_global_conservation_residual_max": max(
+                    float(row["normalized_global_conservation_residual"])
+                    for row in selected
+                ),
             }
             for metric in SUMMARY_METRICS:
                 values = np.asarray([float(row[metric]) for row in selected])
@@ -813,6 +872,8 @@ def _write_report(
         "geometric curvature against the nearest analytic ellipse branch",
         "- concavity diagnostic: negative project radius, reported by primitive count "
         "and native arc length",
+        "- normalized conservation residual: maximum fitted-group area residual divided "
+        "by the geometric area of that cell or merged group",
         "",
         "## Results",
         "",
@@ -833,7 +894,7 @@ def _write_report(
                 solved=row["c0_joint_components_solved"],
                 components=row["c0_joint_components"],
                 bad_after=row["c0_bad_joins_after_joint"],
-                area=_format(float(row["max_c0_relative_area_residual"])),
+                area=_format(float(row["normalized_conservation_residual_max"])),
             )
         )
     rows.extend(

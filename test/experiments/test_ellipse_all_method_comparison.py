@@ -34,6 +34,7 @@ def _synthetic_cases():
                         "facet_gap": (
                             0.0 if method["id"] == "quasi" else factor / resolution**3
                         ),
+                        "normalized_conservation_residual": 1.0e-12,
                         "mixed_cells": 10,
                         "reconstructed_cells": 10 - unresolved,
                         "unsupported_cells": 0,

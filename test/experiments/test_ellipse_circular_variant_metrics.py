@@ -133,6 +133,8 @@ def test_summary_recovers_variant_specific_orders():
                     "concave_arc_count": 0,
                     "c0_adjustment_events": 2 if variant["do_c0"] else 0,
                     "c0_rejection_events": 0,
+                    "normalized_conservation_residual": 1.0e-12,
+                    "normalized_global_conservation_residual": 1.0e-14,
                 }
                 for metric in (
                     "native_symmetric_hausdorff",
