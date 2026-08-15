@@ -21,7 +21,7 @@ DEFAULT_NATIVE_CASES = Path(
 )
 DEFAULT_OURS_CASES = Path(
     "experiments/baselines/results/"
-    "ellipse_circular_variants_common_metrics_20260814/case_results.csv"
+    "ellipse_circular_variants_joint_c0_common_metrics_20260814/case_results.csv"
 )
 DEFAULT_BASELINE_CASES = (
     Path(
@@ -53,7 +53,7 @@ METHODS = (
         "id": "ours_per_cell",
         "method": "Ours",
         "variant": "per-cell circular",
-        "label": "Ours (per-cell circular)",
+        "label": "Ours: circular (per-cell)",
         "color": "#0072B2",
         "marker": "o",
         "linestyle": ":",
@@ -62,7 +62,7 @@ METHODS = (
         "id": "ours_graph",
         "method": "Ours",
         "variant": "graph-coordinated circular",
-        "label": "Ours (graph-coordinated circular)",
+        "label": "Ours: circular (graph-coordinated)",
         "color": "#009E73",
         "marker": "s",
         "linestyle": "--",
@@ -70,8 +70,8 @@ METHODS = (
     {
         "id": "ours_c0",
         "method": "Ours",
-        "variant": "graph-coordinated circular + guarded C0",
-        "label": "Ours (graph-coordinated circular + C0)",
+        "variant": "graph-coordinated circular + joint C0",
+        "label": "Ours: circular (graph-coordinated + joint C0)",
         "color": "#D55E00",
         "marker": "D",
         "linestyle": "-",
@@ -408,7 +408,7 @@ def plot_summary(summary: Sequence[Mapping[str, Any]], path: Path) -> None:
     figure.savefig(
         path,
         bbox_inches="tight",
-        dpi=180 if path.suffix.lower() == ".png" else None,
+        dpi=360 if path.suffix.lower() == ".png" else None,
     )
     plt.close(figure)
 

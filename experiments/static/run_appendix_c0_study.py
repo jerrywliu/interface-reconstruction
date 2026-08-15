@@ -437,6 +437,8 @@ def main():
                                 "1",
                                 "--do_c0",
                                 "1" if variant["do_c0"] else "0",
+                                "--c0_mode",
+                                "guarded",
                                 exp_spec["num_arg"],
                                 str(num_value),
                             ]
@@ -453,6 +455,7 @@ def main():
                                 "variant": variant["label"],
                                 "facet_algo": variant["facet_algo"],
                                 "do_c0": bool(variant["do_c0"]),
+                                "c0_mode": "guarded",
                                 "resolution": resolution,
                                 "wiggle": wiggle,
                                 "seed": seed,

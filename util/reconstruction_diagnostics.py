@@ -86,12 +86,36 @@ CASE_FIELDNAMES = [
     "fraction_final_circular_cells",
     "fraction_final_linear_corner_cells",
     "fraction_final_curved_corner_cells",
+    "c0_mode",
+    "num_c0_eligible_joins",
+    "num_c0_bad_joins_before_joint",
+    "num_c0_bad_joins_after_joint",
+    "num_c0_joint_components",
+    "num_c0_joint_components_solved",
+    "num_c0_joint_components_failed",
+    "num_c0_exact_c1_components",
+    "num_c0_conservative_fallback_components",
+    "max_c0_relative_area_residual",
+    "max_c0_tangent_angle_radians",
     "hausdorff",
     "facet_gap",
     "area_error",
     "curvature_error",
     "tangent_error",
     "curvature_proxy_error",
+]
+
+C0_COMPONENT_FIELDNAMES = [
+    "case_index",
+    "component_index",
+    "merge_ids_json",
+    "num_facets",
+    "num_bad_joins",
+    "solved",
+    "solution_kind",
+    "max_relative_area_residual",
+    "max_tangent_angle_radians",
+    "function_evaluations",
 ]
 
 
@@ -136,6 +160,7 @@ def write_run_manifest(output_dirs, experiment, parameters):
             "cell_metrics": "metrics/cell_metrics.csv",
             "merge_events": "metrics/merge_events.csv",
             "fallback_events": "metrics/unresolved_plic_fallbacks.csv",
+            "c0_components": "metrics/c0_components.csv",
         },
     }
     path = Path(output_dirs["base"]) / "run_manifest.json"
@@ -405,6 +430,45 @@ def write_reconstruction_diagnostics(mesh, case_index, output_dirs):
         summary[f"num_orientation_retry_{field.replace('queue_size', 'candidates')}"] = sum(
             record.get(field, 0) for record in retry_records
         )
+
+    c0_report = getattr(mesh, "c0_refinement_report", None) or {}
+    c0_components = c0_report.get("components", [])
+    summary.update(
+        {
+            "c0_mode": c0_report.get("mode", "none"),
+            "num_c0_eligible_joins": c0_report.get("eligible_joins", ""),
+            "num_c0_bad_joins_before_joint": c0_report.get(
+                "bad_joins_before", ""
+            ),
+            "num_c0_bad_joins_after_joint": c0_report.get("bad_joins_after", ""),
+            "num_c0_joint_components": len(c0_components),
+            "num_c0_joint_components_solved": c0_report.get(
+                "components_solved", 0
+            ),
+            "num_c0_joint_components_failed": c0_report.get(
+                "components_failed", 0
+            ),
+            "num_c0_exact_c1_components": sum(
+                component.get("solution_kind") == "exact_c1"
+                for component in c0_components
+            ),
+            "num_c0_conservative_fallback_components": sum(
+                component.get("solution_kind") == "c0_min_tangent"
+                for component in c0_components
+            ),
+            "max_c0_relative_area_residual": c0_report.get(
+                "max_relative_area_residual_after", ""
+            ),
+            "max_c0_tangent_angle_radians": max(
+                (
+                    component.get("max_tangent_angle_radians") or 0.0
+                    for component in c0_components
+                    if component.get("solved")
+                ),
+                default=0.0,
+            ),
+        }
+    )
     mesh.reconstruction_diagnostic_summary = summary
 
     event_rows = []
@@ -438,6 +502,32 @@ def write_reconstruction_diagnostics(mesh, case_index, output_dirs):
         EVENT_FIELDNAMES,
         sorted(event_rows, key=lambda row: row["event_order"]),
     )
+    if c0_components:
+        _append_csv(
+            Path(metrics_dir) / "c0_components.csv",
+            C0_COMPONENT_FIELDNAMES,
+            [
+                {
+                    "case_index": case_index,
+                    "component_index": component.get("component_index"),
+                    "merge_ids_json": _json_dumps(component.get("merge_ids", [])),
+                    "num_facets": component.get("num_facets"),
+                    "num_bad_joins": component.get("num_bad_joins"),
+                    "solved": int(bool(component.get("solved"))),
+                    "solution_kind": component.get("solution_kind", ""),
+                    "max_relative_area_residual": component.get(
+                        "max_relative_area_residual"
+                    ),
+                    "max_tangent_angle_radians": component.get(
+                        "max_tangent_angle_radians"
+                    ),
+                    "function_evaluations": component.get(
+                        "function_evaluations"
+                    ),
+                }
+                for component in c0_components
+            ],
+        )
     return summary
 
 

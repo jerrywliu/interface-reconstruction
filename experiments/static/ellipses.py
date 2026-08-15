@@ -246,6 +246,8 @@ def main(
     perturb_max_tries=None,
     perturb_type=None,
     do_c0=None,
+    c0_mode=None,
+    c0_joint_max_nfev=500,
     plic_fallback="LVIRA",
     corner_behavior_profile=MergeMesh.default_corner_behavior_profile,
     **kwargs,
@@ -263,6 +265,9 @@ def main(
     facet_algo = facet_algo if facet_algo is not None else config["GEOMS"]["FACET_ALGO"]
     threshold = config["GEOMS"]["THRESHOLD"]
     do_c0 = config["GEOMS"]["DO_C0"] if do_c0 is None else bool(do_c0)
+    c0_mode = c0_mode or config["GEOMS"].get(
+        "C0_MODE", MergeMesh.default_c0_mode
+    )
 
     # Setup output directories
     output_dirs = setupOutputDirs(save_name, clean_existing=True)
@@ -274,6 +279,8 @@ def main(
             "resolution": resolution,
             "facet_algo": facet_algo,
             "do_c0": do_c0,
+            "c0_mode": c0_mode,
+            "c0_joint_max_nfev": c0_joint_max_nfev,
             "num_ellipses": num_ellipses,
             "major_axis": 30.0,
             "case_indices": case_indices,
@@ -373,6 +380,8 @@ def main(
             algo_kwargs={
                 "plic_fallback": plic_fallback,
                 "corner_behavior_profile": corner_behavior_profile,
+                "c0_mode": c0_mode,
+                "c0_joint_max_nfev": c0_joint_max_nfev,
             },
             return_polys=True,
         )
@@ -1155,6 +1164,18 @@ if __name__ == "__main__":
         default=None,
     )
     parser.add_argument(
+        "--c0_mode",
+        choices=sorted(MergeMesh.c0_modes),
+        default=None,
+        help="C0 correction mode; defaults to the production joint optimizer",
+    )
+    parser.add_argument(
+        "--c0_joint_max_nfev",
+        type=int,
+        default=500,
+        help="maximum function evaluations for each joint C0 solve attempt",
+    )
+    parser.add_argument(
         "--plic_fallback",
         type=str,
         choices=["Youngs", "ELVIRA", "LVIRA"],
@@ -1234,6 +1255,8 @@ if __name__ == "__main__":
             perturb_max_tries=args.perturb_max_tries,
             perturb_type=args.perturb_type,
             do_c0=args.do_c0,
+            c0_mode=args.c0_mode,
+            c0_joint_max_nfev=args.c0_joint_max_nfev,
             plic_fallback=args.plic_fallback,
             corner_behavior_profile=args.corner_behavior_profile,
         )

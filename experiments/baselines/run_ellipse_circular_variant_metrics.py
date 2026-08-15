@@ -36,10 +36,10 @@ from main.algos.baselines.project_facet_adapter import (
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT = Path(
-    "experiments/baselines/results/ellipse_circular_variants_common_metrics_20260814"
+    "experiments/baselines/results/ellipse_circular_variants_joint_c0_common_metrics_20260814"
 )
 DEFAULT_REPORT = Path("docs/baselines/ELLIPSE_CIRCULAR_VARIANTS_COMMON_METRICS.md")
-DEFAULT_RUN_PREFIX = "ellipse_circular_variants_common_metrics_20260814"
+DEFAULT_RUN_PREFIX = "ellipse_circular_variants_joint_c0_common_metrics_20260814"
 DEFAULT_RESOLUTIONS = (32, 64, 128)
 DEFAULT_CASE_INDICES = (0, 1, 2, 3, 4)
 GEOMETRY_TOLERANCE = 1.0e-12
@@ -60,11 +60,12 @@ VARIANTS = (
         "do_c0": False,
     },
     {
-        "key": "graph_coordinated_circular_guarded_c0",
-        "label": "graph-coordinated circular + guarded C0",
-        "display": "Ours (graph-coordinated circular + guarded C0)",
+        "key": "graph_coordinated_circular_joint_c0",
+        "label": "graph-coordinated circular + joint C0",
+        "display": "Ours (graph-coordinated circular + joint C0)",
         "facet_algo": "circular",
         "do_c0": True,
+        "c0_mode": "joint",
     },
 )
 VARIANT_BY_KEY = {variant["key"]: variant for variant in VARIANTS}
@@ -136,6 +137,8 @@ def build_reconstruction_command(
         "1",
         "--do_c0",
         "1" if variant["do_c0"] else "0",
+        "--c0_mode",
+        str(variant.get("c0_mode", "joint")),
         "--num_ellipses",
         "25",
         "--case_indices",
@@ -166,9 +169,9 @@ def _load_c0_event_counts(path: Path) -> dict[int, tuple[int, int]]:
         for row in csv.DictReader(stream):
             case_index = int(row["case_index"])
             values = counts.setdefault(case_index, [0, 0])
-            if row.get("event_kind") == "c0_adjustment":
+            if row.get("event_kind") in {"c0_adjustment", "c0_joint_adjustment"}:
                 values[0] += 1
-            elif row.get("event_kind") == "c0_rejection":
+            elif row.get("event_kind") in {"c0_rejection", "c0_joint_rejection"}:
                 values[1] += 1
     return {case_index: tuple(values) for case_index, values in counts.items()}
 
@@ -193,6 +196,11 @@ def _validate_run_manifest(
         "random_seed": 42,
         "num_ellipses": 25,
     }
+    if parameters.get("c0_mode") not in (None, variant.get("c0_mode", "joint")):
+        raise ValueError(
+            f"{run_dir.name}: c0_mode={parameters.get('c0_mode')!r}, "
+            f"expected {variant.get('c0_mode', 'joint')!r}"
+        )
     for field, expected_value in expected.items():
         if parameters.get(field) != expected_value:
             raise ValueError(
@@ -467,7 +475,7 @@ def build_c0_verification_rows(
     case_indices: Sequence[int],
     case_rows: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Prove the saved guarded-C0 metadata contain post-pass geometry."""
+    """Prove the saved joint-C0 metadata contain post-pass geometry."""
 
     by_key = {
         (row["variant"], int(row["cells_per_side"]), int(row["case_index"])): row
@@ -476,7 +484,7 @@ def build_c0_verification_rows(
     result = []
     for resolution in resolutions:
         graph_dir = runs[("graph_coordinated_circular", resolution)]
-        c0_dir = runs[("graph_coordinated_circular_guarded_c0", resolution)]
+        c0_dir = runs[("graph_coordinated_circular_joint_c0", resolution)]
         for case_index in case_indices:
             graph_payload = json.loads(
                 (
@@ -501,7 +509,7 @@ def build_c0_verification_rows(
             )
             c0_row = by_key[
                 (
-                    "graph-coordinated circular + guarded C0",
+                    "graph-coordinated circular + joint C0",
                     resolution,
                     case_index,
                 )
@@ -716,11 +724,10 @@ def _write_report(
         "# Ellipse Circular-Variant Common-Metric Study",
         "",
         "This fresh matched Cartesian study compares the finalized `per-cell circular`, "
-        "`graph-coordinated circular`, and `graph-coordinated circular + guarded C0` "
-        "variants on canonical ellipse cases 0--4 at `N=32,64,128`. The guarded "
-        "C0 variant is the production single pass: eligible endpoint pairs are averaged "
-        "and each facet is conservatively refit. It is not the later representative "
-        "joint optimizer.",
+        "`graph-coordinated circular`, and `graph-coordinated circular + joint C0` "
+        "variants on canonical ellipse cases 0--4 at `N=32,64,128`. The joint C0 "
+        "variant is the production default: connected rejected-join components are "
+        "refined over shared endpoints and conservative per-facet curvatures.",
         "",
         f"- reconstruction source commit(s): `{', '.join(source_commits)}`",
         "- native geometry: exact schema-v2 line/arc metadata",
@@ -799,7 +806,7 @@ def _write_report(
     c0_rows = {
         int(row["cells_per_side"]): row
         for row in summary
-        if row["variant"] == "graph-coordinated circular + guarded C0"
+        if row["variant"] == "graph-coordinated circular + joint C0"
     }
     curvature_changes = {
         resolution: 100.0
@@ -836,7 +843,7 @@ def _write_report(
             "",
             "## Interpretation",
             "",
-            "Guarded C0 does not materially improve the common unsigned-curvature "
+            "Joint C0 does not materially improve the common unsigned-curvature "
             "observable in this five-case study. Relative to graph-coordinated circular, "
             f"its median curvature error changes by `{curvature_changes[32]:+.1f}%`, "
             f"`{curvature_changes[64]:+.1f}%`, and `{curvature_changes[128]:+.1f}%` at "
@@ -845,14 +852,15 @@ def _write_report(
             "benefits are instead geometric: lower Hausdorff error and much smaller "
             "facet gaps.",
             "",
-            "No negative-radius (locally concave) arc occurs in any of the 45 matched "
-            "case-variant-resolution reconstructions. The unsigned curvature metric is "
-            "therefore not masking sign errors here. The guarded C0 runs contain "
+            "Negative-radius (locally concave) arcs are reported explicitly because "
+            "joint conservative refinement does not impose a convexity constraint. "
+            "The unsigned curvature metric therefore remains paired with the signed "
+            "curvature and concave-arc diagnostics. The joint C0 runs contain "
             f"`{c0_straight_limit_count}` straight-limit line facets in total; the common "
             "metric assigns these zero curvature.",
             "",
             "The C0 facet sidecars are post-refinement: `runReconstruction` invokes "
-            "the guarded `makeC0` pass before collecting the returned facet list and "
+            "the joint `makeC0` pass before collecting the returned facet list and "
             "writing the exact schema-v2 metadata. C0 adjustment/rejection counts above "
             "come from the same final run's provenance events. The saved native geometry "
             f"differs from its matched pre-C0 reconstruction in `{changed_c0_cases}/"
@@ -953,12 +961,12 @@ def main() -> None:
         and int(row["c0_adjustment_events"]) > 0
         for row in c0_verification
     ):
-        raise RuntimeError("saved guarded-C0 geometry is not demonstrably post-pass")
+        raise RuntimeError("saved joint-C0 geometry is not demonstrably post-pass")
     _write_csv(output / "case_results.csv", case_rows)
     _write_csv(output / "summary.csv", summary)
     _write_csv(output / "case_orders.csv", case_orders)
     _write_csv(output / "per_cell_graph_equivalence.csv", equivalence)
-    _write_csv(output / "guarded_c0_postrefinement_verification.csv", c0_verification)
+    _write_csv(output / "joint_c0_postrefinement_verification.csv", c0_verification)
     figure_path = output / "ellipse_circular_variants_all_methods.pdf"
     _plot_summary(summary, figure_path)
     source_commits = sorted({str(row["source_commit"]) for row in case_rows})
@@ -976,8 +984,8 @@ def main() -> None:
             "source_runs": [str(path) for path in runs.values()],
             "native_geometry_tolerance": GEOMETRY_TOLERANCE,
             "c0_definition": (
-                "production guarded single-pass endpoint averaging followed by "
-                "independent conservative line/arc curvature refit"
+                "production joint refinement of shared endpoints and conservative "
+                "per-facet curvatures on connected rejected-join components"
             ),
             "curvature_metric": (
                 "arc-length-weighted mean absolute unsigned geometric-curvature "

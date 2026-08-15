@@ -38,6 +38,8 @@ class MergeMesh(BaseMesh):
 
     default_corner_behavior_profile = "pre_f8_corner"
     default_rescue_profile = "exact_linear_support_only"
+    default_c0_mode = "joint"
+    c0_modes = {"guarded", "joint"}
 
     rescue_profiles = {
         "full",
@@ -89,6 +91,7 @@ class MergeMesh(BaseMesh):
         self._provenance_event_order = 0
         self._provenance_stage = "initial"
         self._provenance_override = None
+        self.c0_refinement_report = None
         # Let self.polys be a list of NeighboredPolygon objects
         self.polys: list[list[NeighboredPolygon]] = [
             [None] * (len(points[0]) - 1) for _ in range(len(points) - 1)
@@ -3802,8 +3805,9 @@ class MergeMesh(BaseMesh):
         # Return merge_polys
         return list(map(lambda x: self.merged_polys[x], merge_ids))
 
-    # TODO if gap is too big, don't make C0?
-    def makeC0(self, merged_polys):
+    def makeC0Guarded(self, merged_polys):
+        """Apply the simultaneous midpoint and conservative local-refit pass."""
+
         # If facet name in this list, don't use it for fitting C0
         fixed_endpoint_facetnames = ["corner"]
 
@@ -3885,3 +3889,92 @@ class MergeMesh(BaseMesh):
                     self._provenance_override = previous_override
 
         return merged_polys
+
+    def makeC0Joint(self, merged_polys, *, max_nfev=500):
+        """Apply guarded initialization followed by joint component refinement."""
+
+        from main.algos.c0_refinement import plan_joint_c0_refinement
+
+        adjusted = MergeMesh.makeC0Guarded(self, merged_polys)
+        assignments, report = plan_joint_c0_refinement(
+            self, adjusted, max_nfev=max_nfev
+        )
+        self.c0_refinement_report = report.as_dict()
+
+        previous_stage = getattr(self, "_provenance_stage", None)
+        if hasattr(self, "_provenance_stage"):
+            self._provenance_stage = "c0_joint"
+        try:
+            for assignment in assignments:
+                poly = self.merged_polys[assignment.merge_id]
+                previous_override = getattr(self, "_provenance_override", None)
+                if hasattr(self, "_provenance_override"):
+                    self._provenance_override = {
+                        assignment.merge_id: {
+                            "event_kind": "c0_joint_adjustment",
+                            "policy": assignment.solution_kind,
+                            "reason": "conservative_component_refit_accepted",
+                        }
+                    }
+                try:
+                    poly.setFacet(assignment.facet)
+                finally:
+                    if hasattr(self, "_provenance_override"):
+                        self._provenance_override = previous_override
+
+            for component in report.components:
+                if component.solved:
+                    continue
+                for merge_id in component.merge_ids:
+                    poly = self.merged_polys[merge_id]
+                    previous_override = getattr(self, "_provenance_override", None)
+                    if hasattr(self, "_provenance_override"):
+                        self._provenance_override = {
+                            merge_id: {
+                                "event_kind": "c0_joint_rejection",
+                                "policy": "failed",
+                                "reason": "no_admissible_component_solution",
+                            }
+                        }
+                    try:
+                        facet = poly.getFacet()
+                        self._record_facet_assignment(poly, facet, facet)
+                    finally:
+                        if hasattr(self, "_provenance_override"):
+                            self._provenance_override = previous_override
+        finally:
+            if hasattr(self, "_provenance_stage"):
+                self._provenance_stage = previous_stage
+        return adjusted
+
+    def makeC0(self, merged_polys, *, mode=None, joint_max_nfev=500):
+        """Apply the selected conservative continuity correction.
+
+        ``joint`` is the production default. ``guarded`` retains the historical
+        simultaneous midpoint/refit pass for ablations and result reproduction.
+        """
+
+        available_modes = getattr(self, "c0_modes", MergeMesh.c0_modes)
+        selected_mode = mode or getattr(
+            self, "default_c0_mode", MergeMesh.default_c0_mode
+        )
+        if selected_mode not in available_modes:
+            raise ValueError(
+                f"Unknown C0 mode {selected_mode!r}; expected one of "
+                f"{sorted(available_modes)}"
+            )
+        if selected_mode == "guarded":
+            adjusted = MergeMesh.makeC0Guarded(self, merged_polys)
+            self.c0_refinement_report = {
+                "mode": "guarded",
+                "eligible_joins": None,
+                "bad_joins_before": None,
+                "bad_joins_after": None,
+                "components_solved": 0,
+                "components_failed": 0,
+                "components": [],
+            }
+            return adjusted
+        return MergeMesh.makeC0Joint(
+            self, merged_polys, max_nfev=joint_max_nfev
+        )

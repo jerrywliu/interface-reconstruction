@@ -91,7 +91,8 @@ def runReconstruction(
     Args:
         m: MergeMesh object
         facet_algo: String specifying reconstruction algorithm
-        do_c0: Boolean for C0 continuity enforcement
+        do_c0: Boolean for C0 continuity enforcement. The mode is selected with
+            ``algo_kwargs["c0_mode"]`` and defaults to the joint optimizer.
         iter: Current iteration number
         output_dirs: Dictionary of output directories
         algo_kwargs: Dictionary of algorithm-specific keyword arguments
@@ -209,7 +210,11 @@ def _run_with_merge(
     reconstructed_facets = [p.getFacet() for p in merged_polys]
 
     if do_c0:
-        merged_polys = m.makeC0(merged_polys)
+        merged_polys = m.makeC0(
+            merged_polys,
+            mode=algo_kwargs.get("c0_mode", MergeMesh.default_c0_mode),
+            joint_max_nfev=algo_kwargs.get("c0_joint_max_nfev", 500),
+        )
         C0_facets = [p.getFacet() for p in merged_polys]
         writeFacets(
             C0_facets, os.path.join(output_dirs["vtk_reconstructed_c0"], f"{iter}.vtp")

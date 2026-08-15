@@ -153,9 +153,12 @@ def _instrumented_c0_record(
     case_index: int,
     *,
     movement_tolerance: float = 1.0e-12,
+    make_c0_kwargs: Mapping[str, Any] | None = None,
 ) -> tuple[list[Any], dict[str, Any]]:
     before = _capture_c0_state(mesh, merged_polys)
-    adjusted = original_make_c0(mesh, merged_polys)
+    adjusted = original_make_c0(
+        mesh, merged_polys, **dict(make_c0_kwargs or {})
+    )
     after = _capture_c0_state(mesh, adjusted)
 
     join_rows = []
@@ -238,13 +241,16 @@ def _worker(spec: Mapping[str, Any]) -> dict[str, Any]:
     if bool(spec["do_c0"]):
         call_count = 0
 
-        def instrumented_make_c0(mesh: MergeMesh, merged_polys: Sequence[Any]):
+        def instrumented_make_c0(
+            mesh: MergeMesh, merged_polys: Sequence[Any], **make_c0_kwargs: Any
+        ):
             nonlocal call_count
             adjusted, record = _instrumented_c0_record(
                 mesh,
                 merged_polys,
                 original_make_c0,
                 call_count,
+                make_c0_kwargs=make_c0_kwargs,
             )
             audit_records.append(record)
             call_count += 1
