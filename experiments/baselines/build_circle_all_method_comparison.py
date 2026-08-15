@@ -206,10 +206,23 @@ def _write_report(
             "are retained in CSV and shown at a labeled plotting floor only in the "
             "log-scale figure.",
             "",
+            "## Artifacts",
+            "",
+            "- `circle_all_methods_metrics_paper.pdf` and `.png`: primary "
+            "paper-ready all-method panel, rendered with the exact ellipse paper "
+            "figure style and no figure-level title.",
+            "- `circle_all_methods_metrics.pdf` and `.png`: generic diagnostic "
+            "comparison retained for internal review.",
+            "- `summary.csv` and `case_metrics.csv`: plotted aggregate values and "
+            "the complete provenance-bearing 1,200-row case table.",
+            "- `circle_all_methods_metrics_paper.manifest.json`: frozen-input, "
+            "display, hash, and vector-PDF provenance for the paper panel.",
+            "",
             "## Reproduce",
             "",
             "```bash",
             "PYTHONPATH=. python -m experiments.baselines.build_circle_all_method_comparison",
+            "PYTHONPATH=. python -m experiments.baselines.plot_circle_all_method_paper_comparison",
             "```",
             "",
         ]

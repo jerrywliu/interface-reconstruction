@@ -642,20 +642,27 @@ def write_paper_manifest(
     win_counts: Sequence[Mapping[str, Any]],
     artifacts: Sequence[Path],
     pdf_audit: Mapping[str, Any],
+    artifact_kind: str = "paper-ready extended Cartesian ellipse comparison",
+    benchmark: str = "ellipses",
+    generator_sources: Sequence[Path] = (),
 ) -> None:
     git_head = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True
     ).strip()
+    source_paths = list(generator_sources) or [Path(__file__).resolve()]
+    for shared_source in (
+        REPO_ROOT / "experiments/plotting.py",
+        REPO_ROOT / "submission/pdf_vector_qa.py",
+    ):
+        if shared_source not in source_paths:
+            source_paths.append(shared_source)
     payload = {
         "schema_version": 1,
-        "artifact_kind": "paper-ready extended Cartesian ellipse comparison",
+        "artifact_kind": artifact_kind,
+        "benchmark": benchmark,
         "generator_git_head": git_head,
         "tracked_worktree_clean": tracked_worktree_is_clean(),
-        "generator_sources": [
-            file_record(Path(__file__).resolve()),
-            file_record(REPO_ROOT / "experiments/plotting.py"),
-            file_record(REPO_ROOT / "submission/pdf_vector_qa.py"),
-        ],
+        "generator_sources": [file_record(source) for source in source_paths],
         "frozen_input": {
             "root": str(input_root.resolve()),
             "manifest": file_record(input_root / "manifest.json"),
