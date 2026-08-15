@@ -157,6 +157,8 @@ def assemble_case_metrics(
     baseline_cases: Sequence[Path],
     ours_cases: Path,
     methods: Sequence[Mapping[str, Any]] = METHODS,
+    *,
+    benchmark: str = "ellipses",
 ) -> list[dict[str, Any]]:
     """Join native observables to baseline diagnostics and append project variants."""
 
@@ -164,7 +166,7 @@ def assemble_case_metrics(
     diagnostics: dict[tuple[str, str, int, int], Mapping[str, Any]] = {}
     for path in baseline_cases:
         for row in _read_csv(path):
-            if row["benchmark"] != "ellipses":
+            if row["benchmark"] != benchmark:
                 continue
             key = (
                 row["method"],
@@ -178,7 +180,7 @@ def assemble_case_metrics(
 
     result: list[dict[str, Any]] = []
     for native in _read_csv(native_cases):
-        if native["benchmark"] != "ellipses":
+        if native["benchmark"] != benchmark:
             continue
         key = (
             native["method"],
@@ -224,7 +226,7 @@ def assemble_case_metrics(
         )
 
     for row in _read_csv(ours_cases):
-        if row["benchmark"] != "ellipses":
+        if row["benchmark"] != benchmark:
             continue
         key = row["method"], row["variant"]
         method = method_by_key.get(key)
@@ -267,7 +269,9 @@ def assemble_case_metrics(
     if not reference_case_keys or any(
         keys != reference_case_keys for keys in case_keys_by_method.values()
     ):
-        raise ValueError("selected methods do not contain the same case-resolution keys")
+        raise ValueError(
+            "selected methods do not contain the same case-resolution keys"
+        )
     expected = len(methods) * len(reference_case_keys)
     if len(result) != expected:
         raise ValueError(f"expected {expected} matched case rows, found {len(result)}")
@@ -343,8 +347,7 @@ def summarize_case_metrics(
             )
             item["reconstruction_coverage"] = reconstructed / mixed
             item["normalized_conservation_residual_max"] = max(
-                float(row["normalized_conservation_residual"])
-                for row in selected
+                float(row["normalized_conservation_residual"]) for row in selected
             )
             method_summary.append(item)
         for metric in METRICS:
@@ -408,6 +411,10 @@ def _write_manifest(
     methods: Sequence[Mapping[str, Any]],
     rows: Sequence[Mapping[str, Any]],
     summary: Sequence[Mapping[str, Any]],
+    benchmark: str = "ellipses",
+    artifact_stem: str = "ellipse_all_methods_metrics",
+    analysis_sources: Sequence[Path] = (),
+    report_path: Path | None = None,
 ) -> None:
     analysis_git_head = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True
@@ -416,39 +423,46 @@ def _write_manifest(
     artifacts = [
         path.parent / "case_metrics.csv",
         path.parent / "summary.csv",
-        path.parent / "ellipse_all_methods_metrics.pdf",
-        path.parent / "ellipse_all_methods_metrics.png",
+        path.parent / f"{artifact_stem}.pdf",
+        path.parent / f"{artifact_stem}.png",
     ]
+    if report_path is not None:
+        artifacts.append(report_path)
+    source_paths = list(analysis_sources) or [Path(__file__).resolve()]
+    native_replay = (
+        REPO_ROOT / "experiments/baselines/run_common_native_metric_replay.py"
+    )
+    if native_replay not in source_paths:
+        source_paths.append(native_replay)
     payload = {
         "schema_version": 1,
+        "benchmark": benchmark,
         "analysis_git_head": analysis_git_head,
         "tracked_worktree_clean": _tracked_worktree_is_clean(),
-        "analysis_sources": [
-            _file_record(Path(__file__).resolve()),
-            _file_record(
-                REPO_ROOT / "experiments/baselines/run_common_native_metric_replay.py"
-            ),
-        ],
+        "analysis_sources": [_file_record(source) for source in source_paths],
         "selected_methods": [
-            {
-                key: method[key]
-                for key in ("id", "method", "variant", "label")
-            }
+            {key: method[key] for key in ("id", "method", "variant", "label")}
             for method in methods
         ],
         "case_row_count": len(rows),
         "summary_row_count": len(summary),
         "case_indices": sorted({int(row["case_index"]) for row in rows}),
         "cells_per_side": sorted({int(row["cells_per_side"]) for row in rows}),
-        "required_case_indices": list(args.expected_case_indices or ()),
-        "required_cells_per_side": list(args.expected_resolutions or ()),
+        "required_case_indices": list(
+            getattr(args, "expected_case_indices", None)
+            or getattr(args, "case_indices", ())
+        ),
+        "required_cells_per_side": list(
+            getattr(args, "expected_resolutions", None)
+            or getattr(args, "resolutions", ())
+        ),
         "metric_definitions": {
             "native_symmetric_hausdorff": (
                 "partition-insensitive symmetric native point-to-curve supremum"
             ),
             "geometric_curvature_mean_absolute_error": (
                 "arc-length-weighted native geometric-curvature MAE against the "
-                "nearest analytic ellipse branch"
+                f"nearest analytic {benchmark.removesuffix('s')} branch"
             ),
             "facet_gap": "mean shared-edge endpoint gap from method diagnostics",
             "reconstruction_coverage": (
@@ -470,6 +484,9 @@ def plot_summary(
     summary: Sequence[Mapping[str, Any]],
     path: Path,
     methods: Sequence[Mapping[str, Any]] = METHODS,
+    *,
+    benchmark_title: str = "Ellipse",
+    convergence_orders: Sequence[float] = (3.0, 1.0, 3.0),
 ) -> None:
     plt.rcParams.update({"pdf.fonttype": 42, "ps.fonttype": 42, "font.size": 8})
     figure, axes = plt.subplots(2, 2, figsize=(9.0, 6.7), sharex=True)
@@ -525,20 +542,30 @@ def plot_summary(
     axes[1, 1].set_xscale("log", base=2)
     axes[1, 1].set_xticks(resolutions, tuple(str(value) for value in resolutions))
     axes[1, 1].set_ylabel("Reconstructed mixed cells (%)")
-    coverage_values = [
-        100.0 * float(row["reconstruction_coverage"]) for row in summary
-    ]
+    coverage_values = [100.0 * float(row["reconstruction_coverage"]) for row in summary]
     axes[1, 1].set_ylim(max(0.0, min(coverage_values) - 0.5), 100.15)
     axes[1, 1].grid(True, alpha=0.25)
 
     add_convergence_order_triangle(
-        axes[0, 0], 3.0, order_label="3", anchor=(0.75, 0.10), width=0.13
+        axes[0, 0],
+        convergence_orders[0],
+        order_label=f"{convergence_orders[0]:g}",
+        anchor=(0.75, 0.10),
+        width=0.13,
     )
     add_convergence_order_triangle(
-        axes[0, 1], 1.0, order_label="1", anchor=(0.76, 0.13), width=0.13
+        axes[0, 1],
+        convergence_orders[1],
+        order_label=f"{convergence_orders[1]:g}",
+        anchor=(0.76, 0.13),
+        width=0.13,
     )
     add_convergence_order_triangle(
-        axes[1, 0], 3.0, order_label="3", anchor=(0.74, 0.24), width=0.13
+        axes[1, 0],
+        convergence_orders[2],
+        order_label=f"{convergence_orders[2]:g}",
+        anchor=(0.74, 0.24),
+        width=0.13,
     )
     if any(method["id"] == "quasi" for method in methods):
         axes[1, 0].annotate(
@@ -568,7 +595,7 @@ def plot_summary(
         fontsize=7,
     )
     figure.suptitle(
-        "Ellipse benchmark: circular variants and higher-order baselines",
+        f"{benchmark_title} benchmark: circular variants and higher-order baselines",
         fontsize=11,
         y=0.985,
     )
@@ -625,7 +652,9 @@ def main() -> None:
     if not _tracked_worktree_is_clean():
         raise RuntimeError("commit tracked analysis changes before packaging results")
     selected_by_id = {method["id"]: method for method in METHODS}
-    unknown = [method_id for method_id in args.method_ids if method_id not in selected_by_id]
+    unknown = [
+        method_id for method_id in args.method_ids if method_id not in selected_by_id
+    ]
     if unknown:
         raise ValueError(f"unknown method IDs: {unknown}")
     methods = tuple(selected_by_id[method_id] for method_id in args.method_ids)

@@ -129,6 +129,7 @@ def main(
     perturb_fix_boundary=None,
     perturb_max_tries=None,
     perturb_type=None,
+    do_c0=None,
     c0_mode=None,
     c0_joint_max_nfev=500,
     plic_fallback="LVIRA",
@@ -147,10 +148,8 @@ def main(
     # Area and facet settings
     facet_algo = facet_algo if facet_algo is not None else config["GEOMS"]["FACET_ALGO"]
     threshold = config["GEOMS"]["THRESHOLD"]
-    do_c0 = config["GEOMS"]["DO_C0"]
-    c0_mode = c0_mode or config["GEOMS"].get(
-        "C0_MODE", MergeMesh.default_c0_mode
-    )
+    do_c0 = config["GEOMS"]["DO_C0"] if do_c0 is None else bool(do_c0)
+    c0_mode = c0_mode or config["GEOMS"].get("C0_MODE", MergeMesh.default_c0_mode)
 
     # Setup output directories
     output_dirs = setupOutputDirs(save_name, clean_existing=True)
@@ -294,9 +293,7 @@ def main(
         total_hausdorff = 0
         cnt_hausdorff = 0
 
-        for poly, reconstructed_facet in zip(
-            reconstructed_polys, reconstructed_facets
-        ):
+        for poly, reconstructed_facet in zip(reconstructed_polys, reconstructed_facets):
             # Take absolute error in curvature
             curvature_error = abs(reconstructed_facet.curvature - true_curvature)
             avg_curvature_error += curvature_error
@@ -347,9 +344,7 @@ def main(
         curvature_proxy_error = abs(recon_curvature - true_curvature)
 
         print(f"Tangent error for circle {i+1}: {tangent_error:.3e}")
-        print(
-            f"Curvature proxy error for circle {i+1}: {curvature_proxy_error:.3e}"
-        )
+        print(f"Curvature proxy error for circle {i+1}: {curvature_proxy_error:.3e}")
 
         # Save metrics to file
         with open(
@@ -732,7 +727,9 @@ if __name__ == "__main__":
         default=None,
     )
     parser.add_argument("--radius", type=float, help="circle radius", default=10.0)
-    parser.add_argument("--mesh_type", type=str, help="mesh type override", default=None)
+    parser.add_argument(
+        "--mesh_type", type=str, help="mesh type override", default=None
+    )
     parser.add_argument(
         "--perturb_wiggle",
         type=float,
@@ -767,6 +764,13 @@ if __name__ == "__main__":
         choices=["Youngs", "ELVIRA", "LVIRA"],
         default="LVIRA",
         help="PLIC fallback for unresolved merged cells with a 3x3 stencil",
+    )
+    parser.add_argument(
+        "--do_c0",
+        type=int,
+        choices=[0, 1],
+        default=None,
+        help="enable C0 correction (1=yes, 0=no); defaults to config",
     )
     parser.add_argument(
         "--c0_mode",
@@ -830,6 +834,7 @@ if __name__ == "__main__":
             perturb_fix_boundary=args.perturb_fix_boundary,
             perturb_max_tries=args.perturb_max_tries,
             perturb_type=args.perturb_type,
+            do_c0=args.do_c0,
             c0_mode=args.c0_mode,
             c0_joint_max_nfev=args.c0_joint_max_nfev,
             plic_fallback=args.plic_fallback,
