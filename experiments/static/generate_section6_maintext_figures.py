@@ -120,8 +120,10 @@ REPRESENTATIVE_CASES = {
             "method": "LVIRA",
             "edge": "bottom",
             "cell": [15, 0],
-            "half_span": 4.0e-6,
-            "axes": [-0.38, 0.62, 0.32, 0.32],
+            "stencil_shape": [3, 2],
+            "off_domain_fraction": 0.35,
+            "padding_fraction": 0.03,
+            "axes": [-0.42, 0.60, 0.38, 0.30],
         },
     },
     "squares": {
@@ -658,26 +660,44 @@ def _mesh_segments(mesh_path: Path) -> np.ndarray:
     return _segments_from_polydata(_read_polydata(mesh_path))
 
 
-def _structured_grid_cell_polygon(
-    mesh_path: Path, cell_index: tuple[int, int] | list[int]
-) -> np.ndarray:
+def _structured_grid_cell_polygons(
+    mesh_path: Path,
+    cell_indices: list[tuple[int, int]] | tuple[tuple[int, int], ...],
+) -> list[np.ndarray]:
     reader = vtk.vtkStructuredGridReader()
     reader.SetFileName(str(mesh_path))
     reader.Update()
     grid = reader.GetOutput()
     nx_points, ny_points, _ = grid.GetDimensions()
-    ix, iy = (int(cell_index[0]), int(cell_index[1]))
     nx_cells = nx_points - 1
     ny_cells = ny_points - 1
-    if not (0 <= ix < nx_cells and 0 <= iy < ny_cells):
-        raise ValueError(
-            f"Cell {(ix, iy)} is outside the {nx_cells}x{ny_cells} mesh"
+    polygons = []
+    for cell_index in cell_indices:
+        ix, iy = (int(cell_index[0]), int(cell_index[1]))
+        if not (0 <= ix < nx_cells and 0 <= iy < ny_cells):
+            raise ValueError(
+                f"Cell {(ix, iy)} is outside the {nx_cells}x{ny_cells} mesh"
+            )
+        cell = grid.GetCell(ix * ny_cells + iy)
+        polygons.append(
+            np.asarray(
+                [
+                    cell.GetPoints().GetPoint(i)[:2]
+                    for i in range(cell.GetNumberOfPoints())
+                ],
+                dtype=float,
+            )
         )
-    cell = grid.GetCell(ix * ny_cells + iy)
-    return np.asarray(
-        [cell.GetPoints().GetPoint(i)[:2] for i in range(cell.GetNumberOfPoints())],
-        dtype=float,
-    )
+    return polygons
+
+
+def _structured_grid_cell_polygon(
+    mesh_path: Path, cell_index: tuple[int, int] | list[int]
+) -> np.ndarray:
+    return _structured_grid_cell_polygons(
+        mesh_path,
+        [(int(cell_index[0]), int(cell_index[1]))],
+    )[0]
 
 
 def _true_vtp_path(exp_name: str, save_name: str, case_index: int) -> Path:
@@ -1516,23 +1536,79 @@ def _line_boundary_comparison(
     )
 
 
-def _line_boundary_spyglass_bounds(
+def _boundary_stencil_indices(
     *,
+    cell_index: tuple[int, int] | list[int],
     edge: str,
-    crossing: np.ndarray,
-    half_span: float,
-) -> tuple[float, float, float, float]:
-    """Center a micro-view on a boundary crossing while keeping fluid-side data."""
-    x, y = (float(crossing[0]), float(crossing[1]))
+    grid_shape: tuple[int, int],
+    stencil_shape: tuple[int, int] | list[int],
+) -> list[tuple[int, int]]:
+    """Return the available boundary stencil in row-major display order."""
+    ix, iy = (int(cell_index[0]), int(cell_index[1]))
+    nx_cells, ny_cells = (int(grid_shape[0]), int(grid_shape[1]))
+    ncols, nrows = (int(stencil_shape[0]), int(stencil_shape[1]))
+    if ncols != 3 or nrows != 2:
+        raise ValueError("The line boundary context currently requires a 3x2 stencil")
+
     if edge == "bottom":
-        return (x - half_span, x + half_span, y, y + 2.0 * half_span)
+        x_indices = range(ix - 1, ix + 2)
+        y_indices = range(0, 2)
+    elif edge == "top":
+        x_indices = range(ix - 1, ix + 2)
+        y_indices = range(ny_cells - 2, ny_cells)
+    else:
+        raise ValueError(f"Unsupported 3x2 boundary edge: {edge}")
+
+    indices = [(x, y) for y in y_indices for x in x_indices]
+    if any(not (0 <= x < nx_cells and 0 <= y < ny_cells) for x, y in indices):
+        raise ValueError(
+            f"The 3x2 stencil around {(ix, iy)} leaves the {grid_shape} mesh"
+        )
+    return indices
+
+
+def _boundary_stencil_bounds(
+    *,
+    cell_polygons: list[np.ndarray],
+    edge: str,
+    stencil_shape: tuple[int, int] | list[int],
+    off_domain_fraction: float,
+    padding_fraction: float,
+) -> tuple[float, float, float, float]:
+    """Fit the available stencil plus a narrow band beyond the domain edge."""
+    if not cell_polygons:
+        raise ValueError("Boundary stencil requires at least one cell polygon")
+    ncols, nrows = (int(stencil_shape[0]), int(stencil_shape[1]))
+    if len(cell_polygons) != ncols * nrows:
+        raise ValueError(
+            f"Expected {ncols * nrows} stencil cells, got {len(cell_polygons)}"
+        )
+    points = np.concatenate(cell_polygons, axis=0)
+    x0 = float(np.min(points[:, 0]))
+    x1 = float(np.max(points[:, 0]))
+    y0 = float(np.min(points[:, 1]))
+    y1 = float(np.max(points[:, 1]))
+    width = x1 - x0
+    height = y1 - y0
+    x_padding = padding_fraction * width
+    y_padding = padding_fraction * height
+    normal_cell_span = height / max(nrows, 1)
+
+    if edge == "bottom":
+        return (
+            x0 - x_padding,
+            x1 + x_padding,
+            y0 - off_domain_fraction * normal_cell_span,
+            y1 + y_padding,
+        )
     if edge == "top":
-        return (x - half_span, x + half_span, y - 2.0 * half_span, y)
-    if edge == "left":
-        return (x, x + 2.0 * half_span, y - half_span, y + half_span)
-    if edge == "right":
-        return (x - 2.0 * half_span, x, y - half_span, y + half_span)
-    raise ValueError(f"Unsupported boundary edge: {edge}")
+        return (
+            x0 - x_padding,
+            x1 + x_padding,
+            y0 - y_padding,
+            y1 + off_domain_fraction * normal_cell_span,
+        )
+    raise ValueError(f"Unsupported 3x2 boundary edge: {edge}")
 
 
 def _add_line_boundary_spyglass(
@@ -1546,6 +1622,8 @@ def _add_line_boundary_spyglass(
     color: str,
     bounds: tuple[float, float, float, float],
     source_cell_polygon: np.ndarray | None,
+    stencil_cell_polygons: list[np.ndarray] | None,
+    stencil_bounds: tuple[float, float, float, float] | None,
 ):
     boundary_spec = spec.get("boundary_inset")
     if not boundary_spec or algo != boundary_spec.get("method"):
@@ -1558,19 +1636,65 @@ def _add_line_boundary_spyglass(
         bounds=bounds,
         recon_segments=recon_segments,
     )
-    inset_bounds = _line_boundary_spyglass_bounds(
-        edge=edge,
-        crossing=exact_crossing,
-        half_span=float(boundary_spec["half_span"]),
-    )
+    if stencil_bounds is None or stencil_cell_polygons is None:
+        raise ValueError("Boundary spyglass requires stencil geometry and bounds")
+    inset_bounds = stencil_bounds
     inset = ax.inset_axes(list(boundary_spec["axes"]))
+    ix0, ix1, iy0, iy1 = inset_bounds
+    _add_true_region_fill(inset, "lines", spec, inset_bounds)
+    if edge == "bottom":
+        off_domain_y0, off_domain_y1 = iy0, bounds[2]
+    else:
+        off_domain_y0, off_domain_y1 = bounds[3], iy1
+    inset.add_patch(
+        Rectangle(
+            (ix0, off_domain_y0),
+            ix1 - ix0,
+            off_domain_y1 - off_domain_y0,
+            facecolor="#f3f4f6",
+            edgecolor="none",
+            zorder=0,
+        )
+    )
     _add_segments(
         inset,
         mesh_segments,
         color=MESH_COLOR,
-        linewidth=0.65,
-        alpha=0.85,
+        linewidth=0.72,
+        alpha=0.95,
         zorder=1,
+    )
+    for polygon in stencil_cell_polygons:
+        inset.add_patch(
+            PolygonPatch(
+                polygon,
+                closed=True,
+                fill=False,
+                edgecolor="#a78bfa",
+                linewidth=0.85,
+                zorder=2,
+            )
+        )
+    if source_cell_polygon is not None:
+        inset.add_patch(
+            PolygonPatch(
+                source_cell_polygon,
+                closed=True,
+                facecolor=(0.929, 0.906, 0.988, 0.40),
+                edgecolor=SPYGLASS_FRAME_COLOR,
+                linewidth=1.45,
+                zorder=2.5,
+            )
+        )
+    method_color = "#4b5563"
+    _add_segments(
+        inset,
+        recon_segments,
+        color=method_color,
+        linewidth=2.15,
+        alpha=1.0,
+        linestyle="-",
+        zorder=3,
     )
     _add_segments(
         inset,
@@ -1579,33 +1703,34 @@ def _add_line_boundary_spyglass(
         linewidth=1.05,
         alpha=1.0,
         linestyle=TRUE_STYLE,
-        zorder=2,
-    )
-    _add_segments(
-        inset,
-        recon_segments,
-        color=color,
-        linewidth=1.35,
-        alpha=1.0,
-        linestyle="-",
-        zorder=3,
+        zorder=4,
     )
     inset.scatter(
         [recon_crossing[0]],
         [recon_crossing[1]],
-        s=ENDPOINT_MARKER_SIZE_INSET + 4.0,
+        s=ENDPOINT_MARKER_SIZE_INSET + 5.0,
         facecolors="white",
-        edgecolors=color,
-        linewidths=0.7,
-        zorder=4,
+        edgecolors=method_color,
+        linewidths=0.8,
+        zorder=5,
     )
-    ix0, ix1, iy0, iy1 = inset_bounds
+    inset.scatter(
+        [exact_crossing[0]],
+        [exact_crossing[1]],
+        s=12.0,
+        marker="x",
+        color=TRUE_COLOR,
+        linewidths=0.7,
+        zorder=6,
+    )
     inset.set_xlim(ix0, ix1)
     inset.set_ylim(iy0, iy1)
     inset.set_xticks([])
     inset.set_yticks([])
     inset.set_aspect("equal", adjustable="box")
     inset.set_facecolor("white")
+    domain_y = bounds[2] if edge == "bottom" else bounds[3]
+    inset.axhline(domain_y, color="#6b7280", linewidth=1.15, zorder=2.8)
     for spine in inset.spines.values():
         spine.set_color(SPYGLASS_FRAME_COLOR)
         spine.set_linewidth(1.15)
@@ -1639,6 +1764,8 @@ def _plot_panel(
     corner_tip_points: np.ndarray | None = None,
     corner_boundary_points: np.ndarray | None = None,
     boundary_cell_polygon: np.ndarray | None = None,
+    boundary_stencil_polygons: list[np.ndarray] | None = None,
+    boundary_stencil_bounds: tuple[float, float, float, float] | None = None,
 ):
     x0, x1, y0, y1 = bounds
     _add_true_region_fill(ax, exp_name, spec, bounds)
@@ -1801,6 +1928,8 @@ def _plot_panel(
             color=color,
             bounds=bounds,
             source_cell_polygon=boundary_cell_polygon,
+            stencil_cell_polygons=boundary_stencil_polygons,
+            stencil_bounds=boundary_stencil_bounds,
         )
 
 
@@ -1823,11 +1952,34 @@ def _generate_representative_figure(
     mesh_path = PLOTS_ROOT / base_save_name / "vtk" / "mesh.vtk"
     mesh_segments = _mesh_segments(mesh_path)
     boundary_cell_polygon = None
+    boundary_stencil_polygons = None
+    boundary_stencil_bounds = None
     boundary_spec = spec.get("boundary_inset")
     if boundary_spec and boundary_spec.get("cell") is not None:
         boundary_cell_polygon = _structured_grid_cell_polygon(
             mesh_path,
             boundary_spec["cell"],
+        )
+        reader = vtk.vtkStructuredGridReader()
+        reader.SetFileName(str(mesh_path))
+        reader.Update()
+        nx_points, ny_points, _ = reader.GetOutput().GetDimensions()
+        stencil_indices = _boundary_stencil_indices(
+            cell_index=boundary_spec["cell"],
+            edge=str(boundary_spec["edge"]),
+            grid_shape=(nx_points - 1, ny_points - 1),
+            stencil_shape=boundary_spec["stencil_shape"],
+        )
+        boundary_stencil_polygons = _structured_grid_cell_polygons(
+            mesh_path,
+            stencil_indices,
+        )
+        boundary_stencil_bounds = _boundary_stencil_bounds(
+            cell_polygons=boundary_stencil_polygons,
+            edge=str(boundary_spec["edge"]),
+            stencil_shape=boundary_spec["stencil_shape"],
+            off_domain_fraction=float(boundary_spec["off_domain_fraction"]),
+            padding_fraction=float(boundary_spec["padding_fraction"]),
         )
     if exp_name == "lines":
         x0, x1, y0, y1 = _segments_bounds(mesh_segments)
@@ -1881,6 +2033,8 @@ def _generate_representative_figure(
             title=title,
             bounds=(x0, x1, y0, y1),
             boundary_cell_polygon=boundary_cell_polygon,
+            boundary_stencil_polygons=boundary_stencil_polygons,
+            boundary_stencil_bounds=boundary_stencil_bounds,
         )
 
     for ax in flat_axes[len(spec["methods"]) :]:

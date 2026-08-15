@@ -2,8 +2,9 @@ import numpy as np
 import pytest
 
 from experiments.static.generate_section6_maintext_figures import (
+    _boundary_stencil_bounds,
+    _boundary_stencil_indices,
     _line_boundary_comparison,
-    _line_boundary_spyglass_bounds,
     _endpoint_variant_specs,
     _endpoint_visibility_spec,
     _outer_spyglass_axes,
@@ -78,11 +79,45 @@ def test_line_boundary_comparison_uses_reconstructed_crossing():
     assert offset == pytest.approx(5.11640102e-7)
 
 
-def test_bottom_boundary_spyglass_keeps_domain_edge_visible():
-    bounds = _line_boundary_spyglass_bounds(
+def test_bottom_boundary_stencil_is_three_columns_by_two_available_rows():
+    indices = _boundary_stencil_indices(
+        cell_index=(15, 0),
         edge="bottom",
-        crossing=np.asarray([47.0, 0.0]),
-        half_span=4.0e-6,
+        grid_shape=(32, 32),
+        stencil_shape=(3, 2),
     )
 
-    assert bounds == pytest.approx((46.999996, 47.000004, 0.0, 8.0e-6))
+    assert indices == [
+        (14, 0),
+        (15, 0),
+        (16, 0),
+        (14, 1),
+        (15, 1),
+        (16, 1),
+    ]
+
+
+def test_bottom_boundary_stencil_bounds_include_off_domain_context():
+    polygons = []
+    for iy in range(2):
+        for ix in range(3):
+            polygons.append(
+                np.asarray(
+                    [
+                        [float(ix), float(iy)],
+                        [float(ix), float(iy + 1)],
+                        [float(ix + 1), float(iy + 1)],
+                        [float(ix + 1), float(iy)],
+                    ]
+                )
+            )
+
+    bounds = _boundary_stencil_bounds(
+        cell_polygons=polygons,
+        edge="bottom",
+        stencil_shape=(3, 2),
+        off_domain_fraction=0.35,
+        padding_fraction=0.0,
+    )
+
+    assert bounds == pytest.approx((0.0, 3.0, -0.35, 2.0))
