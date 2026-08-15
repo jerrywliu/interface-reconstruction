@@ -5,8 +5,11 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
+import json
 import math
 from pathlib import Path
+import subprocess
 from typing import Any, Iterable, Mapping, Sequence
 
 import matplotlib.pyplot as plt
@@ -15,6 +18,7 @@ import numpy as np
 from experiments.plotting import add_convergence_order_triangle
 
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_NATIVE_CASES = Path(
     "experiments/baselines/results/common_native_metric_replay_20260813/"
     "case_results.csv"
@@ -336,6 +340,69 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
         writer.writerows(rows)
 
 
+def _file_record(path: Path) -> dict[str, str]:
+    return {
+        "path": str(path.resolve()),
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+    }
+
+
+def _write_manifest(
+    path: Path,
+    *,
+    args: argparse.Namespace,
+    methods: Sequence[Mapping[str, Any]],
+    rows: Sequence[Mapping[str, Any]],
+    summary: Sequence[Mapping[str, Any]],
+) -> None:
+    analysis_git_head = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True
+    ).strip()
+    inputs = [args.native_cases, args.ours_cases, *args.baseline_cases]
+    artifacts = [
+        path.parent / "case_metrics.csv",
+        path.parent / "summary.csv",
+        path.parent / "ellipse_all_methods_metrics.pdf",
+        path.parent / "ellipse_all_methods_metrics.png",
+    ]
+    payload = {
+        "schema_version": 1,
+        "analysis_git_head": analysis_git_head,
+        "selected_methods": [
+            {
+                key: method[key]
+                for key in ("id", "method", "variant", "label")
+            }
+            for method in methods
+        ],
+        "case_row_count": len(rows),
+        "summary_row_count": len(summary),
+        "case_indices": sorted({int(row["case_index"]) for row in rows}),
+        "cells_per_side": sorted({int(row["cells_per_side"]) for row in rows}),
+        "metric_definitions": {
+            "native_symmetric_hausdorff": (
+                "partition-insensitive symmetric native point-to-curve supremum"
+            ),
+            "geometric_curvature_mean_absolute_error": (
+                "arc-length-weighted native geometric-curvature MAE against the "
+                "nearest analytic ellipse branch"
+            ),
+            "facet_gap": "mean shared-edge endpoint gap from method diagnostics",
+            "reconstruction_coverage": (
+                "reconstructed mixed cells, including published method fallbacks, "
+                "divided by mixed cells"
+            ),
+            "normalized_conservation_residual": (
+                "maximum absolute fitted-group area residual divided by the "
+                "geometric area of that cell or merged group"
+            ),
+        },
+        "inputs": [_file_record(input_path) for input_path in inputs],
+        "artifacts": [_file_record(artifact) for artifact in artifacts],
+    }
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+
 def plot_summary(
     summary: Sequence[Mapping[str, Any]],
     path: Path,
@@ -405,7 +472,7 @@ def plot_summary(
     )
     if any(method["id"] == "quasi" for method in methods):
         axes[1, 0].annotate(
-            "QUASI exact zero\n(shown at plotting floor)",
+            "Joint C0 and QUASI exact zero\n(shown at plotting floor)",
             (64, GAP_DISPLAY_FLOOR),
             xytext=(0, 12),
             textcoords="offset points",
@@ -487,6 +554,13 @@ def main() -> None:
     _write_csv(args.output / "summary.csv", summary)
     plot_summary(summary, args.output / "ellipse_all_methods_metrics.pdf", methods)
     plot_summary(summary, args.output / "ellipse_all_methods_metrics.png", methods)
+    _write_manifest(
+        args.output / "manifest.json",
+        args=args,
+        methods=methods,
+        rows=rows,
+        summary=summary,
+    )
 
 
 if __name__ == "__main__":

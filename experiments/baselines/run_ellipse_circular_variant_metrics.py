@@ -933,8 +933,15 @@ def _write_report(
     tolerance_count = sum(
         bool(row["native_geometry_within_1e-12"]) for row in equivalence
     )
-    maximum_delta = max(
-        float(row["maximum_native_parameter_delta"]) for row in equivalence
+    finite_deltas = [
+        float(row["maximum_native_parameter_delta"])
+        for row in equivalence
+        if math.isfinite(float(row["maximum_native_parameter_delta"]))
+    ]
+    maximum_finite_delta = max(finite_deltas, default=0.0)
+    structural_difference_count = sum(
+        not math.isfinite(float(row["maximum_native_parameter_delta"]))
+        for row in equivalence
     )
     total_merges = sum(
         int(row["per_cell_merged_cells"]) + int(row["graph_coordinated_merged_cells"])
@@ -985,6 +992,12 @@ def _write_report(
     c0_bad_after = sum(
         int(row["c0_bad_joins_after_joint"]) for row in c0_rows.values()
     )
+    c0_exact_c1_count = sum(
+        int(row["c0_exact_c1_components"]) for row in c0_rows.values()
+    )
+    c0_conservative_fallback_count = sum(
+        int(row["c0_conservative_fallback_components"]) for row in c0_rows.values()
+    )
     c0_max_area_residual = max(
         float(row["max_c0_relative_area_residual"]) for row in c0_rows.values()
     )
@@ -995,9 +1008,12 @@ def _write_report(
             "",
             f"The per-cell and graph-coordinated native geometries are byte-for-byte "
             f"numerically identical in `{exact_count}/{len(equivalence)}` matched cases "
-            f"and agree within `1e-12` in `{tolerance_count}/{len(equivalence)}`. The "
-            f"largest native parameter difference is `{maximum_delta:.3e}`. Their "
-            f"combined merged-cell count is `{total_merges}`.",
+            f"and agree within `1e-12` in `{tolerance_count}/{len(equivalence)}`. Of "
+            f"the remaining `{len(equivalence) - tolerance_count}`, "
+            f"`{structural_difference_count}` change primitive type or count; the "
+            f"largest finite native parameter difference is "
+            f"`{maximum_finite_delta:.3e}`. Their combined merged-cell count is "
+            f"`{total_merges}`.",
             "",
             "## Interpretation",
             "",
@@ -1013,8 +1029,9 @@ def _write_report(
             "",
             f"The optimizer solves `{c0_solved_count}/{c0_component_count}` connected "
             f"components, with `{c0_failed_count}` failures and `{c0_bad_after}` "
-            "remaining eligible bad joins. All solved components reach the exact-C1 "
-            f"branch, and the maximum relative cell-area residual is "
+            f"remaining eligible bad joins. `{c0_exact_c1_count}` solved components "
+            f"reach the exact-C1 branch and `{c0_conservative_fallback_count}` uses "
+            f"the conservative fallback. The maximum relative cell-area residual is "
             f"`{c0_max_area_residual:.3e}`.",
             "",
             "Negative-radius (locally concave) arcs are reported explicitly because "

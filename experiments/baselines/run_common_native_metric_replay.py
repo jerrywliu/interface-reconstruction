@@ -32,12 +32,6 @@ DEFAULT_INPUTS = (
     Path("experiments/baselines/results/pcic_project_smoke_20260813_final"),
     Path("experiments/baselines/results/quasi_project_smoke_20260813_qa_fixed"),
 )
-DEFAULT_SUPPLEMENTAL_CASE_RESULTS = (
-    Path(
-        "experiments/baselines/results/"
-        "graph_circular_ellipse_common_metrics_20260814/case_results.csv"
-    ),
-)
 SMOOTH_BENCHMARKS = {"circles", "ellipses"}
 CASE_FIELDS = (
     "method",
@@ -380,7 +374,7 @@ def main() -> None:
         "--supplemental-case-results",
         nargs="*",
         type=Path,
-        default=list(DEFAULT_SUPPLEMENTAL_CASE_RESULTS),
+        default=(),
     )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--workers", type=int, default=4)
