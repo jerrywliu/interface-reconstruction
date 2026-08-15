@@ -355,7 +355,18 @@ def _validate_cartesian_stencil(
     """Reject mesh geometry outside the source method's Cartesian scope."""
     if not math.isfinite(cell_size) or cell_size <= 0.0:
         raise ValueError("PLVIRA cell_size must be a positive finite scalar")
-    center = getCentroid(polygons[1][1])
+    def bounding_box_center(polygon: Polygon) -> Point:
+        return (
+            0.5
+            * (min(point[0] for point in polygon) + max(point[0] for point in polygon)),
+            0.5
+            * (min(point[1] for point in polygon) + max(point[1] for point in polygon)),
+        )
+
+    # Polygon-centroid formulas lose accuracy through cancellation when small
+    # cells have large absolute coordinates.  Axis-aligned bounding boxes give
+    # the exact geometric center needed by this Cartesian-scope check.
+    center = bounding_box_center(polygons[1][1])
     tolerance = (
         128.0
         * np.finfo(float).eps
@@ -369,7 +380,7 @@ def _validate_cartesian_stencil(
                 center[0] + (column - 1) * cell_size,
                 center[1] + (row - 1) * cell_size,
             )
-            actual_center = getCentroid(polygon)
+            actual_center = bounding_box_center(polygon)
             if (
                 math.hypot(
                     actual_center[0] - expected_center[0],

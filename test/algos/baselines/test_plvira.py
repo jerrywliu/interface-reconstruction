@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from main.algos.baselines.plvira import (
+    _validate_cartesian_stencil,
     parabolic_polygon_area,
     plvira_objective_and_gradient,
     reconstruct_plvira,
@@ -27,6 +28,27 @@ def _uniform_stencil():
             )
         polygons.append(polygon_row)
     return polygons
+
+
+@pytest.mark.parametrize("cells_per_side", [150, 300])
+def test_cartesian_validation_is_stable_for_fine_large_coordinate_meshes(
+    cells_per_side,
+):
+    resolution = cells_per_side / 100.0
+    cell_size = 100.0 / cells_per_side
+    center_index = cells_per_side // 2
+    polygons = []
+    for row in range(3):
+        polygon_row = []
+        for column in range(3):
+            x0 = (center_index + column - 1) / resolution
+            x1 = (center_index + column) / resolution
+            y0 = (center_index + row - 1) / resolution
+            y1 = (center_index + row) / resolution
+            polygon_row.append([(x0, y0), (x1, y0), (x1, y1), (x0, y1)])
+        polygons.append(polygon_row)
+
+    _validate_cartesian_stencil(polygons, cell_size)
 
 
 def _exact_fractions(polygons, angle, curvature, shift):
