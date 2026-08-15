@@ -137,9 +137,11 @@ def assemble_case_metrics(
     native_cases: Path,
     baseline_cases: Sequence[Path],
     ours_cases: Path,
+    methods: Sequence[Mapping[str, Any]] = METHODS,
 ) -> list[dict[str, Any]]:
     """Join native observables to baseline diagnostics and append project variants."""
 
+    method_by_key = {(item["method"], item["variant"]): item for item in methods}
     diagnostics: dict[tuple[str, str, int, int], Mapping[str, Any]] = {}
     for path in baseline_cases:
         for row in _read_csv(path):
@@ -165,7 +167,7 @@ def assemble_case_metrics(
             _int(native, "cells_per_side"),
             _int(native, "case_index"),
         )
-        method = METHOD_BY_KEY.get(key[:2])
+        method = method_by_key.get(key[:2])
         if method is None:
             continue
         diagnostic = diagnostics.get(key)
@@ -202,7 +204,7 @@ def assemble_case_metrics(
         if row["benchmark"] != "ellipses":
             continue
         key = row["method"], row["variant"]
-        method = METHOD_BY_KEY.get(key)
+        method = method_by_key.get(key)
         if method is None:
             continue
         mixed = _int(row, "num_mixed_cells")
@@ -227,14 +229,27 @@ def assemble_case_metrics(
             }
         )
 
-    expected = len(METHODS) * len(RESOLUTIONS) * 5
+    case_keys_by_method = {
+        method["id"]: {
+            (int(row["cells_per_side"]), int(row["case_index"]))
+            for row in result
+            if row["method_id"] == method["id"]
+        }
+        for method in methods
+    }
+    reference_case_keys = case_keys_by_method[methods[0]["id"]]
+    if not reference_case_keys or any(
+        keys != reference_case_keys for keys in case_keys_by_method.values()
+    ):
+        raise ValueError("selected methods do not contain the same case-resolution keys")
+    expected = len(methods) * len(reference_case_keys)
     if len(result) != expected:
         raise ValueError(f"expected {expected} matched case rows, found {len(result)}")
     result.sort(
         key=lambda row: (
             next(
                 i
-                for i, method in enumerate(METHODS)
+                for i, method in enumerate(methods)
                 if method["id"] == row["method_id"]
             ),
             row["cells_per_side"],
@@ -252,9 +267,12 @@ def _observed_order(rows: Sequence[Mapping[str, Any]], field: str) -> float:
     return float(-np.polyfit(np.log(resolutions), np.log(values), 1)[0])
 
 
-def summarize_case_metrics(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+def summarize_case_metrics(
+    rows: Sequence[Mapping[str, Any]],
+    methods: Sequence[Mapping[str, Any]] = METHODS,
+) -> list[dict[str, Any]]:
     summary: list[dict[str, Any]] = []
-    for method in METHODS:
+    for method in methods:
         method_rows = [row for row in rows if row["method_id"] == method["id"]]
         method_summary = []
         for resolution in RESOLUTIONS:
@@ -307,7 +325,11 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
         writer.writerows(rows)
 
 
-def plot_summary(summary: Sequence[Mapping[str, Any]], path: Path) -> None:
+def plot_summary(
+    summary: Sequence[Mapping[str, Any]],
+    path: Path,
+    methods: Sequence[Mapping[str, Any]] = METHODS,
+) -> None:
     plt.rcParams.update({"pdf.fonttype": 42, "ps.fonttype": 42, "font.size": 8})
     figure, axes = plt.subplots(2, 2, figsize=(9.0, 6.7), sharex=True)
     panels = (
@@ -319,7 +341,7 @@ def plot_summary(summary: Sequence[Mapping[str, Any]], path: Path) -> None:
         ("facet_gap", "Facet gap"),
     )
     for axis, (metric, ylabel) in zip(axes.ravel()[:3], panels):
-        for method in METHODS:
+        for method in methods:
             selected = [row for row in summary if row["method_id"] == method["id"]]
             x = np.asarray([int(row["cells_per_side"]) for row in selected])
             y = np.asarray([float(row[f"{metric}_median"]) for row in selected])
@@ -341,7 +363,7 @@ def plot_summary(summary: Sequence[Mapping[str, Any]], path: Path) -> None:
         axis.set_ylabel(ylabel)
         axis.grid(True, which="both", alpha=0.25)
 
-    for method in METHODS:
+    for method in methods:
         selected = [row for row in summary if row["method_id"] == method["id"]]
         axes[1, 1].plot(
             [int(row["cells_per_side"]) for row in selected],
@@ -355,7 +377,10 @@ def plot_summary(summary: Sequence[Mapping[str, Any]], path: Path) -> None:
     axes[1, 1].set_xscale("log", base=2)
     axes[1, 1].set_xticks(RESOLUTIONS, tuple(str(value) for value in RESOLUTIONS))
     axes[1, 1].set_ylabel("Reconstructed mixed cells (%)")
-    axes[1, 1].set_ylim(97.5, 100.15)
+    coverage_values = [
+        100.0 * float(row["reconstruction_coverage"]) for row in summary
+    ]
+    axes[1, 1].set_ylim(max(0.0, min(coverage_values) - 0.5), 100.15)
     axes[1, 1].grid(True, alpha=0.25)
 
     add_convergence_order_triangle(
@@ -367,16 +392,17 @@ def plot_summary(summary: Sequence[Mapping[str, Any]], path: Path) -> None:
     add_convergence_order_triangle(
         axes[1, 0], 3.0, order_label="3", anchor=(0.74, 0.24), width=0.13
     )
-    axes[1, 0].annotate(
-        "QUASI exact zero\n(shown at plotting floor)",
-        (64, GAP_DISPLAY_FLOOR),
-        xytext=(0, 12),
-        textcoords="offset points",
-        ha="center",
-        va="bottom",
-        color="#7E57C2",
-        fontsize=7,
-    )
+    if any(method["id"] == "quasi" for method in methods):
+        axes[1, 0].annotate(
+            "QUASI exact zero\n(shown at plotting floor)",
+            (64, GAP_DISPLAY_FLOOR),
+            xytext=(0, 12),
+            textcoords="offset points",
+            ha="center",
+            va="bottom",
+            color="#7E57C2",
+            fontsize=7,
+        )
     for axis in axes[1, :]:
         axis.set_xlabel("Cells per side")
 
@@ -387,7 +413,7 @@ def plot_summary(summary: Sequence[Mapping[str, Any]], path: Path) -> None:
         loc="upper center",
         bbox_to_anchor=(0.5, 0.91),
         frameon=False,
-        ncol=4,
+        ncol=min(3, len(methods)),
         fontsize=7,
     )
     figure.suptitle(
@@ -398,7 +424,8 @@ def plot_summary(summary: Sequence[Mapping[str, Any]], path: Path) -> None:
     figure.text(
         0.5,
         0.935,
-        "Medians over five matched Cartesian cases; native geometry and curvature",
+        f"Medians over {max(int(row['case_count']) for row in summary)} matched "
+        "Cartesian cases; native geometry and curvature",
         ha="center",
         va="center",
         fontsize=8,
@@ -424,20 +451,31 @@ def parse_args() -> argparse.Namespace:
         default=list(DEFAULT_BASELINE_CASES),
     )
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument(
+        "--method-ids",
+        nargs="+",
+        default=[method["id"] for method in METHODS],
+        help="method IDs to include in the comparison",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    selected_by_id = {method["id"]: method for method in METHODS}
+    unknown = [method_id for method_id in args.method_ids if method_id not in selected_by_id]
+    if unknown:
+        raise ValueError(f"unknown method IDs: {unknown}")
+    methods = tuple(selected_by_id[method_id] for method_id in args.method_ids)
     rows = assemble_case_metrics(
-        args.native_cases, tuple(args.baseline_cases), args.ours_cases
+        args.native_cases, tuple(args.baseline_cases), args.ours_cases, methods
     )
-    summary = summarize_case_metrics(rows)
+    summary = summarize_case_metrics(rows, methods)
     args.output.mkdir(parents=True, exist_ok=True)
     _write_csv(args.output / "case_metrics.csv", rows)
     _write_csv(args.output / "summary.csv", summary)
-    plot_summary(summary, args.output / "ellipse_all_methods_metrics.pdf")
-    plot_summary(summary, args.output / "ellipse_all_methods_metrics.png")
+    plot_summary(summary, args.output / "ellipse_all_methods_metrics.pdf", methods)
+    plot_summary(summary, args.output / "ellipse_all_methods_metrics.png", methods)
 
 
 if __name__ == "__main__":
