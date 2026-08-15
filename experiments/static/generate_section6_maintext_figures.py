@@ -116,6 +116,13 @@ REPRESENTATIVE_CASES = {
         "min_span": 100.0,
         "margin_frac": 0.00,
         "inset": {"kind": "line_fit", "half_span": 4.0},
+        "boundary_inset": {
+            "method": "LVIRA",
+            "edge": "bottom",
+            "cell": [15, 0],
+            "half_span": 4.0e-6,
+            "axes": [-0.38, 0.62, 0.32, 0.32],
+        },
     },
     "squares": {
         "resolution": 0.50,
@@ -228,7 +235,11 @@ APPENDIX_BEST_METHODS = {
 }
 
 APPENDIX_CARTESIAN_CASES = {
-    "lines": {**REPRESENTATIVE_CASES["lines"], "wiggle": 0.0},
+    "lines": {
+        **REPRESENTATIVE_CASES["lines"],
+        "wiggle": 0.0,
+        "boundary_inset": None,
+    },
     "squares": {**REPRESENTATIVE_CASES["squares"], "wiggle": 0.0},
     "circles": {**REPRESENTATIVE_CASES["circles"], "wiggle": 0.0},
     "ellipses": {**REPRESENTATIVE_CASES["ellipses"], "wiggle": 0.0},
@@ -645,6 +656,28 @@ def _cluster_corner_tip_points(points: np.ndarray, tol: float) -> np.ndarray:
 
 def _mesh_segments(mesh_path: Path) -> np.ndarray:
     return _segments_from_polydata(_read_polydata(mesh_path))
+
+
+def _structured_grid_cell_polygon(
+    mesh_path: Path, cell_index: tuple[int, int] | list[int]
+) -> np.ndarray:
+    reader = vtk.vtkStructuredGridReader()
+    reader.SetFileName(str(mesh_path))
+    reader.Update()
+    grid = reader.GetOutput()
+    nx_points, ny_points, _ = grid.GetDimensions()
+    ix, iy = (int(cell_index[0]), int(cell_index[1]))
+    nx_cells = nx_points - 1
+    ny_cells = ny_points - 1
+    if not (0 <= ix < nx_cells and 0 <= iy < ny_cells):
+        raise ValueError(
+            f"Cell {(ix, iy)} is outside the {nx_cells}x{ny_cells} mesh"
+        )
+    cell = grid.GetCell(ix * ny_cells + iy)
+    return np.asarray(
+        [cell.GetPoints().GetPoint(i)[:2] for i in range(cell.GetNumberOfPoints())],
+        dtype=float,
+    )
 
 
 def _true_vtp_path(exp_name: str, save_name: str, case_index: int) -> Path:
@@ -1441,6 +1474,156 @@ def _resolve_spyglass_axes(spec: dict) -> list[float]:
     return [0.56, 0.05, 0.39, 0.39]
 
 
+def _line_boundary_comparison(
+    *,
+    case_index: int,
+    edge: str,
+    bounds: tuple[float, float, float, float],
+    recon_segments: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, float]:
+    """Return reconstructed and exact crossings at one domain boundary."""
+    x0, x1, y0, y1 = bounds
+    edge_specs = {
+        "left": (0, x0),
+        "right": (0, x1),
+        "bottom": (1, y0),
+        "top": (1, y1),
+    }
+    if edge not in edge_specs:
+        raise ValueError(f"Unsupported boundary edge: {edge}")
+    axis, edge_value = edge_specs[edge]
+
+    params = _line_case_params(case_index)
+    p1 = np.asarray(params["p1"], dtype=float)
+    p2 = np.asarray(params["p2"], dtype=float)
+    direction = p2 - p1
+    if abs(direction[axis]) <= 1.0e-14:
+        raise ValueError(f"Generating line is parallel to the {edge} boundary")
+    exact_crossing = p1 + (edge_value - p1[axis]) / direction[axis] * direction
+
+    endpoints = np.asarray(recon_segments, dtype=float).reshape(-1, 2)
+    on_boundary = np.isclose(endpoints[:, axis], edge_value, atol=1.0e-8, rtol=0.0)
+    candidates = endpoints[on_boundary]
+    if len(candidates) == 0:
+        raise ValueError(f"No reconstructed endpoint lies on the {edge} boundary")
+    recon_crossing = candidates[
+        np.argmin(np.linalg.norm(candidates - exact_crossing, axis=1))
+    ]
+    return (
+        recon_crossing,
+        exact_crossing,
+        float(np.linalg.norm(recon_crossing - exact_crossing)),
+    )
+
+
+def _line_boundary_spyglass_bounds(
+    *,
+    edge: str,
+    crossing: np.ndarray,
+    half_span: float,
+) -> tuple[float, float, float, float]:
+    """Center a micro-view on a boundary crossing while keeping fluid-side data."""
+    x, y = (float(crossing[0]), float(crossing[1]))
+    if edge == "bottom":
+        return (x - half_span, x + half_span, y, y + 2.0 * half_span)
+    if edge == "top":
+        return (x - half_span, x + half_span, y - 2.0 * half_span, y)
+    if edge == "left":
+        return (x, x + 2.0 * half_span, y - half_span, y + half_span)
+    if edge == "right":
+        return (x - 2.0 * half_span, x, y - half_span, y + half_span)
+    raise ValueError(f"Unsupported boundary edge: {edge}")
+
+
+def _add_line_boundary_spyglass(
+    ax,
+    *,
+    spec: dict,
+    algo: str,
+    mesh_segments: np.ndarray,
+    true_segments: np.ndarray,
+    recon_segments: np.ndarray,
+    color: str,
+    bounds: tuple[float, float, float, float],
+    source_cell_polygon: np.ndarray | None,
+):
+    boundary_spec = spec.get("boundary_inset")
+    if not boundary_spec or algo != boundary_spec.get("method"):
+        return
+
+    edge = str(boundary_spec["edge"])
+    recon_crossing, exact_crossing, _ = _line_boundary_comparison(
+        case_index=int(spec["case_index"]),
+        edge=edge,
+        bounds=bounds,
+        recon_segments=recon_segments,
+    )
+    inset_bounds = _line_boundary_spyglass_bounds(
+        edge=edge,
+        crossing=exact_crossing,
+        half_span=float(boundary_spec["half_span"]),
+    )
+    inset = ax.inset_axes(list(boundary_spec["axes"]))
+    _add_segments(
+        inset,
+        mesh_segments,
+        color=MESH_COLOR,
+        linewidth=0.65,
+        alpha=0.85,
+        zorder=1,
+    )
+    _add_segments(
+        inset,
+        true_segments,
+        color=TRUE_COLOR,
+        linewidth=1.05,
+        alpha=1.0,
+        linestyle=TRUE_STYLE,
+        zorder=2,
+    )
+    _add_segments(
+        inset,
+        recon_segments,
+        color=color,
+        linewidth=1.35,
+        alpha=1.0,
+        linestyle="-",
+        zorder=3,
+    )
+    inset.scatter(
+        [recon_crossing[0]],
+        [recon_crossing[1]],
+        s=ENDPOINT_MARKER_SIZE_INSET + 4.0,
+        facecolors="white",
+        edgecolors=color,
+        linewidths=0.7,
+        zorder=4,
+    )
+    ix0, ix1, iy0, iy1 = inset_bounds
+    inset.set_xlim(ix0, ix1)
+    inset.set_ylim(iy0, iy1)
+    inset.set_xticks([])
+    inset.set_yticks([])
+    inset.set_aspect("equal", adjustable="box")
+    inset.set_facecolor("white")
+    for spine in inset.spines.values():
+        spine.set_color(SPYGLASS_FRAME_COLOR)
+        spine.set_linewidth(1.15)
+
+    if source_cell_polygon is not None:
+        ax.add_patch(
+            PolygonPatch(
+                source_cell_polygon,
+                closed=True,
+                fill=False,
+                edgecolor=SPYGLASS_FRAME_COLOR,
+                linewidth=1.15,
+                linestyle=(0, (3.0, 2.0)),
+                zorder=6,
+            )
+        )
+
+
 def _plot_panel(
     ax,
     *,
@@ -1455,6 +1638,7 @@ def _plot_panel(
     bounds: tuple[float, float, float, float],
     corner_tip_points: np.ndarray | None = None,
     corner_boundary_points: np.ndarray | None = None,
+    boundary_cell_polygon: np.ndarray | None = None,
 ):
     x0, x1, y0, y1 = bounds
     _add_true_region_fill(ax, exp_name, spec, bounds)
@@ -1606,6 +1790,19 @@ def _plot_panel(
                 connector.set_linewidth(0.65)
                 connector.set_clip_on(False)
 
+    if exp_name == "lines":
+        _add_line_boundary_spyglass(
+            ax,
+            spec=spec,
+            algo=algo,
+            mesh_segments=mesh_segments,
+            true_segments=true_segments,
+            recon_segments=recon_segments,
+            color=color,
+            bounds=bounds,
+            source_cell_polygon=boundary_cell_polygon,
+        )
+
 
 def _generate_representative_figure(
     exp_name: str,
@@ -1625,6 +1822,13 @@ def _generate_representative_figure(
     )
     mesh_path = PLOTS_ROOT / base_save_name / "vtk" / "mesh.vtk"
     mesh_segments = _mesh_segments(mesh_path)
+    boundary_cell_polygon = None
+    boundary_spec = spec.get("boundary_inset")
+    if boundary_spec and boundary_spec.get("cell") is not None:
+        boundary_cell_polygon = _structured_grid_cell_polygon(
+            mesh_path,
+            boundary_spec["cell"],
+        )
     if exp_name == "lines":
         x0, x1, y0, y1 = _segments_bounds(mesh_segments)
         true_segments = _line_true_segments(spec["case_index"], (x0, x1, y0, y1))
@@ -1676,6 +1880,7 @@ def _generate_representative_figure(
             corner_boundary_points=corner_boundary_points,
             title=title,
             bounds=(x0, x1, y0, y1),
+            boundary_cell_polygon=boundary_cell_polygon,
         )
 
     for ax in flat_axes[len(spec["methods"]) :]:
