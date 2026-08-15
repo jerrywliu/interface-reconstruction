@@ -292,12 +292,12 @@ def plot_sheet(
                 axis.set_xlabel("x")
             if reconstructed is not None and mixed:
                 axis.text(
-                    0.03,
-                    0.96,
+                    0.97,
+                    0.04,
                     f"coverage {100.0 * reconstructed / mixed:.2f}%",
                     transform=axis.transAxes,
-                    ha="left",
-                    va="top",
+                    ha="right",
+                    va="bottom",
                     fontsize=6,
                     color="#374151",
                 )
