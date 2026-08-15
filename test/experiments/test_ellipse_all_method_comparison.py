@@ -10,10 +10,10 @@ from experiments.baselines.build_ellipse_all_method_comparison import (
 )
 
 
-def _synthetic_cases():
+def _synthetic_cases(resolutions=RESOLUTIONS):
     rows = []
     for method in METHODS:
-        for resolution in RESOLUTIONS:
+        for resolution in resolutions:
             for case_index, factor in enumerate((0.9, 1.0, 1.1)):
                 unresolved = (
                     1 if method["id"] == "pcic_center" and resolution == 128 else 0
@@ -72,3 +72,12 @@ def test_plot_handles_exact_zero_quasi_gap(tmp_path):
 
     assert path.exists()
     assert path.stat().st_size > 0
+
+
+def test_summary_uses_every_observed_resolution():
+    resolutions = (32, 50, 64, 100, 128, 150, 256, 300)
+
+    summary = summarize_case_metrics(_synthetic_cases(resolutions))
+
+    assert {int(row["cells_per_side"]) for row in summary} == set(resolutions)
+    assert len(summary) == len(METHODS) * len(resolutions)

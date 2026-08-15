@@ -758,6 +758,7 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
 def _plot_summary(summary: Sequence[Mapping[str, Any]], path: Path) -> None:
     plt.rcParams.update({"pdf.fonttype": 42, "ps.fonttype": 42, "font.size": 8})
     figure, axes = plt.subplots(2, 2, figsize=(8.2, 6.2), sharex=True)
+    resolutions = sorted({int(row["cells_per_side"]) for row in summary})
     panels = (
         ("native_symmetric_hausdorff", "Native symmetric Hausdorff"),
         (
@@ -792,9 +793,7 @@ def _plot_summary(summary: Sequence[Mapping[str, Any]], path: Path) -> None:
             )
             axis.fill_between(x, lower, upper, color=color, alpha=0.11, linewidth=0)
         axis.set_xscale("log", base=2)
-        axis.set_xticks(
-            DEFAULT_RESOLUTIONS, tuple(str(value) for value in DEFAULT_RESOLUTIONS)
-        )
+        axis.set_xticks(resolutions, tuple(str(value) for value in resolutions))
         axis.set_ylabel(ylabel)
         axis.grid(True, which="both", alpha=0.25)
         if metric != "concave_arc_length_fraction":
@@ -808,18 +807,22 @@ def _plot_summary(summary: Sequence[Mapping[str, Any]], path: Path) -> None:
     add_convergence_order_triangle(
         axes[1, 0], 3.0, order_label="3", anchor=(0.75, 0.12), width=0.13
     )
-    axes[1, 1].text(
-        0.5,
-        0.72,
-        "No concave arcs\nin any matched case",
-        transform=axes[1, 1].transAxes,
-        ha="center",
-        va="center",
-        color="#4b5563",
-        fontsize=8,
-    )
+    if not any(float(row["concave_arc_length_fraction_q75"]) > 0.0 for row in summary):
+        axes[1, 1].text(
+            0.5,
+            0.72,
+            "No concave arcs\nin any matched case",
+            transform=axes[1, 1].transAxes,
+            ha="center",
+            va="center",
+            color="#4b5563",
+            fontsize=8,
+        )
     for axis in axes[1, :]:
         axis.set_xlabel("Cells per side")
+        axis.tick_params(axis="x", labelrotation=30)
+        for label in axis.get_xticklabels():
+            label.set_horizontalalignment("right")
     handles, labels = axes[0, 0].get_legend_handles_labels()
     figure.legend(
         handles,

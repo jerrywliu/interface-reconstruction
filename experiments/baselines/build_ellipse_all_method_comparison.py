@@ -282,14 +282,19 @@ def summarize_case_metrics(
     rows: Sequence[Mapping[str, Any]],
     methods: Sequence[Mapping[str, Any]] = METHODS,
 ) -> list[dict[str, Any]]:
+    resolutions = sorted({int(row["cells_per_side"]) for row in rows})
     summary: list[dict[str, Any]] = []
     for method in methods:
         method_rows = [row for row in rows if row["method_id"] == method["id"]]
         method_summary = []
-        for resolution in RESOLUTIONS:
+        for resolution in resolutions:
             selected = [
                 row for row in method_rows if int(row["cells_per_side"]) == resolution
             ]
+            if not selected:
+                raise ValueError(
+                    f"{method['id']} has no rows at cells_per_side={resolution}"
+                )
             item: dict[str, Any] = {
                 "method_id": method["id"],
                 "display_label": method["label"],
@@ -410,6 +415,7 @@ def plot_summary(
 ) -> None:
     plt.rcParams.update({"pdf.fonttype": 42, "ps.fonttype": 42, "font.size": 8})
     figure, axes = plt.subplots(2, 2, figsize=(9.0, 6.7), sharex=True)
+    resolutions = sorted({int(row["cells_per_side"]) for row in summary})
     panels = (
         ("native_symmetric_hausdorff", "Native symmetric Hausdorff"),
         (
@@ -420,7 +426,10 @@ def plot_summary(
     )
     for axis, (metric, ylabel) in zip(axes.ravel()[:3], panels):
         for method in methods:
-            selected = [row for row in summary if row["method_id"] == method["id"]]
+            selected = sorted(
+                (row for row in summary if row["method_id"] == method["id"]),
+                key=lambda row: int(row["cells_per_side"]),
+            )
             x = np.asarray([int(row["cells_per_side"]) for row in selected])
             y = np.asarray([float(row[f"{metric}_median"]) for row in selected])
             if metric == "facet_gap" and np.all(y == 0.0):
@@ -437,12 +446,15 @@ def plot_summary(
             )
         axis.set_xscale("log", base=2)
         axis.set_yscale("log")
-        axis.set_xticks(RESOLUTIONS, tuple(str(value) for value in RESOLUTIONS))
+        axis.set_xticks(resolutions, tuple(str(value) for value in resolutions))
         axis.set_ylabel(ylabel)
         axis.grid(True, which="both", alpha=0.25)
 
     for method in methods:
-        selected = [row for row in summary if row["method_id"] == method["id"]]
+        selected = sorted(
+            (row for row in summary if row["method_id"] == method["id"]),
+            key=lambda row: int(row["cells_per_side"]),
+        )
         axes[1, 1].plot(
             [int(row["cells_per_side"]) for row in selected],
             [100.0 * float(row["reconstruction_coverage"]) for row in selected],
@@ -453,7 +465,7 @@ def plot_summary(
             markersize=5.0,
         )
     axes[1, 1].set_xscale("log", base=2)
-    axes[1, 1].set_xticks(RESOLUTIONS, tuple(str(value) for value in RESOLUTIONS))
+    axes[1, 1].set_xticks(resolutions, tuple(str(value) for value in resolutions))
     axes[1, 1].set_ylabel("Reconstructed mixed cells (%)")
     coverage_values = [
         100.0 * float(row["reconstruction_coverage"]) for row in summary
@@ -483,6 +495,9 @@ def plot_summary(
         )
     for axis in axes[1, :]:
         axis.set_xlabel("Cells per side")
+        axis.tick_params(axis="x", labelrotation=30)
+        for label in axis.get_xticklabels():
+            label.set_horizontalalignment("right")
 
     handles, labels = axes[0, 0].get_legend_handles_labels()
     figure.legend(
