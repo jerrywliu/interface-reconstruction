@@ -637,17 +637,22 @@ def _solve_component(
     candidates = []
 
     def try_initial(initial: np.ndarray) -> None:
-        solved = least_squares(
-            _component_residual,
-            initial,
-            args=(component, joins, node_ids, polys, base_facets),
-            bounds=(lower_bounds, upper_bounds),
-            xtol=1.0e-12,
-            ftol=1.0e-12,
-            gtol=1.0e-12,
-            max_nfev=max_nfev,
-            x_scale="jac",
-        )
+        try:
+            solved = least_squares(
+                _component_residual,
+                initial,
+                args=(component, joins, node_ids, polys, base_facets),
+                bounds=(lower_bounds, upper_bounds),
+                xtol=1.0e-12,
+                ftol=1.0e-12,
+                gtol=1.0e-12,
+                max_nfev=max_nfev,
+                x_scale="jac",
+            )
+        except ValueError as error:
+            if "`x0` is infeasible" not in str(error):
+                raise
+            return
         refined = root(
             _component_residual,
             solved.x,

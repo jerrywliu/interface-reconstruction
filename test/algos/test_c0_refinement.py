@@ -82,6 +82,29 @@ def test_joint_c0_skips_degenerate_initial_seed(monkeypatch):
     assert report.components_failed == 0
 
 
+def test_joint_c0_skips_infeasible_least_squares_seed(monkeypatch):
+    first, second = _two_cell_gap()
+    mesh = SimpleNamespace(merged_polys={0: first, 1: second})
+    original = c0_refinement.least_squares
+    calls = 0
+
+    def one_infeasible_seed(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise ValueError("`x0` is infeasible.")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(c0_refinement, "least_squares", one_infeasible_seed)
+
+    assignments, report = plan_joint_c0_refinement(mesh, [first, second])
+
+    assert calls > 1
+    assert assignments
+    assert report.components_solved == 1
+    assert report.components_failed == 0
+
+
 def test_make_c0_defaults_to_joint_and_keeps_guarded_mode_selectable():
     polygon = NeighboredPolygon([[0, 0], [1, 0], [1, 1], [0, 1]])
     polygon.setArea(0.5)
