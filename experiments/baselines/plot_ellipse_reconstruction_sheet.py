@@ -45,7 +45,7 @@ METHODS = (
     },
     {
         "id": "ours_c0",
-        "label": "Ours: circular (graph + joint C0)",
+        "label": "Ours: circular (graph-coordinated + joint C0)",
         "color": "#D55E00",
         "project_key": "graph_coordinated_circular_joint_c0",
     },
@@ -77,6 +77,17 @@ METHODS = (
 
 def _parse_ints(value: str) -> tuple[int, ...]:
     return tuple(int(item) for item in value.split(",") if item.strip())
+
+
+def _tracked_worktree_is_clean() -> bool:
+    result = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=no"],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return not result.stdout.strip()
 
 
 def _sample_count(primitive: ExternalPrimitive, cell_size: float) -> int:
@@ -201,6 +212,12 @@ def plot_sheet(
     quasi_input: Path,
     window_half_width: float,
 ) -> None:
+    if output.suffix.lower() != ".pdf":
+        raise ValueError("reconstruction-sheet output must be a PDF")
+    if not resolutions or tuple(resolutions) != tuple(sorted(set(resolutions))):
+        raise ValueError("resolutions must be nonempty, unique, and increasing")
+    if window_half_width <= 0.0:
+        raise ValueError("window_half_width must be positive")
     case = canonical_benchmark_cases("ellipses", (case_index,))[0]
     truth = case.truth_primitives()
     tip = _high_curvature_tip(case.parameters)
@@ -310,6 +327,12 @@ def plot_sheet(
         "analysis_git_head": subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True
         ).strip(),
+        "tracked_worktree_clean": _tracked_worktree_is_clean(),
+        "analysis_source": {
+            "path": str(Path(__file__).resolve()),
+            "sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        },
+        "method_order": [method["id"] for method in METHODS],
         "case_index": case_index,
         "case_parameters": dict(case.parameters),
         "resolutions": list(resolutions),
@@ -321,6 +344,13 @@ def plot_sheet(
                 "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
             }
             for path in source_files
+        ],
+        "artifacts": [
+            {
+                "path": str(path.resolve()),
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            }
+            for path in (output, output.with_suffix(".png"))
         ],
     }
     output.with_suffix(".manifest.json").write_text(
@@ -343,6 +373,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    if not _tracked_worktree_is_clean():
+        raise RuntimeError("commit tracked analysis changes before packaging results")
     plot_sheet(
         output=args.output,
         case_index=args.case_index,

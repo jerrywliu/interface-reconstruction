@@ -120,6 +120,21 @@ METHODS = (
 METHOD_BY_KEY = {(item["method"], item["variant"]): item for item in METHODS}
 
 
+def _parse_ints(value: str) -> tuple[int, ...]:
+    return tuple(int(item) for item in value.split(",") if item.strip())
+
+
+def _tracked_worktree_is_clean() -> bool:
+    result = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=no"],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return not result.stdout.strip()
+
+
 def _read_csv(path: Path) -> list[dict[str, str]]:
     with path.open(newline="", encoding="utf-8") as stream:
         return list(csv.DictReader(stream))
@@ -283,6 +298,14 @@ def summarize_case_metrics(
     methods: Sequence[Mapping[str, Any]] = METHODS,
 ) -> list[dict[str, Any]]:
     resolutions = sorted({int(row["cells_per_side"]) for row in rows})
+    for row in rows:
+        for field in (*METRICS, "normalized_conservation_residual"):
+            value = float(row[field])
+            if not math.isfinite(value) or value < 0.0:
+                raise ValueError(
+                    f"invalid {field} for {row['method_id']} N="
+                    f"{row['cells_per_side']} case={row['case_index']}: {value}"
+                )
     summary: list[dict[str, Any]] = []
     for method in methods:
         method_rows = [row for row in rows if row["method_id"] == method["id"]]
@@ -332,6 +355,32 @@ def summarize_case_metrics(
     return summary
 
 
+def validate_study_grid(
+    rows: Sequence[Mapping[str, Any]],
+    methods: Sequence[Mapping[str, Any]],
+    expected_resolutions: Sequence[int],
+    expected_case_indices: Sequence[int],
+) -> None:
+    expected_keys = {
+        (resolution, case_index)
+        for resolution in expected_resolutions
+        for case_index in expected_case_indices
+    }
+    for method in methods:
+        observed = {
+            (int(row["cells_per_side"]), int(row["case_index"]))
+            for row in rows
+            if row["method_id"] == method["id"]
+        }
+        if observed != expected_keys:
+            missing = sorted(expected_keys - observed)
+            extra = sorted(observed - expected_keys)
+            raise ValueError(
+                f"{method['id']} does not match the required study grid; "
+                f"missing={missing[:8]} extra={extra[:8]}"
+            )
+
+
 def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as stream:
@@ -373,6 +422,13 @@ def _write_manifest(
     payload = {
         "schema_version": 1,
         "analysis_git_head": analysis_git_head,
+        "tracked_worktree_clean": _tracked_worktree_is_clean(),
+        "analysis_sources": [
+            _file_record(Path(__file__).resolve()),
+            _file_record(
+                REPO_ROOT / "experiments/baselines/run_common_native_metric_replay.py"
+            ),
+        ],
         "selected_methods": [
             {
                 key: method[key]
@@ -384,6 +440,8 @@ def _write_manifest(
         "summary_row_count": len(summary),
         "case_indices": sorted({int(row["case_index"]) for row in rows}),
         "cells_per_side": sorted({int(row["cells_per_side"]) for row in rows}),
+        "required_case_indices": list(args.expected_case_indices or ()),
+        "required_cells_per_side": list(args.expected_resolutions or ()),
         "metric_definitions": {
             "native_symmetric_hausdorff": (
                 "partition-insensitive symmetric native point-to-curve supremum"
@@ -432,8 +490,8 @@ def plot_summary(
             )
             x = np.asarray([int(row["cells_per_side"]) for row in selected])
             y = np.asarray([float(row[f"{metric}_median"]) for row in selected])
-            if metric == "facet_gap" and np.all(y == 0.0):
-                y = np.full_like(y, GAP_DISPLAY_FLOOR)
+            if metric == "facet_gap":
+                y = np.where(y == 0.0, GAP_DISPLAY_FLOOR, y)
             axis.plot(
                 x,
                 y,
@@ -547,14 +605,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--method-ids",
         nargs="+",
-        default=[method["id"] for method in METHODS],
+        default=[
+            "ours_per_cell",
+            "ours_graph",
+            "ours_c0",
+            "plvira",
+            "pcic_center",
+            "quasi",
+        ],
         help="method IDs to include in the comparison",
     )
+    parser.add_argument("--expected-resolutions", type=_parse_ints)
+    parser.add_argument("--expected-case-indices", type=_parse_ints)
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    if not _tracked_worktree_is_clean():
+        raise RuntimeError("commit tracked analysis changes before packaging results")
     selected_by_id = {method["id"]: method for method in METHODS}
     unknown = [method_id for method_id in args.method_ids if method_id not in selected_by_id]
     if unknown:
@@ -563,6 +632,17 @@ def main() -> None:
     rows = assemble_case_metrics(
         args.native_cases, tuple(args.baseline_cases), args.ours_cases, methods
     )
+    if (args.expected_resolutions is None) != (args.expected_case_indices is None):
+        raise ValueError(
+            "--expected-resolutions and --expected-case-indices must be used together"
+        )
+    if args.expected_resolutions is not None:
+        validate_study_grid(
+            rows,
+            methods,
+            args.expected_resolutions,
+            args.expected_case_indices,
+        )
     summary = summarize_case_metrics(rows, methods)
     args.output.mkdir(parents=True, exist_ok=True)
     _write_csv(args.output / "case_metrics.csv", rows)

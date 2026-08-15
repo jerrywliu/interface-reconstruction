@@ -7,6 +7,7 @@ from experiments.baselines.build_ellipse_all_method_comparison import (
     RESOLUTIONS,
     plot_summary,
     summarize_case_metrics,
+    validate_study_grid,
 )
 
 
@@ -81,3 +82,18 @@ def test_summary_uses_every_observed_resolution():
 
     assert {int(row["cells_per_side"]) for row in summary} == set(resolutions)
     assert len(summary) == len(METHODS) * len(resolutions)
+
+
+def test_validate_study_grid_rejects_shared_missing_case():
+    rows = [row for row in _synthetic_cases() if row["case_index"] != 2]
+
+    with pytest.raises(ValueError, match="required study grid"):
+        validate_study_grid(rows, METHODS, RESOLUTIONS, (0, 1, 2))
+
+
+def test_summary_rejects_nonfinite_metric():
+    rows = _synthetic_cases()
+    rows[0]["native_symmetric_hausdorff"] = math.nan
+
+    with pytest.raises(ValueError, match="invalid native_symmetric_hausdorff"):
+        summarize_case_metrics(rows)
