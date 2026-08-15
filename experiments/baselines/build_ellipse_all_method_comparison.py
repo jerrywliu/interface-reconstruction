@@ -542,7 +542,7 @@ def plot_summary(
     )
     if any(method["id"] == "quasi" for method in methods):
         axes[1, 0].annotate(
-            "Joint C0 and QUASI exact zero\n(shown at plotting floor)",
+            "Exact zeros shown at plotting floor",
             (64, GAP_DISPLAY_FLOOR),
             xytext=(0, 12),
             textcoords="offset points",
