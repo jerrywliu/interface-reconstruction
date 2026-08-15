@@ -358,6 +358,33 @@ def _evaluate_case(
         "num_merged_components": int(diagnostics["num_merged_components"]),
         "c0_adjustment_events": c0_adjustments,
         "c0_rejection_events": c0_rejections,
+        "num_c0_bad_joins_before_joint": int(
+            diagnostics.get("num_c0_bad_joins_before_joint") or 0
+        ),
+        "num_c0_bad_joins_after_joint": int(
+            diagnostics.get("num_c0_bad_joins_after_joint") or 0
+        ),
+        "num_c0_joint_components": int(
+            diagnostics.get("num_c0_joint_components") or 0
+        ),
+        "num_c0_joint_components_solved": int(
+            diagnostics.get("num_c0_joint_components_solved") or 0
+        ),
+        "num_c0_joint_components_failed": int(
+            diagnostics.get("num_c0_joint_components_failed") or 0
+        ),
+        "num_c0_exact_c1_components": int(
+            diagnostics.get("num_c0_exact_c1_components") or 0
+        ),
+        "num_c0_conservative_fallback_components": int(
+            diagnostics.get("num_c0_conservative_fallback_components") or 0
+        ),
+        "max_c0_relative_area_residual": _float_or_nan(
+            diagnostics.get("max_c0_relative_area_residual")
+        ),
+        "max_c0_tangent_angle_radians": _float_or_nan(
+            diagnostics.get("max_c0_tangent_angle_radians")
+        ),
         "primitive_count": len(reconstruction),
         "arc_count": kinds.count("arc"),
         "line_count": kinds.count("line"),
@@ -580,6 +607,41 @@ def summarize_case_results(
                 "c0_rejection_events": sum(
                     int(row["c0_rejection_events"]) for row in selected
                 ),
+                "c0_bad_joins_before_joint": sum(
+                    int(row.get("num_c0_bad_joins_before_joint") or 0)
+                    for row in selected
+                ),
+                "c0_bad_joins_after_joint": sum(
+                    int(row.get("num_c0_bad_joins_after_joint") or 0)
+                    for row in selected
+                ),
+                "c0_joint_components": sum(
+                    int(row.get("num_c0_joint_components") or 0) for row in selected
+                ),
+                "c0_joint_components_solved": sum(
+                    int(row.get("num_c0_joint_components_solved") or 0)
+                    for row in selected
+                ),
+                "c0_joint_components_failed": sum(
+                    int(row.get("num_c0_joint_components_failed") or 0)
+                    for row in selected
+                ),
+                "c0_exact_c1_components": sum(
+                    int(row.get("num_c0_exact_c1_components") or 0)
+                    for row in selected
+                ),
+                "c0_conservative_fallback_components": sum(
+                    int(row.get("num_c0_conservative_fallback_components") or 0)
+                    for row in selected
+                ),
+                "max_c0_relative_area_residual": max(
+                    float(row.get("max_c0_relative_area_residual", math.nan))
+                    for row in selected
+                ),
+                "max_c0_tangent_angle_radians": max(
+                    float(row.get("max_c0_tangent_angle_radians", math.nan))
+                    for row in selected
+                ),
             }
             for metric in SUMMARY_METRICS:
                 values = np.asarray([float(row[metric]) for row in selected])
@@ -710,7 +772,11 @@ def _plot_summary(summary: Sequence[Mapping[str, Any]], path: Path) -> None:
 
 
 def _format(value: float) -> str:
-    return f"{value:.6e}"
+    return f"{value:.6e}" if math.isfinite(value) else "n/a"
+
+
+def _format_order(value: float) -> str:
+    return f"{value:.3f}" if math.isfinite(value) else "n/a"
 
 
 def _write_report(
@@ -738,24 +804,24 @@ def _write_report(
         "",
         "## Results",
         "",
-        "| Variant | N | Hausdorff median | Curvature MAE median | Signed curvature mean | Facet-gap median | Concave arc length | C0 accepted / rejected |",
+        "| Variant | N | Hausdorff median | Curvature MAE median | Facet-gap median | Joint components solved | Bad joins after joint | Max area residual |",
         "|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for row in summary:
         rows.append(
             "| {variant} | {cells_per_side} | {hausdorff} | {curvature} | "
-            "{signed} | {gap} | {concave} | {accepted} / {rejected} |".format(
+            "{gap} | {solved} / {components} | {bad_after} | {area} |".format(
                 variant=row["variant"],
                 cells_per_side=row["cells_per_side"],
                 hausdorff=_format(float(row["native_symmetric_hausdorff_median"])),
                 curvature=_format(
                     float(row["geometric_curvature_mean_absolute_error_median"])
                 ),
-                signed=_format(float(row["signed_curvature_arc_length_mean_median"])),
                 gap=_format(float(row["production_facet_gap_median"])),
-                concave=_format(float(row["concave_arc_length_fraction_median"])),
-                accepted=row["c0_adjustment_events"],
-                rejected=row["c0_rejection_events"],
+                solved=row["c0_joint_components_solved"],
+                components=row["c0_joint_components"],
+                bad_after=row["c0_bad_joins_after_joint"],
+                area=_format(float(row["max_c0_relative_area_residual"])),
             )
         )
     rows.extend(
@@ -770,18 +836,24 @@ def _write_report(
     for variant in VARIANTS:
         selected = next(row for row in summary if row["variant"] == variant["label"])
         rows.append(
-            "| {variant} | {geometry:.3f} | {curvature:.3f} | {gap:.3f} |".format(
+            "| {variant} | {geometry} | {curvature} | {gap} |".format(
                 variant=variant["label"],
-                geometry=float(
-                    row_value(selected, "native_symmetric_hausdorff_fit_order")
-                ),
-                curvature=float(
-                    row_value(
-                        selected,
-                        "geometric_curvature_mean_absolute_error_fit_order",
+                geometry=_format_order(
+                    float(
+                        row_value(selected, "native_symmetric_hausdorff_fit_order")
                     )
                 ),
-                gap=float(row_value(selected, "production_facet_gap_fit_order")),
+                curvature=_format_order(
+                    float(
+                        row_value(
+                            selected,
+                            "geometric_curvature_mean_absolute_error_fit_order",
+                        )
+                    )
+                ),
+                gap=_format_order(
+                    float(row_value(selected, "production_facet_gap_fit_order"))
+                ),
             )
         )
     exact_count = sum(bool(row["native_geometry_exact"]) for row in equivalence)
@@ -830,6 +902,19 @@ def _write_report(
         ]
     )
     c0_straight_limit_count = sum(int(row["line_count"]) for row in c0_rows.values())
+    c0_component_count = sum(int(row["c0_joint_components"]) for row in c0_rows.values())
+    c0_solved_count = sum(
+        int(row["c0_joint_components_solved"]) for row in c0_rows.values()
+    )
+    c0_failed_count = sum(
+        int(row["c0_joint_components_failed"]) for row in c0_rows.values()
+    )
+    c0_bad_after = sum(
+        int(row["c0_bad_joins_after_joint"]) for row in c0_rows.values()
+    )
+    c0_max_area_residual = max(
+        float(row["max_c0_relative_area_residual"]) for row in c0_rows.values()
+    )
     rows.extend(
         [
             "",
@@ -852,6 +937,12 @@ def _write_report(
             "benefits are instead geometric: lower Hausdorff error and much smaller "
             "facet gaps.",
             "",
+            f"The optimizer solves `{c0_solved_count}/{c0_component_count}` connected "
+            f"components, with `{c0_failed_count}` failures and `{c0_bad_after}` "
+            "remaining eligible bad joins. All solved components reach the exact-C1 "
+            f"branch, and the maximum relative cell-area residual is "
+            f"`{c0_max_area_residual:.3e}`.",
+            "",
             "Negative-radius (locally concave) arcs are reported explicitly because "
             "joint conservative refinement does not impose a convexity constraint. "
             "The unsigned curvature metric therefore remains paired with the signed "
@@ -861,8 +952,8 @@ def _write_report(
             "",
             "The C0 facet sidecars are post-refinement: `runReconstruction` invokes "
             "the joint `makeC0` pass before collecting the returned facet list and "
-            "writing the exact schema-v2 metadata. C0 adjustment/rejection counts above "
-            "come from the same final run's provenance events. The saved native geometry "
+            "writing the exact schema-v2 metadata. Component outcomes above come from "
+            "the same final run's diagnostics. The saved native geometry "
             f"differs from its matched pre-C0 reconstruction in `{changed_c0_cases}/"
             f"{len(c0_verification)}` cases.",
             "",

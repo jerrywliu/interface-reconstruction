@@ -51,10 +51,16 @@ def test_matched_commands_keep_exact_variant_contract():
         == "0"
     )
     assert (
-        commands["graph_coordinated_circular_guarded_c0"][
-            commands["graph_coordinated_circular_guarded_c0"].index("--do_c0") + 1
+        commands["graph_coordinated_circular_joint_c0"][
+            commands["graph_coordinated_circular_joint_c0"].index("--do_c0") + 1
         ]
         == "1"
+    )
+    assert (
+        commands["graph_coordinated_circular_joint_c0"][
+            commands["graph_coordinated_circular_joint_c0"].index("--c0_mode") + 1
+        ]
+        == "joint"
     )
     assert (
         commands["per_cell_circular"][
