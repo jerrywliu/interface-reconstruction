@@ -89,8 +89,8 @@ ERROR_PANELS = (
     ),
     (
         "geometric_curvature_mean_absolute_error",
-        "(b) Geometric-curvature MAE",
-        "Geometric-curvature MAE",
+        "(b) Curvature MAE",
+        "Curvature MAE",
         1.0,
         (0.76, 0.11),
     ),
