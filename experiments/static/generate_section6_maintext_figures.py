@@ -58,6 +58,7 @@ from experiments.static.run_perturbed_sweeps import (
     _load_sweep_rows,
     _make_save_name,
 )
+from experiments.plotting import add_convergence_order_triangle
 from experiments.static.zalesak import (
     RANDOM_SEED as ZALESAK_RANDOM_SEED,
     build_true_reference_zalesak,
@@ -1345,8 +1346,6 @@ def _generate_resolution_quantitative_panel(
             x_mode="resolution",
             exp_name=exp_name,
         )
-        if exp_name == "ellipses" and metric == "facet_gap":
-            _add_power_law_fit(ax, curves, algo="circular")
         ax.set_title(
             f"{metric.replace('_', ' ').title()} vs cells per side",
             fontsize=11.5,
@@ -1358,11 +1357,43 @@ def _generate_resolution_quantitative_panel(
                 legend_entries[label] = handle
 
     active_axes = [ax for ax in axes if ax.axison]
+    if exp_name == "ellipses":
+        resolution_ticks = sorted(
+            {
+                STATIC_GRID_SIZE * float(value)
+                for curves in resolution_curves.values()
+                for series in curves.values()
+                for value in series["x_values"]
+                if np.isfinite(value) and value > 0
+            }
+        )
+        for ax in active_axes:
+            ax.set_xscale("log")
+            ax.set_yscale("log")
+            ax.set_xticks(
+                resolution_ticks,
+                labels=[f"{value:g}" for value in resolution_ticks],
+            )
+            ax.xaxis.set_minor_formatter(mpl.ticker.NullFormatter())
     if active_axes:
         xmin = min(ax.get_xlim()[0] for ax in active_axes)
         xmax = max(ax.get_xlim()[1] for ax in active_axes)
         for ax in active_axes:
             ax.set_xlim(xmin, xmax)
+
+    if exp_name == "ellipses" and len(active_axes) == 2:
+        ymin = min(ax.get_ylim()[0] for ax in active_axes)
+        ymax = max(ax.get_ylim()[1] for ax in active_axes)
+        for ax in active_axes:
+            ax.set_ylim(ymin, ymax)
+
+        facet_gap_index = metrics.index("facet_gap")
+        add_convergence_order_triangle(
+            axes[facet_gap_index],
+            3.0,
+            anchor=(0.78, 0.72),
+            width=0.12,
+        )
 
     if legend_entries:
         fig.legend(
@@ -1377,37 +1408,6 @@ def _generate_resolution_quantitative_panel(
     fig.tight_layout(rect=[0, 0.12, 1, 1])
     _save_figure(fig, out_path)
     plt.close(fig)
-
-
-def _add_power_law_fit(ax, curves: dict, *, algo: str) -> float | None:
-    """Overlay a log-log fit for one method and return its positive order."""
-    series = curves.get(algo)
-    if not series:
-        return None
-
-    resolutions = np.asarray(series["x_values"], dtype=float)
-    values = np.asarray(series["median"], dtype=float)
-    valid = np.isfinite(resolutions) & np.isfinite(values) & (values > 0)
-    if np.count_nonzero(valid) < 2:
-        return None
-
-    cells_per_side = STATIC_GRID_SIZE * resolutions[valid]
-    slope, intercept = np.polyfit(
-        np.log(cells_per_side), np.log(values[valid]), 1
-    )
-    order = float(-slope)
-    fitted = np.exp(intercept) * cells_per_side**slope
-    style = METHOD_STYLES.get(algo, {})
-    ax.plot(
-        cells_per_side,
-        fitted,
-        color=style.get("color", None),
-        linestyle=":",
-        linewidth=2.0,
-        label=rf"circular fit: $N^{{-{order:.2f}}}$",
-        zorder=4,
-    )
-    return order
 
 
 def _inset_bounds(exp_name: str, spec: dict) -> tuple[float, float, float, float] | None:

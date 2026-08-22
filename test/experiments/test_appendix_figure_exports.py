@@ -149,6 +149,11 @@ def test_resolution_maintext_panel_uses_two_resolution_axes(tmp_path, monkeypatc
             (ax, curves, metric, kwargs)
         ),
     )
+    monkeypatch.setattr(
+        maintext_figs,
+        "add_convergence_order_triangle",
+        lambda *_args, **_kwargs: None,
+    )
     saved = []
     monkeypatch.setattr(
         maintext_figs,
