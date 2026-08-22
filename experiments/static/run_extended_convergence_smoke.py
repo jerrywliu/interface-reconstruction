@@ -29,6 +29,7 @@ DEFAULT_WIGGLES = (0.0, 0.2)
 DEFAULT_CASE_INDICES = (0, 1, 2, 3, 4)
 LINEAR_METHODS = ("Youngs", "ELVIRA", "LVIRA", "safe_linear", "linear")
 ELLIPSE_METHODS = ("circular",)
+EXPERIMENTS = ("circles", "ellipses")
 PLIC_FALLBACK = "LVIRA"
 FIT_TOLERANCE = 1.0e-10
 LOG_DIAGNOSTIC_PATTERNS = {
@@ -91,6 +92,7 @@ def _build_specs(
     cells_per_side: Sequence[int],
     wiggles: Sequence[float],
     case_indices: Sequence[int],
+    experiments: Sequence[str] = EXPERIMENTS,
 ) -> list[dict[str, Any]]:
     specs: list[dict[str, Any]] = []
     cases = ",".join(map(str, case_indices))
@@ -98,7 +100,10 @@ def _build_specs(
         ("circles", "static/circle", "--num_circles", LINEAR_METHODS),
         ("ellipses", "static/ellipse", "--num_ellipses", ELLIPSE_METHODS),
     )
+    selected = set(experiments)
     for experiment, config, count_arg, methods in families:
+        if experiment not in selected:
+            continue
         for n in cells_per_side:
             resolution = n / 100.0
             for wiggle in wiggles:
@@ -325,6 +330,23 @@ def _finite(rows: Iterable[Mapping[str, Any]], field: str) -> list[float]:
     return [value for row in rows if (value := _float(row, field)) is not None]
 
 
+def _percentile(values: Sequence[float], percentile: float) -> float:
+    """Return a linearly interpolated percentile for a finite value sequence."""
+
+    if not values:
+        raise ValueError("percentile requires at least one value")
+    if not 0.0 <= percentile <= 1.0:
+        raise ValueError("percentile must lie in [0, 1]")
+    ordered = sorted(values)
+    position = percentile * (len(ordered) - 1)
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    if lower == upper:
+        return ordered[lower]
+    weight = position - lower
+    return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
+
+
 def _is_true(value: Any) -> bool:
     return value is True or str(value).strip().lower() in {"1", "true", "yes"}
 
@@ -361,6 +383,13 @@ def _summaries(case_rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
         ):
             values = _finite(rows, field)
             record[f"{field}_median"] = median(values) if values else None
+            record[f"{field}_q1"] = _percentile(values, 0.25) if values else None
+            record[f"{field}_q3"] = _percentile(values, 0.75) if values else None
+            record[f"{field}_iqr"] = (
+                record[f"{field}_q3"] - record[f"{field}_q1"]
+                if values
+                else None
+            )
             record[f"{field}_max"] = max(values) if values else None
         summaries.append(record)
     return summaries
@@ -421,6 +450,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--cells-per-side", default="256,300,512")
     parser.add_argument("--wiggles", default="0,0.2")
     parser.add_argument("--case-indices", default="0,1,2,3,4")
+    parser.add_argument(
+        "--experiments",
+        default=",".join(EXPERIMENTS),
+        help="comma-separated subset of circles,ellipses",
+    )
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args(argv)
@@ -447,12 +481,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     cells_per_side = _parse_csv(args.cells_per_side, int)
     wiggles = _parse_csv(args.wiggles, float)
     case_indices = _parse_csv(args.case_indices, int)
+    experiments = _parse_csv(args.experiments, str)
     if not cells_per_side or not wiggles or not case_indices:
         raise SystemExit("cells-per-side, wiggles, and case-indices must be nonempty")
+    unknown_experiments = sorted(set(experiments) - set(EXPERIMENTS))
+    if not experiments or unknown_experiments:
+        raise SystemExit(
+            "experiments must be a nonempty subset of circles,ellipses; "
+            f"unknown: {','.join(unknown_experiments)}"
+        )
     output_dir.mkdir(parents=True)
     (output_dir / "logs").mkdir()
     (output_dir / "raw_runs").mkdir()
-    specs = _build_specs(output_dir, cells_per_side, wiggles, case_indices)
+    specs = _build_specs(
+        output_dir, cells_per_side, wiggles, case_indices, experiments
+    )
     manifest: dict[str, Any] = {
         "schema_version": 1,
         "experiment": "extended_convergence_smoke",
@@ -466,6 +509,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "resolutions": [n / 100.0 for n in cells_per_side],
             "wiggles": list(wiggles),
             "case_indices": list(case_indices),
+            "experiments": list(experiments),
             "circle_methods": list(LINEAR_METHODS),
             "ellipse_methods": list(ELLIPSE_METHODS),
             "plic_fallback": PLIC_FALLBACK,

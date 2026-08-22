@@ -45,6 +45,21 @@ python -m experiments.static.run_extended_convergence_smoke \
   --cells-per-side 256 --wiggles 0 --case-indices 0 --workers 1
 ```
 
+To run only the line-only circular-interface family and generate its
+paper-ready convergence summary:
+
+```bash
+python -m experiments.static.run_extended_convergence_smoke \
+  --experiments circles --workers 2
+python -m experiments.static.analyze_extended_line_circle \
+  results/static/extended_convergence_smoke_<timestamp>
+```
+
+The analysis command requires the complete established matrix at
+`N=256,300,512`, `w=0,0.2`, and cases `0--4`. It writes aggregate and per-case
+orders plus a vector PDF whose shaded bands show the matched-case IQR and whose
+small triangles mark second-order convergence.
+
 ## Output Contract
 
 ```text
@@ -53,6 +68,9 @@ extended_convergence_smoke_<timestamp>/
   run_status.csv
   case_metrics.csv
   summary_metrics.csv
+  aggregate_convergence_orders.csv  # line-only circle analysis
+  case_convergence_orders.csv       # line-only circle analysis
+  line_circle_extended_convergence.pdf
   failures.csv                 # present only when failures occur
   logs/
   raw_runs/<save_name>/
