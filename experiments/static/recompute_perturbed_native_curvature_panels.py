@@ -283,12 +283,26 @@ def _plot_panel(data: Mapping[str, Any], experiment: str, output: Path) -> None:
             bbox_to_anchor=(0.5, -0.004),
         )
     singular = "Circle" if experiment == "circles" else "Ellipse"
-    fig.suptitle(
+    figure_title = fig.suptitle(
         f"{singular} Reconstruction on Perturbed Cartesian Meshes",
         fontsize=15,
         fontweight="bold",
+        y=0.985,
     )
-    fig.tight_layout(rect=[0, 0.045, 1, 0.945])
+    fig.tight_layout(rect=[0, 0.045, 1, 0.89], h_pad=1.8, w_pad=1.4)
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    figure_title_box = figure_title.get_window_extent(renderer=renderer)
+    top_title_boxes = [
+        axis.title.get_window_extent(renderer=renderer) for axis in axes[0]
+    ]
+    minimum_clearance = 12.0
+    if max(box.y1 for box in top_title_boxes) + minimum_clearance >= figure_title_box.y0:
+        raise ValueError(
+            f"{experiment} top-row titles overlap the figure-title clearance band"
+        )
+    if figure_title_box.y1 > fig.bbox.y1:
+        raise ValueError(f"{experiment} figure title is clipped by the canvas")
     output.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output, bbox_inches="tight")
     fig.savefig(output.with_suffix(".png"), dpi=180, bbox_inches="tight")
