@@ -8,6 +8,7 @@ import csv
 import hashlib
 import json
 import math
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -292,6 +293,7 @@ def _write_report(
     output_dir: Path,
     aggregate_orders: Sequence[Mapping[str, Any]],
     case_orders: Sequence[Mapping[str, Any]],
+    case_rows: Sequence[Mapping[str, Any]],
     manifest: Mapping[str, Any],
     run_status: Sequence[Mapping[str, Any]],
 ) -> None:
@@ -322,6 +324,23 @@ def _write_report(
             )
     estimate = manifest.get("full_25_case_estimate", {})
     wall_seconds = sum(float(row["wall_time_seconds"]) for row in run_status)
+    elapsed_seconds = (
+        datetime.fromisoformat(manifest["completed_utc"])
+        - datetime.fromisoformat(manifest["created_utc"])
+    ).total_seconds()
+    max_global_area = max(
+        _float(row, "global_relative_phase_area_error") for row in case_rows
+    )
+    max_component_residual = max(
+        _float(row, "max_fitted_component_absolute_residual") for row in case_rows
+    )
+    max_merged_residual = max(
+        _float(row, "max_merged_component_absolute_residual")
+        for row in case_rows
+        if row.get("max_merged_component_absolute_residual") not in (None, "")
+    )
+    fallback_cells = sum(int(float(row["num_plic_fallback_cells"])) for row in case_rows)
+    missing_facets = sum(int(float(row["num_missing_facets"])) for row in case_rows)
     lines.extend(
         [
             "",
@@ -333,6 +352,13 @@ def _write_report(
             "",
             f"- Source commit: `{manifest.get('source', {}).get('commit', '')}`.",
             "- PLIC fallback: `LVIRA`.",
+            f"- Completed settings/cases: `{len(run_status)}/{len(case_rows)}`; "
+            f"missing facets: `{missing_facets}`; fallback cells: `{fallback_cells}`.",
+            f"- Maximum global relative area error: `{max_global_area:.3e}`; "
+            f"maximum fitted-component residual: `{max_component_residual:.3e}`; "
+            f"maximum merged-component residual: `{max_merged_residual:.3e}`.",
+            f"- Observed two-worker elapsed time: `{elapsed_seconds / 60.0:.1f}` min; "
+            f"summed subprocess time: `{wall_seconds / 60.0:.1f}` min.",
             f"- Recorded subprocess wall time: `{wall_seconds:.1f}` s.",
             f"- Five-to-25-case serial estimate: "
             f"`{float(estimate.get('estimated_25_case_serial_hours', 0.0)):.2f}` h.",
@@ -373,7 +399,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     _write_csv(run_dir / "aggregate_convergence_orders.csv", aggregate_orders)
     _write_csv(run_dir / "case_convergence_orders.csv", case_orders)
     _plot(summary_rows, run_dir)
-    _write_report(run_dir, aggregate_orders, case_orders, manifest, run_status)
+    _write_report(
+        run_dir, aggregate_orders, case_orders, case_rows, manifest, run_status
+    )
     _write_hashes(
         run_dir,
         (
