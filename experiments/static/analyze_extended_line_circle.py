@@ -13,6 +13,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.ticker import NullFormatter
 
 from experiments.plotting import add_convergence_order_triangle
 from experiments.static.run_extended_convergence_smoke import LINEAR_METHODS
@@ -235,6 +236,7 @@ def _plot(summary_rows: Sequence[Mapping[str, str]], output_dir: Path) -> None:
             axis.grid(True, which="major", color="#d1d5db", linewidth=0.45)
             axis.grid(True, which="minor", color="#e5e7eb", linewidth=0.3)
             axis.set_xticks(EXPECTED_N, labels=[str(value) for value in EXPECTED_N])
+            axis.xaxis.set_minor_formatter(NullFormatter())
             axis.set_title(
                 "Cartesian mesh" if wiggle == 0.0 else r"Perturbed mesh ($w=0.2$)"
             )
@@ -322,6 +324,10 @@ def _write_report(
     wall_seconds = sum(float(row["wall_time_seconds"]) for row in run_status)
     lines.extend(
         [
+            "",
+            "Youngs and per-cell linear produce identical Hausdorff and facet-gap "
+            "values for every matched case in this study; their plotted curves "
+            "therefore coincide.",
             "",
             "## Provenance",
             "",
