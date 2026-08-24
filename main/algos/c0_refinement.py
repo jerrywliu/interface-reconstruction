@@ -17,6 +17,7 @@ from main.structs.facets.linear_facet import LinearFacet
 
 
 DEFAULT_GAP_TOLERANCE = 1.0e-8
+DEFAULT_TANGENT_TOLERANCE = 1.0e-8
 DEFAULT_CONSERVATION_TOLERANCE = 1.0e-10
 DEFAULT_MAX_FUNCTION_EVALUATIONS = 500
 
@@ -57,6 +58,7 @@ class JointC0ComponentRecord:
     component_index: int
     merge_ids: tuple[int, ...]
     num_facets: int
+    num_joins: int
     num_bad_joins: int
     solved: bool
     solution_kind: str
@@ -75,6 +77,12 @@ class JointC0Report:
     mean_gap_after: float
     max_gap_before: float
     max_gap_after: float
+    bad_tangent_joins_before: int
+    bad_tangent_joins_after: int
+    mean_tangent_angle_before: float
+    mean_tangent_angle_after: float
+    max_tangent_angle_before: float
+    max_tangent_angle_after: float
     components: tuple[JointC0ComponentRecord, ...]
     max_relative_area_residual_after: float
 
@@ -96,6 +104,12 @@ class JointC0Report:
             "mean_gap_after": self.mean_gap_after,
             "max_gap_before": self.max_gap_before,
             "max_gap_after": self.max_gap_after,
+            "bad_tangent_joins_before": self.bad_tangent_joins_before,
+            "bad_tangent_joins_after": self.bad_tangent_joins_after,
+            "mean_tangent_angle_before": self.mean_tangent_angle_before,
+            "mean_tangent_angle_after": self.mean_tangent_angle_after,
+            "max_tangent_angle_before": self.max_tangent_angle_before,
+            "max_tangent_angle_after": self.max_tangent_angle_after,
             "components_solved": self.components_solved,
             "components_failed": self.components_failed,
             "max_relative_area_residual_after": (self.max_relative_area_residual_after),
@@ -272,6 +286,22 @@ def _join_gap(join: Join, facets: Mapping[int, Any]) -> float:
     )
 
 
+def _join_tangent_angle(join: Join, facets: Mapping[int, Any]) -> float:
+    try:
+        first = _oriented_tangent(
+            facets[join.first_id],
+            _endpoint(facets[join.first_id], join.first_side),
+        )
+        second = _oriented_tangent(
+            facets[join.second_id],
+            _endpoint(facets[join.second_id], join.second_side),
+        )
+    except (TypeError, ValueError):
+        return math.inf
+    tangent_dot = float(np.clip(np.dot(first, second), -1.0, 1.0))
+    return abs(math.atan2(_cross(first, second), tangent_dot))
+
+
 def _join_summary(
     joins: Sequence[Join], facets: Mapping[int, Any], gap_tolerance: float
 ) -> dict[str, Any]:
@@ -284,21 +314,25 @@ def _join_summary(
     }
 
 
-def _bad_components(
-    joins: Sequence[Join], facets: Mapping[int, Any], gap_tolerance: float
-) -> list[list[int]]:
-    bad_indices = [
-        index
-        for index, join in enumerate(joins)
-        if _join_gap(join, facets) > gap_tolerance
-    ]
+def _tangent_summary(
+    joins: Sequence[Join], facets: Mapping[int, Any], tangent_tolerance: float
+) -> dict[str, Any]:
+    angles = [_join_tangent_angle(join, facets) for join in joins]
+    return {
+        "bad_joins": sum(angle > tangent_tolerance for angle in angles),
+        "mean_angle": float(np.mean(angles)) if angles else 0.0,
+        "max_angle": max(angles, default=0.0),
+    }
+
+
+def _edge_components(indices: Sequence[int], joins: Sequence[Join]) -> list[list[int]]:
     incident: dict[int, set[int]] = defaultdict(set)
-    for index in bad_indices:
+    for index in indices:
         join = joins[index]
         incident[join.first_id].add(index)
         incident[join.second_id].add(index)
     components = []
-    remaining = set(bad_indices)
+    remaining = set(indices)
     while remaining:
         seed = remaining.pop()
         component = {seed}
@@ -314,6 +348,35 @@ def _bad_components(
                 node_stack.extend((edge.first_id, edge.second_id))
         components.append(sorted(component))
     return components
+
+
+def _bad_components(
+    joins: Sequence[Join], facets: Mapping[int, Any], gap_tolerance: float
+) -> list[list[int]]:
+    bad_indices = [
+        index
+        for index, join in enumerate(joins)
+        if _join_gap(join, facets) > gap_tolerance
+    ]
+    return _edge_components(bad_indices, joins)
+
+
+def _smooth_chain_components(
+    joins: Sequence[Join],
+    facets: Mapping[int, Any],
+    gap_tolerance: float,
+    tangent_tolerance: float,
+) -> list[list[int]]:
+    components = _edge_components(list(range(len(joins))), joins)
+    return [
+        component
+        for component in components
+        if any(
+            _join_gap(joins[index], facets) > gap_tolerance
+            or _join_tangent_angle(joins[index], facets) > tangent_tolerance
+            for index in component
+        )
+    ]
 
 
 def _edge_coordinate(join: Join, point: np.ndarray) -> float:
@@ -755,15 +818,31 @@ def plan_joint_c0_refinement(
     merged_polys: Sequence[Any],
     *,
     gap_tolerance: float = DEFAULT_GAP_TOLERANCE,
+    tangent_tolerance: float = DEFAULT_TANGENT_TOLERANCE,
     conservation_tolerance: float = DEFAULT_CONSERVATION_TOLERANCE,
     max_nfev: int = DEFAULT_MAX_FUNCTION_EVALUATIONS,
+    component_mode: str = "gap",
 ) -> tuple[list[JointC0Assignment], JointC0Report]:
     """Plan conservative joint repairs for all remaining incompatible joins."""
+
+    if component_mode not in {"gap", "smooth_chain"}:
+        raise ValueError(
+            f"Unknown joint-refinement component mode {component_mode!r}"
+        )
 
     polys, joins = _collect_joins(mesh, merged_polys)
     base_facets = {merge_id: poly.getFacet() for merge_id, poly in polys.items()}
     before = _join_summary(joins, base_facets, gap_tolerance)
-    components = _bad_components(joins, base_facets, gap_tolerance)
+    tangent_before = _tangent_summary(joins, base_facets, tangent_tolerance)
+    if component_mode == "gap":
+        components = _bad_components(joins, base_facets, gap_tolerance)
+    else:
+        components = _smooth_chain_components(
+            joins,
+            base_facets,
+            gap_tolerance,
+            tangent_tolerance,
+        )
     assignments = []
     component_records = []
     final_facets = dict(base_facets)
@@ -795,7 +874,13 @@ def plan_joint_c0_refinement(
                 component_index=component_index,
                 merge_ids=tuple(node_ids),
                 num_facets=len(node_ids),
-                num_bad_joins=len(component),
+                num_joins=len(component),
+                num_bad_joins=sum(
+                    _join_gap(joins[index], base_facets) > gap_tolerance
+                    or _join_tangent_angle(joins[index], base_facets)
+                    > tangent_tolerance
+                    for index in component
+                ),
                 solved=solved,
                 solution_kind=solution.solution_kind if solved else "failed",
                 max_relative_area_residual=(
@@ -813,13 +898,14 @@ def plan_joint_c0_refinement(
         )
 
     after = _join_summary(joins, final_facets, gap_tolerance)
+    tangent_after = _tangent_summary(joins, final_facets, tangent_tolerance)
     area_residuals = [
         abs(poly._facet_phase_area(final_facets[merge_id]) - poly.getArea())
         / poly.getMaxArea()
         for merge_id, poly in polys.items()
     ]
     report = JointC0Report(
-        mode="joint",
+        mode="joint" if component_mode == "gap" else "g1_chain",
         eligible_joins=before["eligible_joins"],
         bad_joins_before=before["bad_joins"],
         bad_joins_after=after["bad_joins"],
@@ -827,6 +913,12 @@ def plan_joint_c0_refinement(
         mean_gap_after=after["mean_gap"],
         max_gap_before=before["max_gap"],
         max_gap_after=after["max_gap"],
+        bad_tangent_joins_before=tangent_before["bad_joins"],
+        bad_tangent_joins_after=tangent_after["bad_joins"],
+        mean_tangent_angle_before=tangent_before["mean_angle"],
+        mean_tangent_angle_after=tangent_after["mean_angle"],
+        max_tangent_angle_before=tangent_before["max_angle"],
+        max_tangent_angle_after=tangent_after["max_angle"],
         components=tuple(component_records),
         max_relative_area_residual_after=max(area_residuals, default=0.0),
     )
@@ -836,6 +928,7 @@ def plan_joint_c0_refinement(
 __all__ = [
     "DEFAULT_CONSERVATION_TOLERANCE",
     "DEFAULT_GAP_TOLERANCE",
+    "DEFAULT_TANGENT_TOLERANCE",
     "DEFAULT_MAX_FUNCTION_EVALUATIONS",
     "JointC0Assignment",
     "JointC0ComponentRecord",

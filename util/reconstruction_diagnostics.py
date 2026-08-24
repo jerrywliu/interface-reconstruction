@@ -97,6 +97,12 @@ CASE_FIELDNAMES = [
     "num_c0_conservative_fallback_components",
     "max_c0_relative_area_residual",
     "max_c0_tangent_angle_radians",
+    "num_g1_bad_joins_before_refinement",
+    "num_g1_bad_joins_after_refinement",
+    "mean_g1_tangent_angle_before_radians",
+    "mean_g1_tangent_angle_after_radians",
+    "max_g1_tangent_angle_before_radians",
+    "max_g1_tangent_angle_after_radians",
     "hausdorff",
     "facet_gap",
     "area_error",
@@ -110,6 +116,7 @@ C0_COMPONENT_FIELDNAMES = [
     "component_index",
     "merge_ids_json",
     "num_facets",
+    "num_joins",
     "num_bad_joins",
     "solved",
     "solution_kind",
@@ -467,6 +474,24 @@ def write_reconstruction_diagnostics(mesh, case_index, output_dirs):
                 ),
                 default=0.0,
             ),
+            "num_g1_bad_joins_before_refinement": c0_report.get(
+                "bad_tangent_joins_before", ""
+            ),
+            "num_g1_bad_joins_after_refinement": c0_report.get(
+                "bad_tangent_joins_after", ""
+            ),
+            "mean_g1_tangent_angle_before_radians": c0_report.get(
+                "mean_tangent_angle_before", ""
+            ),
+            "mean_g1_tangent_angle_after_radians": c0_report.get(
+                "mean_tangent_angle_after", ""
+            ),
+            "max_g1_tangent_angle_before_radians": c0_report.get(
+                "max_tangent_angle_before", ""
+            ),
+            "max_g1_tangent_angle_after_radians": c0_report.get(
+                "max_tangent_angle_after", ""
+            ),
         }
     )
     mesh.reconstruction_diagnostic_summary = summary
@@ -512,6 +537,7 @@ def write_reconstruction_diagnostics(mesh, case_index, output_dirs):
                     "component_index": component.get("component_index"),
                     "merge_ids_json": _json_dumps(component.get("merge_ids", [])),
                     "num_facets": component.get("num_facets"),
+                    "num_joins": component.get("num_joins"),
                     "num_bad_joins": component.get("num_bad_joins"),
                     "solved": int(bool(component.get("solved"))),
                     "solution_kind": component.get("solution_kind", ""),

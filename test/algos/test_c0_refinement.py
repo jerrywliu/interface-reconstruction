@@ -22,6 +22,19 @@ def _two_cell_gap():
     return first, second
 
 
+def _two_cell_kink():
+    first = NeighboredPolygon([[0, 0], [1, 0], [1, 1], [0, 1]])
+    second = NeighboredPolygon([[1, 0], [2, 0], [2, 1], [1, 1]])
+    first_facet = LinearFacet([0, 0.25], [1, 0.5])
+    second_facet = LinearFacet([1, 0.5], [2, 0.85])
+    for poly, facet in ((first, first_facet), (second, second_facet)):
+        poly.setFacet(facet)
+        poly.setArea(poly._facet_phase_area(facet))
+    first.setNeighbor(second, "right")
+    second.setNeighbor(first, "left")
+    return first, second
+
+
 def _minimal_mesh(polys):
     mesh = object.__new__(MergeMesh)
     mesh.merged_polys = dict(enumerate(polys))
@@ -61,6 +74,22 @@ def test_joint_c0_treats_corner_facets_as_fixed_boundaries():
     assert assignments == []
     assert report.eligible_joins == 0
     assert report.components == ()
+
+
+def test_smooth_chain_refines_c0_join_with_tangent_jump():
+    first, second = _two_cell_kink()
+    mesh = SimpleNamespace(merged_polys={0: first, 1: second})
+
+    assignments, report = plan_joint_c0_refinement(
+        mesh, [first, second], component_mode="smooth_chain"
+    )
+
+    assert report.bad_joins_before == 0
+    assert report.bad_tangent_joins_before == 1
+    assert report.components_solved == 1
+    assert report.bad_joins_after == 0
+    assert report.bad_tangent_joins_after == 0
+    assert {assignment.solution_kind for assignment in assignments} == {"exact_c1"}
 
 
 def test_joint_c0_skips_degenerate_initial_seed(monkeypatch):
@@ -116,6 +145,9 @@ def test_make_c0_defaults_to_joint_and_keeps_guarded_mode_selectable():
 
     mesh.makeC0([polygon], mode="guarded")
     assert mesh.c0_refinement_report["mode"] == "guarded"
+
+    mesh.makeC0([polygon], mode="g1_chain")
+    assert mesh.c0_refinement_report["mode"] == "g1_chain"
 
 
 def test_make_c0_rejects_unknown_mode():

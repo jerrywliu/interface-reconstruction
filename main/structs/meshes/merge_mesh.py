@@ -39,7 +39,7 @@ class MergeMesh(BaseMesh):
     default_corner_behavior_profile = "pre_f8_corner"
     default_rescue_profile = "exact_linear_support_only"
     default_c0_mode = "joint"
-    c0_modes = {"guarded", "joint"}
+    c0_modes = {"g1_chain", "guarded", "joint"}
 
     rescue_profiles = {
         "full",
@@ -3890,14 +3890,17 @@ class MergeMesh(BaseMesh):
 
         return merged_polys
 
-    def makeC0Joint(self, merged_polys, *, max_nfev=500):
+    def makeC0Joint(self, merged_polys, *, max_nfev=500, component_mode="gap"):
         """Apply guarded initialization followed by joint component refinement."""
 
         from main.algos.c0_refinement import plan_joint_c0_refinement
 
         adjusted = MergeMesh.makeC0Guarded(self, merged_polys)
         assignments, report = plan_joint_c0_refinement(
-            self, adjusted, max_nfev=max_nfev
+            self,
+            adjusted,
+            max_nfev=max_nfev,
+            component_mode=component_mode,
         )
         self.c0_refinement_report = report.as_dict()
 
@@ -3950,7 +3953,8 @@ class MergeMesh(BaseMesh):
     def makeC0(self, merged_polys, *, mode=None, joint_max_nfev=500):
         """Apply the selected conservative continuity correction.
 
-        ``joint`` is the production default. ``guarded`` retains the historical
+        ``joint`` is the production default. ``g1_chain`` is an experimental
+        whole-smooth-chain refinement, and ``guarded`` retains the historical
         simultaneous midpoint/refit pass for ablations and result reproduction.
         """
 
@@ -3976,5 +3980,10 @@ class MergeMesh(BaseMesh):
             }
             return adjusted
         return MergeMesh.makeC0Joint(
-            self, merged_polys, max_nfev=joint_max_nfev
+            self,
+            merged_polys,
+            max_nfev=joint_max_nfev,
+            component_mode=(
+                "smooth_chain" if selected_mode == "g1_chain" else "gap"
+            ),
         )
