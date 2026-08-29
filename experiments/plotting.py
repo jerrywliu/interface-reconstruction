@@ -4,11 +4,114 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-from typing import Literal, Optional, Tuple
+from typing import Literal, Mapping, Optional, Tuple
 
+import matplotlib as mpl
 from matplotlib.axes import Axes
 from matplotlib.lines import Line2D
 from matplotlib.text import Text
+from matplotlib.ticker import NullFormatter
+
+
+PAPER_SERIF_RCPARAMS = {
+    "font.family": "serif",
+    "font.serif": ["DejaVu Serif"],
+    "mathtext.fontset": "dejavuserif",
+    "font.size": 8.5,
+    "font.weight": "normal",
+    "axes.labelsize": 8.5,
+    "axes.labelweight": "normal",
+    "axes.titlesize": 9.0,
+    "axes.titleweight": "normal",
+    "legend.fontsize": 7.2,
+    "pdf.fonttype": 42,
+    "ps.fonttype": 42,
+    "svg.fonttype": "none",
+}
+
+PAPER_METHOD_MARKERS = {
+    "Youngs": "o",
+    "ELVIRA": "s",
+    "LVIRA": "D",
+    "safe_linear": "^",
+    "linear": "v",
+    "linear+corner": "P",
+    "safe_circle": "<",
+    "circular": ">",
+    "circular+corner": "X",
+}
+
+PAPER_METRIC_LABELS = {
+    "hausdorff": "Hausdorff error",
+    "facet_gap": "Facet-gap error",
+    "curvature_error": "Curvature MAE",
+    "tangent_error": "Tangent error",
+}
+
+
+def apply_paper_serif_style() -> None:
+    """Apply the serif typography used by the approved Appendix B panels."""
+
+    mpl.rcParams.update(PAPER_SERIF_RCPARAMS)
+
+
+def paper_markers_by_label(display_labels: Mapping[str, str]) -> dict[str, str]:
+    """Map method markers to the public labels used in figure legends."""
+
+    return {
+        display_labels.get(method, method): marker
+        for method, marker in PAPER_METHOD_MARKERS.items()
+    }
+
+
+def apply_paper_metric_axis_style(
+    axis: Axes,
+    metric: str,
+    x_mode: str,
+    *,
+    markers_by_label: Mapping[str, str],
+) -> None:
+    """Apply the approved Appendix B axis language without changing curve data."""
+
+    resolution_ticks = (
+        [value for value in axis.get_xticks() if value > 0.0]
+        if x_mode == "resolution"
+        else []
+    )
+    for line in axis.get_lines():
+        marker = markers_by_label.get(line.get_label())
+        if marker is None:
+            line.set_linewidth(0.9)
+            continue
+        line.set_marker(marker)
+        line.set_markersize(3.6)
+        line.set_linewidth(1.2)
+    for collection in axis.collections:
+        collection.set_alpha(0.10)
+        collection.set_linewidth(0.0)
+
+    axis.set_ylabel(PAPER_METRIC_LABELS.get(metric, metric.replace("_", " ").title()))
+    axis.grid(False)
+    axis.grid(True, which="major", color="#d1d5db", linewidth=0.45)
+    axis.grid(True, which="minor", color="#e5e7eb", linewidth=0.3)
+    axis.tick_params(
+        axis="both",
+        which="major",
+        labelsize=7.5,
+        width=0.6,
+        length=3.0,
+    )
+    axis.tick_params(axis="both", which="minor", width=0.45, length=1.8)
+    for spine in axis.spines.values():
+        spine.set_linewidth(0.6)
+
+    if x_mode == "resolution":
+        axis.set_xscale("log")
+        axis.set_xticks(
+            resolution_ticks,
+            labels=[str(int(round(value))) for value in resolution_ticks],
+        )
+        axis.xaxis.set_minor_formatter(NullFormatter())
 
 
 @dataclass(frozen=True)

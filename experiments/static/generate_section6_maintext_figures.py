@@ -29,15 +29,6 @@ from matplotlib.patches import Polygon as PolygonPatch
 from matplotlib.patches import Rectangle
 
 
-mpl.rcParams.update(
-    {
-        "pdf.fonttype": 42,
-        "ps.fonttype": 42,
-        "svg.fonttype": "none",
-    }
-)
-
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -59,7 +50,12 @@ from experiments.static.run_perturbed_sweeps import (
     _load_sweep_rows,
     _make_save_name,
 )
-from experiments.plotting import add_convergence_order_triangle
+from experiments.plotting import (
+    add_convergence_order_triangle,
+    apply_paper_metric_axis_style,
+    apply_paper_serif_style,
+    paper_markers_by_label,
+)
 from experiments.static.zalesak import (
     RANDOM_SEED as ZALESAK_RANDOM_SEED,
     build_true_reference_zalesak,
@@ -69,6 +65,8 @@ from main.structs.facets.circular_facet import ArcFacet
 from main.structs.facets.corner_facet import CornerFacet
 from main.structs.interface_geometry import ArcPrimitive, LinePrimitive
 
+
+apply_paper_serif_style()
 
 PLOTS_ROOT = REPO_ROOT / "plots"
 DEFAULT_CSV = (
@@ -279,6 +277,7 @@ FIGURE_GROUPS = {
 }
 ENDPOINT_VARIANT_MODES = {"annotated", "clean", "paired"}
 RESOLUTION_AGGREGATION_MODES = {"perturbation_medians", "pooled_cases"}
+MARKERS_BY_LABEL = paper_markers_by_label(DISPLAY_LABELS)
 
 
 def _read_polydata(path: Path):
@@ -1419,7 +1418,7 @@ def _generate_resolution_quantitative_panel(
         if (curves := curve_builder(filtered, metric))
     }
 
-    fig, axes = plt.subplots(1, 2, figsize=(11.2, 4.25))
+    fig, axes = plt.subplots(1, 2, figsize=(7.05, 2.95))
     legend_entries = {}
     for ax, metric in zip(axes, metrics):
         curves = resolution_curves.get(metric)
@@ -1434,10 +1433,15 @@ def _generate_resolution_quantitative_panel(
             x_mode="resolution",
             exp_name=exp_name,
         )
+        apply_paper_metric_axis_style(
+            ax,
+            metric,
+            "resolution",
+            markers_by_label=MARKERS_BY_LABEL,
+        )
         ax.set_title(
             f"{metric.replace('_', ' ').title()} vs cells per side",
-            fontsize=11.5,
-            fontweight="bold",
+            fontweight="normal",
         )
         handles, labels = ax.get_legend_handles_labels()
         for handle, label in zip(handles, labels):
@@ -1487,13 +1491,14 @@ def _generate_resolution_quantitative_panel(
         fig.legend(
             list(legend_entries.values()),
             list(legend_entries.keys()),
-            loc="lower center",
-            ncol=min(5, len(legend_entries)),
-            fontsize=9.5,
-            frameon=True,
-            bbox_to_anchor=(0.5, -0.01),
+            loc="upper center",
+            ncol=min(2, len(legend_entries)),
+            frameon=False,
+            bbox_to_anchor=(0.5, 1.01),
+            columnspacing=0.9,
+            handletextpad=0.4,
         )
-    fig.tight_layout(rect=[0, 0.12, 1, 1])
+    fig.tight_layout(rect=[0, 0.04, 1, 0.79], w_pad=0.8)
     _save_figure(fig, out_path)
     plt.close(fig)
 
@@ -1916,7 +1921,7 @@ def _plot_panel(
     ax.set_xticks([])
     ax.set_yticks([])
     ax.set_facecolor("white")
-    ax.set_title(title, fontsize=11.0, fontweight="bold")
+    ax.set_title(title, fontsize=9.0, fontweight="normal")
 
     inset_bounds = _inset_bounds(exp_name, spec)
     if inset_bounds is not None:
@@ -2135,6 +2140,15 @@ def _generate_representative_figure(
             bottom=0.06,
             top=0.97,
             wspace=0.24,
+            hspace=0.18,
+        )
+    elif exp_name == "ellipses":
+        fig.subplots_adjust(
+            left=0.04,
+            right=0.96,
+            bottom=0.04,
+            top=0.95,
+            wspace=0.14,
             hspace=0.18,
         )
     else:

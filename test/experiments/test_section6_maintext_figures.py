@@ -74,6 +74,11 @@ def test_ellipse_resolution_panel_matches_vertical_limits_and_marks_order(
     assert np.allclose(axes[0].get_ylim(), axes[1].get_ylim())
     assert all(axis.get_xscale() == "log" for axis in axes)
     assert np.allclose(axes[0].get_xticks(), [32.0, 64.0, 128.0])
+    assert all(axis.title.get_fontweight() == "normal" for axis in axes)
+    assert all(axis.yaxis.label.get_fontfamily() == ["serif"] for axis in axes)
+    assert axes[0].get_lines()[0].get_marker() == ">"
+    assert axes[0].get_lines()[0].get_color() == "#d97706"
+    assert axes[0].get_lines()[0].get_label() == "Ours (circular, graph-coordinated)"
     assert any(text.get_text() == "3" for text in axes[1].texts)
     assert any(text.get_text() == "1" for text in axes[1].texts)
     assert all("fit" not in label for label in axes[1].get_legend_handles_labels()[1])
