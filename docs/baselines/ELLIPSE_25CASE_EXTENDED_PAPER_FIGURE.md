@@ -17,7 +17,8 @@ frozen `summary.csv`.
 ## Figure Convention
 
 - Full manuscript-width `2 x 2` panel with no embedded figure-level title.
-- DejaVu Sans typography, manuscript palette, circular markers, and current
+- The approved Appendix B serif typography with normal-weight panel titles and
+  labels, plus the manuscript palette, circular markers, and current
   line-weight/linestyle conventions.
 - Approved labels: `Per-cell`, `Graph-coordinated`, and
   `Graph-coordinated + joint C0`.

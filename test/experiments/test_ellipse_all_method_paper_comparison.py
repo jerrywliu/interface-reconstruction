@@ -177,3 +177,7 @@ def test_paper_plot_is_one_page_vector_pdf_with_approved_labels(tmp_path):
     assert report["vector_qa"]["passed"]
     assert report["vector_qa"]["image_objects"] == 0
     assert all(font["embedded"] for font in report["vector_qa"]["fonts"])
+    font_names = {font["name"] for font in report["vector_qa"]["fonts"]}
+    assert font_names
+    assert all("DejaVuSerif" in name for name in font_names)
+    assert all("Bold" not in name for name in font_names)

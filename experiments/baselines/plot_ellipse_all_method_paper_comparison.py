@@ -18,7 +18,10 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 
-from experiments.plotting import add_convergence_order_triangle
+from experiments.plotting import (
+    add_convergence_order_triangle,
+    apply_paper_serif_style,
+)
 from submission.pdf_vector_qa import inspect_pdf
 
 
@@ -385,17 +388,10 @@ def _display_error(values: np.ndarray, metric: str) -> np.ndarray:
 def plot_paper_figure(
     summary: Sequence[Mapping[str, Any]], pdf_path: Path, png_path: Path
 ) -> None:
-    rc_params = {
-        "font.family": "sans-serif",
-        "font.sans-serif": ["DejaVu Sans"],
-        "font.size": 10,
-        "pdf.fonttype": 42,
-        "ps.fonttype": 42,
-        "svg.fonttype": "none",
-    }
     method_by_id = {method["id"]: method for method in PAPER_METHODS}
     resolutions = sorted({int(row["cells_per_side"]) for row in summary})
-    with mpl.rc_context(rc_params):
+    with mpl.rc_context():
+        apply_paper_serif_style()
         figure, axes = plt.subplots(2, 2, figsize=(11.2, 7.4), sharex=True)
         for axis, (metric, title, ylabel, order, anchor) in zip(
             axes.ravel()[:3], ERROR_PANELS
@@ -442,10 +438,10 @@ def plot_paper_figure(
                 )
             axis.set_xscale("log")
             axis.set_yscale("log")
-            axis.set_title(title, fontsize=11.5, fontweight="bold")
-            axis.set_ylabel(ylabel, fontsize=11)
+            axis.set_title(title)
+            axis.set_ylabel(ylabel)
             axis.grid(True, which="major", alpha=0.30)
-            axis.tick_params(labelsize=9.5)
+            axis.tick_params(labelsize=7.5)
             add_convergence_order_triangle(
                 axis,
                 order,
@@ -489,17 +485,15 @@ def plot_paper_figure(
         ]
         coverage_axis.set_xscale("log")
         coverage_axis.set_ylim(max(0.0, min(coverage_values) - 0.35), 100.15)
-        coverage_axis.set_title(
-            "(d) Mixed-cell coverage", fontsize=11.5, fontweight="bold"
-        )
-        coverage_axis.set_ylabel("Coverage (%)", fontsize=11)
+        coverage_axis.set_title("(d) Mixed-cell coverage")
+        coverage_axis.set_ylabel("Coverage (%)")
         coverage_axis.grid(True, which="major", alpha=0.30)
-        coverage_axis.tick_params(labelsize=9.5)
+        coverage_axis.tick_params(labelsize=7.5)
 
         for axis in axes.ravel():
             axis.set_xticks(resolutions, tuple(str(value) for value in resolutions))
         for axis in axes[1, :]:
-            axis.set_xlabel("Cells per side, N", fontsize=11)
+            axis.set_xlabel("Cells per side, N")
 
         handles, labels = axes[0, 0].get_legend_handles_labels()
         handle_by_label = dict(zip(labels, handles))
@@ -522,7 +516,6 @@ def plot_paper_figure(
             legend_labels,
             loc="lower center",
             ncol=3,
-            fontsize=9.0,
             frameon=True,
             bbox_to_anchor=(0.5, 0.005),
         )
