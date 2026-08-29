@@ -1479,7 +1479,7 @@ def _generate_resolution_quantitative_panel(
         add_convergence_order_triangle(
             axes[facet_gap_index],
             3.0,
-            anchor=(0.71, 0.17),
+            anchor=(0.10, 0.06),
             width=0.12,
         )
 

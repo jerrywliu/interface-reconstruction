@@ -63,6 +63,9 @@ ORDER_TRIANGLES = {
     "circles": {"hausdorff": 2.0, "facet_gap": 2.0},
     "ellipses": {"facet_gap": 3.0, "curvature_error": 1.0},
 }
+ORDER_TRIANGLE_ANCHORS = {
+    "ellipses": {"facet_gap": (0.54, 0.16)},
+}
 OUTPUT_NAMES = {
     "lines": "line_reconstruction_perturbed_all_methods_2x2.png",
     "squares": "square_reconstruction_perturbed_all_methods_2x2.png",
@@ -313,7 +316,9 @@ def _plot_grid(
             add_convergence_order_triangle(
                 right,
                 order,
-                anchor=(0.72, 0.68),
+                anchor=ORDER_TRIANGLE_ANCHORS.get(experiment, {}).get(
+                    metric, (0.72, 0.68)
+                ),
                 width=0.11,
                 trend="decreasing",
                 fontsize=7.5,

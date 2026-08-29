@@ -248,7 +248,7 @@ def _plot(summary_rows: Sequence[Mapping[str, str]], output_dir: Path) -> None:
             add_convergence_order_triangle(
                 axis,
                 2.0,
-                anchor=(0.69, 0.18),
+                anchor=(0.10, 0.06),
                 width=0.12,
                 order_label="2",
             )

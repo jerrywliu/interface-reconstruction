@@ -85,14 +85,14 @@ ERROR_PANELS = (
         "(a) Native Hausdorff",
         "Native Hausdorff",
         3.0,
-        (0.74, 0.10),
+        (0.10, 0.32),
     ),
     (
         "geometric_curvature_mean_absolute_error",
         "(b) Curvature MAE",
         "Curvature MAE",
         1.0,
-        (0.76, 0.11),
+        (0.12, 0.22),
     ),
     (
         "facet_gap",
