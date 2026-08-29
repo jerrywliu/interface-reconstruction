@@ -14,6 +14,7 @@ missing from the merged CSV.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import math
 import sys
@@ -277,6 +278,7 @@ FIGURE_GROUPS = {
     "appendix_cartesian",
 }
 ENDPOINT_VARIANT_MODES = {"annotated", "clean", "paired"}
+RESOLUTION_AGGREGATION_MODES = {"perturbation_medians", "pooled_cases"}
 
 
 def _read_polydata(path: Path):
@@ -320,6 +322,85 @@ def _metric_stats(metric_name: str, values: list[float]) -> list[dict]:
             "metric_value": float(np.percentile(arr, 75)),
         },
     ]
+
+
+def _load_case_metric_index(path: Path) -> dict:
+    """Load wide case-level diagnostics into the standard metric-index shape."""
+    metric_names = sorted(
+        {
+            metric
+            for spec in RESOLUTION_QUANT_SPECS.values()
+            for metric in spec["metrics"]
+        }
+    )
+    data = {}
+    with path.open(newline="") as stream:
+        for row in csv.DictReader(stream):
+            try:
+                exp = row["experiment"]
+                algo = row["algo"]
+                resolution = float(row["resolution"])
+                wiggle = float(row["wiggle"])
+            except (KeyError, ValueError):
+                continue
+            for metric in metric_names:
+                raw_value = row.get(metric)
+                if raw_value in (None, ""):
+                    continue
+                try:
+                    value = float(raw_value)
+                except ValueError:
+                    continue
+                data.setdefault(exp, {}).setdefault(algo, {}).setdefault(
+                    metric, {}
+                ).setdefault(resolution, {}).setdefault(wiggle, {}).setdefault(
+                    "value", []
+                ).append(value)
+    return data
+
+
+def _build_pooled_method_curves_by_resolution(exp_data: dict, metric: str) -> dict:
+    """Pool every case across perturbation levels before taking quantiles."""
+    resolutions = sorted(
+        {
+            resolution
+            for algo_data in exp_data.values()
+            for resolution in algo_data.get(metric, {})
+        }
+    )
+    curves = {}
+    for algo, algo_data in exp_data.items():
+        resolution_map = algo_data.get(metric, {})
+        if not resolution_map:
+            continue
+        medians = []
+        p25 = []
+        p75 = []
+        for resolution in resolutions:
+            pooled = [
+                value
+                for stats in resolution_map.get(resolution, {}).values()
+                for value in stats.get("value", [])
+                if np.isfinite(value)
+            ]
+            if not pooled:
+                medians.append(float("nan"))
+                p25.append(float("nan"))
+                p75.append(float("nan"))
+                continue
+            values = np.asarray(pooled, dtype=float)
+            medians.append(float(np.median(values)))
+            p25.append(float(np.percentile(values, 25)))
+            p75.append(float(np.percentile(values, 75)))
+        medians_array = np.asarray(medians, dtype=float)
+        if np.any(np.isfinite(medians_array)):
+            curves[algo] = {
+                "x_values": np.asarray(resolutions, dtype=float),
+                "median": medians_array,
+                "p25": np.asarray(p25, dtype=float),
+                "p75": np.asarray(p75, dtype=float),
+            }
+    return curves
 
 
 def _backfill_circle_tangent_rows(rows: list[dict]) -> list[dict]:
@@ -1323,12 +1404,19 @@ def _generate_resolution_quantitative_panel(
     methods: list[str],
     metrics: tuple[str, str],
     out_path: Path,
+    *,
+    aggregation: str = "perturbation_medians",
 ):
     filtered = {algo: exp_data[algo] for algo in methods if algo in exp_data}
+    curve_builder = (
+        _build_pooled_method_curves_by_resolution
+        if aggregation == "pooled_cases"
+        else _build_method_curves_by_resolution
+    )
     resolution_curves = {
         metric: curves
         for metric in metrics
-        if (curves := _build_method_curves_by_resolution(filtered, metric))
+        if (curves := curve_builder(filtered, metric))
     }
 
     fig, axes = plt.subplots(1, 2, figsize=(11.2, 4.25))
@@ -2178,6 +2266,24 @@ def main():
         help="Optional representative case overrides, e.g. squares=24,zalesak=12.",
     )
     parser.add_argument(
+        "--case_metrics_csv",
+        type=Path,
+        default=None,
+        help=(
+            "Case-level diagnostics CSV. Required when "
+            "--resolution_aggregation=pooled_cases."
+        ),
+    )
+    parser.add_argument(
+        "--resolution_aggregation",
+        choices=sorted(RESOLUTION_AGGREGATION_MODES),
+        default="perturbation_medians",
+        help=(
+            "Resolution-panel summary: quantiles across fixed-perturbation "
+            "medians or pooled quantiles across every case."
+        ),
+    )
+    parser.add_argument(
         "--endpoint_variants",
         choices=sorted(ENDPOINT_VARIANT_MODES),
         default="annotated",
@@ -2195,6 +2301,13 @@ def main():
         rows = _load_sweep_rows(args.csv)
         rows = _backfill_circle_tangent_rows(rows)
         metric_index = _build_metric_index(rows)
+        if args.resolution_aggregation == "pooled_cases":
+            if args.case_metrics_csv is None:
+                parser.error(
+                    "--case_metrics_csv is required with "
+                    "--resolution_aggregation=pooled_cases"
+                )
+            metric_index = _load_case_metric_index(args.case_metrics_csv)
     else:
         metric_index = {}
 
@@ -2225,6 +2338,7 @@ def main():
         "appendix_resolutions": {},
         "appendix_cartesian": {},
         "specs": {
+            "resolution_aggregation": args.resolution_aggregation,
             "representative": {},
             "appendix_resolutions": {},
             "appendix_cartesian": {},
@@ -2259,6 +2373,7 @@ def main():
             methods=methods,
             metrics=RESOLUTION_QUANT_SPECS[exp_name]["metrics"],
             out_path=out_path,
+            aggregation=args.resolution_aggregation,
         )
         outputs["quantitative_resolution"][exp_name] = str(out_path)
 

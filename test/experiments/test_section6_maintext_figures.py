@@ -2,6 +2,7 @@ import numpy as np
 
 from experiments.static.generate_section6_maintext_figures import (
     RESOLUTION_QUANT_SPECS,
+    _build_pooled_method_curves_by_resolution,
     _generate_resolution_quantitative_panel,
 )
 
@@ -11,6 +12,23 @@ def test_circle_maintext_uses_facet_gap():
         "hausdorff",
         "facet_gap",
     )
+
+
+def test_pooled_resolution_curves_use_all_case_values():
+    exp_data = {
+        "linear": {
+            "hausdorff": {
+                0.32: {
+                    0.0: {"value": [1.0, 2.0, 3.0]},
+                    0.1: {"value": [10.0, 20.0, 30.0]},
+                }
+            }
+        }
+    }
+    curves = _build_pooled_method_curves_by_resolution(exp_data, "hausdorff")
+    assert np.allclose(curves["linear"]["median"], [6.5])
+    assert np.allclose(curves["linear"]["p25"], [2.25])
+    assert np.allclose(curves["linear"]["p75"], [17.5])
 
 
 def test_ellipse_resolution_panel_matches_vertical_limits_and_marks_order(
