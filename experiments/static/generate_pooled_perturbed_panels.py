@@ -15,20 +15,26 @@ if str(REPO_ROOT) not in sys.path:
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.ticker import NullFormatter
 
 from experiments.plotting import add_convergence_order_triangle
 from experiments.static.run_perturbed_sweeps import (
+    DISPLAY_LABELS,
     PERTURBATION_AXIS_LABEL,
     RESOLUTION_AXIS_LABEL,
     _draw_method_curves,
     _merge_legend_entries,
-    _metric_label,
     _save_figure,
 )
 
 
 mpl.rcParams.update(
     {
+        "font.family": "serif",
+        "font.size": 8.5,
+        "axes.labelsize": 8.5,
+        "axes.titlesize": 9.0,
+        "legend.fontsize": 7.2,
         "pdf.fonttype": 42,
         "ps.fonttype": 42,
         "svg.fonttype": "none",
@@ -64,6 +70,63 @@ OUTPUT_NAMES = {
     "ellipses": "ellipse_reconstruction_perturbed_all_methods_5x2_axes.png",
     "zalesak": "zalesak_reconstruction_perturbed_all_methods_2x2.png",
 }
+METHOD_MARKERS = {
+    "Youngs": "o",
+    "ELVIRA": "s",
+    "LVIRA": "D",
+    "safe_linear": "^",
+    "linear": "v",
+    "linear+corner": "P",
+    "safe_circle": "<",
+    "circular": ">",
+    "circular+corner": "X",
+}
+MARKERS_BY_LABEL = {
+    DISPLAY_LABELS.get(method, method): marker
+    for method, marker in METHOD_MARKERS.items()
+}
+PAPER_METRIC_LABELS = {
+    "hausdorff": "Hausdorff error",
+    "facet_gap": "Facet-gap error",
+    "curvature_error": "Curvature MAE",
+    "tangent_error": "Tangent error",
+}
+
+
+def _apply_b19_axis_style(axis, metric: str, x_mode: str) -> None:
+    resolution_ticks = (
+        [value for value in axis.get_xticks() if value > 0.0]
+        if x_mode == "resolution"
+        else []
+    )
+    for line in axis.get_lines():
+        marker = MARKERS_BY_LABEL.get(line.get_label())
+        if marker is None:
+            line.set_linewidth(0.9)
+            continue
+        line.set_marker(marker)
+        line.set_markersize(3.6)
+        line.set_linewidth(1.2)
+    for collection in axis.collections:
+        collection.set_alpha(0.10)
+        collection.set_linewidth(0.0)
+
+    axis.set_ylabel(PAPER_METRIC_LABELS[metric])
+    axis.grid(False)
+    axis.grid(True, which="major", color="#d1d5db", linewidth=0.45)
+    axis.grid(True, which="minor", color="#e5e7eb", linewidth=0.3)
+    axis.tick_params(axis="both", which="major", labelsize=7.5, width=0.6, length=3.0)
+    axis.tick_params(axis="both", which="minor", width=0.45, length=1.8)
+    for spine in axis.spines.values():
+        spine.set_linewidth(0.6)
+
+    if x_mode == "resolution":
+        axis.set_xscale("log")
+        axis.set_xticks(
+            resolution_ticks,
+            labels=[str(int(round(value))) for value in resolution_ticks],
+        )
+        axis.xaxis.set_minor_formatter(NullFormatter())
 
 
 def _native_curvature_lookup(path: Path) -> dict[tuple, float]:
@@ -192,8 +255,8 @@ def _plot_grid(
 ) -> None:
     exp_data = data[experiment]
     rows = len(metrics)
-    figure_size = (12, 9.5) if rows == 2 else (14, 16.8)
-    fig, axes = plt.subplots(rows, 2, figsize=figure_size)
+    figure_size = (7.05, 5.35) if rows == 2 else (7.05, 9.5)
+    fig, axes = plt.subplots(rows, 2, figsize=figure_size, sharex="col")
     if rows == 1:
         axes = np.asarray([axes])
     legend_entries = {}
@@ -203,11 +266,9 @@ def _plot_grid(
             "wiggle": _pooled_curves(exp_data, metric, "wiggle"),
             "resolution": _pooled_curves(exp_data, metric, "resolution"),
         }
-        metric_label = (
-            "Curvature MAE" if metric == "curvature_error" else _metric_label(metric)
-        )
         for column, axis_name in enumerate(("wiggle", "resolution")):
             axis = axes[row_index, column]
+            x_mode = "perturbation" if axis_name == "wiggle" else "resolution"
             _draw_method_curves(
                 axis,
                 curves_by_axis[axis_name],
@@ -217,17 +278,29 @@ def _plot_grid(
                     if axis_name == "wiggle"
                     else RESOLUTION_AXIS_LABEL
                 ),
-                x_mode="perturbation" if axis_name == "wiggle" else "resolution",
+                x_mode=x_mode,
                 exp_name=experiment,
             )
+            _apply_b19_axis_style(axis, metric, x_mode)
             axis.set_title(
-                f"{metric_label} vs "
-                f"{'Perturbation Magnitude' if axis_name == 'wiggle' else 'Cells per Side'}",
-                fontsize=11.5,
-                fontweight="bold",
+                (
+                    "Perturbation sweep"
+                    if axis_name == "wiggle"
+                    else "Resolution study"
+                )
+                if row_index == 0
+                else ""
             )
-            if metric == "curvature_error":
-                axis.set_ylabel("Curvature MAE", fontsize=11)
+            if row_index == rows - 1:
+                axis.set_xlabel(
+                    (
+                        r"Perturbation magnitude, $w$"
+                        if axis_name == "wiggle"
+                        else r"Cells per side, $N$"
+                    )
+                )
+            else:
+                axis.set_xlabel("")
             _merge_legend_entries(legend_entries, axis)
 
         left, right = axes[row_index]
@@ -237,7 +310,6 @@ def _plot_grid(
         right.set_ylim(y_min, y_max)
         order = ORDER_TRIANGLES.get(experiment, {}).get(metric)
         if order is not None:
-            right.set_xscale("log")
             add_convergence_order_triangle(
                 right,
                 order,
@@ -251,15 +323,14 @@ def _plot_grid(
         fig.legend(
             list(legend_entries.values()),
             list(legend_entries.keys()),
-            loc="lower center",
-            ncol=min(6, len(legend_entries)),
-            fontsize=8.5 if rows > 2 else 9,
-            frameon=True,
-            bbox_to_anchor=(0.5, -0.004),
+            loc="upper center",
+            ncol=min(3, len(legend_entries)),
+            frameon=False,
+            bbox_to_anchor=(0.5, 1.005),
+            columnspacing=0.9,
+            handletextpad=0.4,
         )
-    title = f"{experiment.title()} Reconstruction on Perturbed Cartesian Meshes"
-    fig.suptitle(title, fontsize=15 if rows > 2 else 14, fontweight="bold", y=0.985)
-    fig.tight_layout(rect=[0, 0.045, 1, 0.96], h_pad=1.8, w_pad=1.4)
+    fig.tight_layout(rect=[0, 0, 1, 0.90], h_pad=0.9, w_pad=0.8)
     _save_figure(fig, output)
     plt.close(fig)
 
