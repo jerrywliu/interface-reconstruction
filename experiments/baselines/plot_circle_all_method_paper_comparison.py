@@ -26,6 +26,10 @@ DEFAULT_INPUT_ROOT = REPO_ROOT / (
     "experiments/baselines/results/" "circle_all_method_25case_comparison_20260814"
 )
 DEFAULT_OUTPUT_ROOT = DEFAULT_INPUT_ROOT
+CIRCLE_TRIANGLE_ANCHORS = {
+    "native_symmetric_hausdorff": (0.52, 0.36),
+    "geometric_curvature_mean_absolute_error": (0.52, 0.42),
+}
 
 
 def validate_circle_manifest(input_root: Path) -> dict:
@@ -64,7 +68,12 @@ def main() -> None:
     manifest_path = output_root / "circle_all_methods_metrics_paper.manifest.json"
     output_root.mkdir(parents=True, exist_ok=True)
 
-    plot_paper_figure(summary, pdf_path, png_path)
+    plot_paper_figure(
+        summary,
+        pdf_path,
+        png_path,
+        triangle_anchors=CIRCLE_TRIANGLE_ANCHORS,
+    )
     write_csv(win_path, win_counts)
     write_hash_ledger(hash_path, (pdf_path, png_path, win_path))
     hash_issues = verify_hash_ledger(hash_path)

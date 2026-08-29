@@ -8,6 +8,10 @@ from experiments.baselines import plot_ellipse_all_method_paper_comparison as el
 
 def test_circle_paper_figure_reuses_exact_ellipse_style_contract():
     assert circle.plot_paper_figure is ellipse.plot_paper_figure
+    assert circle.CIRCLE_TRIANGLE_ANCHORS == {
+        "native_symmetric_hausdorff": (0.52, 0.36),
+        "geometric_curvature_mean_absolute_error": (0.52, 0.42),
+    }
     assert ellipse.ERROR_PANELS == (
         (
             "native_symmetric_hausdorff",
@@ -21,7 +25,7 @@ def test_circle_paper_figure_reuses_exact_ellipse_style_contract():
             "(b) Curvature MAE",
             "Curvature MAE",
             1.0,
-            (0.12, 0.22),
+            (0.45, 0.66),
         ),
         ("facet_gap", "(c) Facet gap", "Facet gap", 3.0, (0.70, 0.54)),
     )

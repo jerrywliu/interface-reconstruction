@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 from experiments.plotting import PAPER_SERIF_RCPARAMS
 from experiments.static.generate_pooled_perturbed_panels import (
     MARKERS_BY_LABEL,
+    ORDER_TRIANGLE_ANCHORS,
     _pooled_curves,
 )
 
@@ -40,3 +41,10 @@ def test_approved_paper_style_is_shared_with_appendix_generator():
     assert plt.rcParams["font.serif"] == PAPER_SERIF_RCPARAMS["font.serif"]
     assert plt.rcParams["axes.titleweight"] == "normal"
     assert MARKERS_BY_LABEL["LVIRA"] == "D"
+    assert ORDER_TRIANGLE_ANCHORS == {
+        "circles": {
+            "hausdorff": (0.72, 0.78),
+            "facet_gap": (0.72, 0.78),
+        },
+        "ellipses": {"facet_gap": (0.65, 0.36)},
+    }

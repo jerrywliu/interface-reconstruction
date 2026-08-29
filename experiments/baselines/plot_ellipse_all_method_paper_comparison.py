@@ -95,7 +95,7 @@ ERROR_PANELS = (
         "(b) Curvature MAE",
         "Curvature MAE",
         1.0,
-        (0.12, 0.22),
+        (0.45, 0.66),
     ),
     (
         "facet_gap",
@@ -386,7 +386,11 @@ def _display_error(values: np.ndarray, metric: str) -> np.ndarray:
 
 
 def plot_paper_figure(
-    summary: Sequence[Mapping[str, Any]], pdf_path: Path, png_path: Path
+    summary: Sequence[Mapping[str, Any]],
+    pdf_path: Path,
+    png_path: Path,
+    *,
+    triangle_anchors: Mapping[str, tuple[float, float]] | None = None,
 ) -> None:
     method_by_id = {method["id"]: method for method in PAPER_METHODS}
     resolutions = sorted({int(row["cells_per_side"]) for row in summary})
@@ -446,7 +450,7 @@ def plot_paper_figure(
                 axis,
                 order,
                 order_label=f"{order:g}",
-                anchor=anchor,
+                anchor=(triangle_anchors or {}).get(metric, anchor),
                 width=0.11,
                 color="#4b5563",
                 fontsize=7.0,

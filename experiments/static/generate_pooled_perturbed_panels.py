@@ -57,7 +57,11 @@ ORDER_TRIANGLES = {
     "ellipses": {"facet_gap": 3.0, "curvature_error": 1.0},
 }
 ORDER_TRIANGLE_ANCHORS = {
-    "ellipses": {"facet_gap": (0.54, 0.16)},
+    "circles": {
+        "hausdorff": (0.72, 0.78),
+        "facet_gap": (0.72, 0.78),
+    },
+    "ellipses": {"facet_gap": (0.65, 0.36)},
 }
 OUTPUT_NAMES = {
     "lines": "line_reconstruction_perturbed_all_methods_2x2.png",
