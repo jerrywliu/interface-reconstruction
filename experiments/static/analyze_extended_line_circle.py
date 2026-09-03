@@ -28,8 +28,8 @@ METHOD_LABELS = {
     "Youngs": "Youngs",
     "ELVIRA": "ELVIRA",
     "LVIRA": "LVIRA",
-    "safe_linear": "Per-cell linear",
-    "linear": "Graph-coordinated linear",
+    "safe_linear": "Ours (linear, per-cell)",
+    "linear": "Ours (linear, graph-coordinated)",
 }
 METHOD_COLORS = {
     "Youngs": "#B14E5E",

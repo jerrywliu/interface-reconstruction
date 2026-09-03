@@ -37,50 +37,97 @@ GAP_DISPLAY_FLOOR = 1.0e-12
 PAIR_TIE_RELATIVE_TOLERANCE = 1.0e-12
 PAIR_TIE_ABSOLUTE_TOLERANCE = 1.0e-15
 
-PAPER_METHODS = (
+PAPER_METHOD_SPECS = (
     {
         "id": "plvira",
         "label": "PLVIRA",
-        "color": "#6c757d",
         "linestyle": "--",
         "linewidth": 1.8,
+        "marker": "o",
     },
     {
         "id": "pcic_center",
         "label": "PCIC (center translation)",
-        "color": "#495057",
         "linestyle": "-.",
         "linewidth": 1.8,
+        "marker": "s",
     },
     {
         "id": "quasi",
-        "label": "QUASI (frozen port)",
-        "color": "#212529",
+        "label": "QUASI",
         "linestyle": ":",
         "linewidth": 1.8,
+        "marker": "D",
     },
     {
         "id": "ours_per_cell",
-        "label": "Per-cell",
-        "color": "#f59e0b",
+        "label": "Ours (per-cell)",
         "linestyle": "--",
         "linewidth": 1.9,
+        "marker": "^",
     },
     {
         "id": "ours_graph",
-        "label": "Graph-coordinated",
-        "color": "#d97706",
+        "label": "Ours (graph-coordinated)",
         "linestyle": "-",
         "linewidth": 2.3,
+        "marker": "v",
     },
     {
         "id": "ours_c0",
-        "label": "Graph-coordinated + joint C0",
-        "color": "#b91c1c",
+        "label": "Ours (graph-coordinated + joint C0)",
         "linestyle": "-",
         "linewidth": 2.5,
+        "marker": "P",
     },
 )
+
+PAPER_PALETTES = {
+    "current": {
+        "plvira": "#6c757d",
+        "pcic_center": "#495057",
+        "quasi": "#212529",
+        "ours_per_cell": "#f59e0b",
+        "ours_graph": "#d97706",
+        "ours_c0": "#b91c1c",
+    },
+    "b19_categorical": {
+        "plvira": "#B14E5E",
+        "pcic_center": "#B3811B",
+        "quasi": "#2D7D64",
+        "ours_per_cell": "#7C5AA6",
+        "ours_graph": "#2F6FA3",
+        "ours_c0": "#D55E00",
+    },
+    "colorblind_categorical": {
+        "plvira": "#CC79A7",
+        "pcic_center": "#009E73",
+        "quasi": "#56B4E9",
+        "ours_per_cell": "#E69F00",
+        "ours_graph": "#0072B2",
+        "ours_c0": "#D55E00",
+    },
+    "grouped": {
+        "plvira": "#8A8A8A",
+        "pcic_center": "#4D4D4D",
+        "quasi": "#111111",
+        "ours_per_cell": "#7C5AA6",
+        "ours_graph": "#2F6FA3",
+        "ours_c0": "#D55E00",
+    },
+}
+
+
+def paper_methods(palette: str = "current") -> tuple[dict[str, Any], ...]:
+    if palette not in PAPER_PALETTES:
+        raise ValueError(f"unknown paper palette: {palette}")
+    colors = PAPER_PALETTES[palette]
+    return tuple(
+        {**method, "color": colors[method["id"]]} for method in PAPER_METHOD_SPECS
+    )
+
+
+PAPER_METHODS = paper_methods()
 
 ERROR_PANELS = (
     (
@@ -391,16 +438,31 @@ def plot_paper_figure(
     png_path: Path,
     *,
     triangle_anchors: Mapping[str, tuple[float, float]] | None = None,
+    methods: Sequence[Mapping[str, Any]] = PAPER_METHODS,
+    figure_size: tuple[float, float] = (11.2, 7.4),
+    large_text: bool = False,
 ) -> None:
-    method_by_id = {method["id"]: method for method in PAPER_METHODS}
+    method_by_id = {method["id"]: method for method in methods}
     resolutions = sorted({int(row["cells_per_side"]) for row in summary})
     with mpl.rc_context():
         apply_paper_serif_style()
-        figure, axes = plt.subplots(2, 2, figsize=(11.2, 7.4), sharex=True)
+        if large_text:
+            mpl.rcParams.update(
+                {
+                    "font.size": 10.0,
+                    "axes.labelsize": 10.5,
+                    "axes.titlesize": 10.5,
+                    "legend.fontsize": 9.2,
+                }
+            )
+        tick_fontsize = 9.0 if large_text else 7.5
+        note_fontsize = 8.5 if large_text else 7.5
+        triangle_fontsize = 8.5 if large_text else 7.0
+        figure, axes = plt.subplots(2, 2, figsize=figure_size, sharex=True)
         for axis, (metric, title, ylabel, order, anchor) in zip(
             axes.ravel()[:3], ERROR_PANELS
         ):
-            for method in PAPER_METHODS:
+            for method in methods:
                 selected = sorted(
                     (row for row in summary if row["method_id"] == method["id"]),
                     key=lambda row: int(row["cells_per_side"]),
@@ -435,7 +497,7 @@ def plot_paper_figure(
                     color=method["color"],
                     linestyle=method["linestyle"],
                     linewidth=method["linewidth"],
-                    marker="o",
+                    marker=method["marker"],
                     markersize=4.2,
                     label=method["label"],
                     zorder=2,
@@ -445,7 +507,7 @@ def plot_paper_figure(
             axis.set_title(title)
             axis.set_ylabel(ylabel)
             axis.grid(True, which="major", alpha=0.30)
-            axis.tick_params(labelsize=7.5)
+            axis.tick_params(labelsize=tick_fontsize)
             add_convergence_order_triangle(
                 axis,
                 order,
@@ -453,7 +515,7 @@ def plot_paper_figure(
                 anchor=(triangle_anchors or {}).get(metric, anchor),
                 width=0.11,
                 color="#4b5563",
-                fontsize=7.0,
+                fontsize=triangle_fontsize,
             )
 
         gap_axis = axes[1, 0]
@@ -464,12 +526,12 @@ def plot_paper_figure(
             transform=gap_axis.transAxes,
             ha="right",
             va="top",
-            fontsize=7.5,
+            fontsize=note_fontsize,
             color="#4b5563",
         )
 
         coverage_axis = axes[1, 1]
-        for method in PAPER_METHODS:
+        for method in methods:
             selected = sorted(
                 (row for row in summary if row["method_id"] == method["id"]),
                 key=lambda row: int(row["cells_per_side"]),
@@ -480,7 +542,7 @@ def plot_paper_figure(
                 color=method["color"],
                 linestyle=method["linestyle"],
                 linewidth=method["linewidth"],
-                marker="o",
+                marker=method["marker"],
                 markersize=4.2,
                 zorder=2,
             )
@@ -492,7 +554,7 @@ def plot_paper_figure(
         coverage_axis.set_title("(d) Mixed-cell coverage")
         coverage_axis.set_ylabel("Coverage (%)")
         coverage_axis.grid(True, which="major", alpha=0.30)
-        coverage_axis.tick_params(labelsize=7.5)
+        coverage_axis.tick_params(labelsize=tick_fontsize)
 
         for axis in axes.ravel():
             axis.set_xticks(resolutions, tuple(str(value) for value in resolutions))
@@ -504,12 +566,12 @@ def plot_paper_figure(
         # Matplotlib fills multirow legends column-first. Interleave the source
         # order so the rendered first row is baselines and the second is ours.
         legend_method_order = (
-            PAPER_METHODS[0],
-            PAPER_METHODS[3],
-            PAPER_METHODS[1],
-            PAPER_METHODS[4],
-            PAPER_METHODS[2],
-            PAPER_METHODS[5],
+            methods[0],
+            methods[3],
+            methods[1],
+            methods[4],
+            methods[2],
+            methods[5],
         )
         legend_handles = [
             handle_by_label[method["label"]] for method in legend_method_order

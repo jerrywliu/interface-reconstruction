@@ -67,7 +67,7 @@ METHODS = (
     },
     {
         "id": "quasi",
-        "label": "QUASI (frozen port)",
+        "label": "QUASI",
         "color": "#7E57C2",
         "external_key": "quasi_input",
         "filename": "ellipses_N{resolution}_case{case_index:02d}.json",

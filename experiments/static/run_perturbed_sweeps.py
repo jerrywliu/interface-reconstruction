@@ -77,13 +77,15 @@ DISPLAY_LABELS = {
     "LVIRA": "LVIRA",
     "safe_linear": "Ours (linear, per-cell)",
     "linear": "Ours (linear, graph-coordinated)",
-    "linear+C0": "Ours (linear, C0)",
-    "linear+corner": "Ours (linear+corner, graph-coordinated)",
+    "linear+C0": "Ours (linear, graph-coordinated + joint C0)",
+    "linear+corner": "Ours (linear + corners, graph-coordinated)",
     "safe_circle": "Ours (circular, per-cell)",
     "circular": "Ours (circular, graph-coordinated)",
-    "circular+C0": "Ours (circular, C0)",
-    "circular+corner": "Ours (circular+corner, graph-coordinated)",
-    "circular+corner+C0": "Ours (circular+corner, C0)",
+    "circular+C0": "Ours (circular, graph-coordinated + joint C0)",
+    "circular+corner": "Ours (circular + corners, graph-coordinated)",
+    "circular+corner+C0": (
+        "Ours (circular + corners, graph-coordinated + joint C0)"
+    ),
 }
 
 METHOD_STYLES = {
