@@ -449,15 +449,15 @@ def plot_paper_figure(
         if large_text:
             mpl.rcParams.update(
                 {
-                    "font.size": 10.0,
-                    "axes.labelsize": 10.5,
-                    "axes.titlesize": 10.5,
-                    "legend.fontsize": 9.2,
+                    "font.size": 10.5,
+                    "axes.labelsize": 11.2,
+                    "axes.titlesize": 11.2,
+                    "legend.fontsize": 10.0,
                 }
             )
-        tick_fontsize = 9.0 if large_text else 7.5
-        note_fontsize = 8.5 if large_text else 7.5
-        triangle_fontsize = 8.5 if large_text else 7.0
+        tick_fontsize = 9.5 if large_text else 7.5
+        note_fontsize = 9.5 if large_text else 7.5
+        triangle_fontsize = 9.5 if large_text else 7.0
         figure, axes = plt.subplots(2, 2, figsize=figure_size, sharex=True)
         for axis, (metric, title, ylabel, order, anchor) in zip(
             axes.ravel()[:3], ERROR_PANELS
