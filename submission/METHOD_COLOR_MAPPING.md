@@ -6,16 +6,16 @@
 2. Light and dark shades distinguish our per-cell and graph-coordinated variants.
 3. Marker shape redundantly distinguishes per-cell, graph-coordinated, corner-enabled, and joint-`C0` variants.
 4. In the reported experiments, graph coordination includes orientation propagation and selective cell merging. Merging therefore does not receive a separate color.
-5. PLVIRA retains the LVIRA green because it extends the LVIRA fitting objective to a parabolic representation.
+5. LVIRA and PLVIRA use related greens because PLVIRA extends the LVIRA fitting objective to a parabolic representation, but the two methods remain visually distinct.
 
 ## Baselines
 
 | Method | Role | Color | Hex | Marker | Line |
 |---|---|---|---|---|---|
-| Youngs | linear baseline | muted rose | `#B14E5E` | circle | solid |
-| ELVIRA | linear baseline | ochre | `#B3811B` | square | dashed |
-| LVIRA | linear baseline | green | `#2D7D64` | diamond | dash-dot |
-| PLVIRA | higher-order LVIRA family | green | `#2D7D64` | circle | solid |
+| Youngs | linear baseline | bright magenta | `#D94F9D` | circle | solid |
+| ELVIRA | linear baseline | bright cyan | `#00A6C8` | square | dashed |
+| LVIRA | linear baseline | lime green | `#84B547` | diamond | dash-dot |
+| PLVIRA | higher-order LVIRA family | forest green | `#2D7D64` | circle | solid |
 | PCIC | higher-order baseline | purple | `#7C5AA6` | square | dashed |
 | QUASI | higher-order baseline | charcoal | `#4B5563` | diamond | dash-dot |
 
@@ -25,7 +25,7 @@
 |---|---|---|---|---|---|
 | Ours (linear, per-cell) | linear, no graph coordination | light blue | `#74A9CF` | up triangle | dashed |
 | Ours (linear, graph-coordinated) | linear, propagation and merging | blue | `#2F6FA3` | down triangle | solid |
-| Ours (linear + corners, graph-coordinated) | linear and line-line corners | teal | `#008C95` | X | solid |
+| Ours (linear + corners, graph-coordinated) | linear and line-line corners | deep blue | `#173F73` | X | solid |
 | Ours (circular, per-cell) | circular, no graph coordination | gold | `#E6AB02` | up triangle | dashed |
 | Ours (circular, graph-coordinated) | circular, propagation and merging | vermilion | `#D55E00` | down triangle | solid |
 | Ours (circular + corners, graph-coordinated) | circular and sharp corners | crimson | `#B91C1C` | X | solid |
@@ -51,4 +51,3 @@ An alternative for plots whose sole purpose is to isolate continuity refinement 
 - Graph-coordinated variants: downward triangles and solid lines.
 - Corner-enabled variants: X markers.
 - Joint-`C0` variants: filled plus markers and dotted lines.
-

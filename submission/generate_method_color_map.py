@@ -9,9 +9,9 @@ GROUPS = [
     (
         "Linear baselines",
         [
-            ("Youngs", "#B14E5E", "o", "-"),
-            ("ELVIRA", "#B3811B", "s", "--"),
-            ("LVIRA", "#2D7D64", "D", "-."),
+            ("Youngs", "#D94F9D", "o", "-"),
+            ("ELVIRA", "#00A6C8", "s", "--"),
+            ("LVIRA", "#84B547", "D", "-."),
         ],
     ),
     (
@@ -27,7 +27,7 @@ GROUPS = [
         [
             ("Linear, per-cell", "#74A9CF", "^", "--"),
             ("Linear, graph-coordinated", "#2F6FA3", "v", "-"),
-            ("Linear + corners, graph-coordinated", "#008C95", "X", "-"),
+            ("Linear + corners, graph-coordinated", "#173F73", "X", "-"),
             ("Linear, graph-coordinated + joint C0", "#2F6FA3", "P", ":"),
         ],
     ),
@@ -77,8 +77,8 @@ def main() -> None:
         y -= 0.25
 
     fig.tight_layout(pad=0.5)
-    fig.savefig(out_dir / "method_color_mapping_proposal.pdf", bbox_inches="tight")
-    fig.savefig(out_dir / "method_color_mapping_proposal.png", dpi=220, bbox_inches="tight")
+    fig.savefig(out_dir / "method_color_mapping_proposal_v2.pdf", bbox_inches="tight")
+    fig.savefig(out_dir / "method_color_mapping_proposal_v2.png", dpi=220, bbox_inches="tight")
 
 
 if __name__ == "__main__":
