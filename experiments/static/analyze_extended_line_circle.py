@@ -16,7 +16,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.ticker import NullFormatter
 
-from experiments.plotting import add_convergence_order_triangle
+from experiments.plotting import (
+    PAPER_METHOD_COLORS,
+    PAPER_METHOD_LINESTYLES,
+    PAPER_METHOD_MARKERS,
+    add_convergence_order_triangle,
+)
 from experiments.static.run_extended_convergence_smoke import LINEAR_METHODS
 
 
@@ -32,18 +37,10 @@ METHOD_LABELS = {
     "linear": "Ours (linear, graph-coordinated)",
 }
 METHOD_COLORS = {
-    "Youngs": "#B14E5E",
-    "ELVIRA": "#B3811B",
-    "LVIRA": "#2D7D64",
-    "safe_linear": "#7C5AA6",
-    "linear": "#2F6FA3",
+    method: PAPER_METHOD_COLORS[method] for method in LINEAR_METHODS
 }
 METHOD_MARKERS = {
-    "Youngs": "o",
-    "ELVIRA": "s",
-    "LVIRA": "D",
-    "safe_linear": "^",
-    "linear": "v",
+    method: PAPER_METHOD_MARKERS[method] for method in LINEAR_METHODS
 }
 
 
@@ -227,6 +224,7 @@ def _plot(summary_rows: Sequence[Mapping[str, str]], output_dir: Path) -> None:
                     n_values,
                     medians,
                     color=color,
+                    linestyle=PAPER_METHOD_LINESTYLES[method],
                     marker=METHOD_MARKERS[method],
                     markersize=4.0,
                     linewidth=1.2,

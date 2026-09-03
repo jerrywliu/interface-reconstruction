@@ -13,6 +13,7 @@ import numpy as np
 from matplotlib.lines import Line2D
 from matplotlib.patches import Polygon as MplPolygon
 
+from experiments.plotting import PAPER_METHOD_COLORS
 from experiments.static.figure_generation_provenance import (
     frozen_reconstruction_profile,
     generation_provenance,
@@ -33,9 +34,7 @@ TOPO_FULL = tuple(value / 255.0 for value in (171, 201, 234))
 EDGE = (0.37, 0.40, 0.45)
 TRUE_LINE = (0.30, 0.30, 0.30)
 METHOD_COLORS = {
-    "Youngs": "#B14E5E",
-    "ELVIRA": "#B3811B",
-    "LVIRA": "#2D7D64",
+    method: PAPER_METHOD_COLORS[method] for method in ("Youngs", "ELVIRA", "LVIRA")
 }
 
 plt.rcParams.update(

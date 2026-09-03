@@ -47,19 +47,19 @@ STAGE_TITLES = {
 }
 
 STROKE_COLORS = {
-    "linear": "#356D9A",
-    "linear_corner": "#B14E5E",
-    "circular": "#2D7D64",
-    "curved_corner": "#80558C",
-    "fallback": "#B3811B",
+    "linear": "#2F6FA3",
+    "linear_corner": "#173F73",
+    "circular": "#D55E00",
+    "curved_corner": "#B91C1C",
+    "fallback": "#84B547",
 }
 
 FILL_COLORS = {
     "linear": "#DCE8F1",
-    "linear_corner": "#F2DDE1",
-    "circular": "#DCECE5",
-    "curved_corner": "#E9DFEC",
-    "fallback": "#F4E7C7",
+    "linear_corner": "#D7E1EE",
+    "circular": "#F6DEC9",
+    "curved_corner": "#F2D4D4",
+    "fallback": "#E8F0D8",
 }
 
 EMPTY_FILL = "#FBFBFA"

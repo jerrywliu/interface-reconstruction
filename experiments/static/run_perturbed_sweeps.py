@@ -22,6 +22,7 @@ from pathlib import Path
 import matplotlib as mpl
 import numpy as np
 
+from experiments.plotting import PAPER_METHOD_COLORS, PAPER_METHOD_LINESTYLES
 from experiments.static.sweep_diagnostics import (
     DiagnosticBundleError,
     archive_run_bundle,
@@ -89,19 +90,22 @@ DISPLAY_LABELS = {
 }
 
 METHOD_STYLES = {
-    "Youngs": {"color": "#6c757d", "linestyle": "-", "linewidth": 1.8},
-    "ELVIRA": {"color": "#495057", "linestyle": "--", "linewidth": 1.8},
-    "LVIRA": {"color": "#212529", "linestyle": "-.", "linewidth": 1.8},
-    "safe_linear": {"color": "#74a9cf", "linestyle": "--", "linewidth": 1.9},
-    "linear": {"color": "#1d4ed8", "linestyle": "-", "linewidth": 2.3},
-    "linear+C0": {"color": "#1d4ed8", "linestyle": "--", "linewidth": 2.3},
-    "linear+corner": {"color": "#0f766e", "linestyle": "-", "linewidth": 2.4},
-    "safe_circle": {"color": "#f59e0b", "linestyle": "--", "linewidth": 1.9},
-    "circular": {"color": "#d97706", "linestyle": "-", "linewidth": 2.3},
-    "circular+C0": {"color": "#d97706", "linestyle": "--", "linewidth": 2.3},
-    "circular+corner": {"color": "#b91c1c", "linestyle": "-", "linewidth": 2.5},
-    "circular+corner+C0": {"color": "#b91c1c", "linestyle": "--", "linewidth": 2.5},
+    "Youngs": {"linewidth": 1.8},
+    "ELVIRA": {"linewidth": 1.8},
+    "LVIRA": {"linewidth": 1.8},
+    "safe_linear": {"linewidth": 1.9},
+    "linear": {"linewidth": 2.3},
+    "linear+C0": {"linewidth": 2.3},
+    "linear+corner": {"linewidth": 2.4},
+    "safe_circle": {"linewidth": 1.9},
+    "circular": {"linewidth": 2.3},
+    "circular+C0": {"linewidth": 2.3},
+    "circular+corner": {"linewidth": 2.5},
+    "circular+corner+C0": {"linewidth": 2.5},
 }
+for _method, _style in METHOD_STYLES.items():
+    _style["color"] = PAPER_METHOD_COLORS[_method]
+    _style["linestyle"] = PAPER_METHOD_LINESTYLES[_method]
 
 METRIC_LABELS = {
     "hausdorff": "Hausdorff",

@@ -35,10 +35,54 @@ PAPER_METHOD_MARKERS = {
     "LVIRA": "D",
     "safe_linear": "^",
     "linear": "v",
-    "linear+corner": "P",
-    "safe_circle": "<",
-    "circular": ">",
+    "linear+C0": "P",
+    "linear+corner": "X",
+    "safe_circle": "^",
+    "circular": "v",
+    "circular+C0": "P",
     "circular+corner": "X",
+    "circular+corner+C0": "P",
+}
+
+# Approved paper-wide method encoding. Colors identify method families, while
+# markers and line styles distinguish closely related variants within a family.
+PAPER_METHOD_COLORS = {
+    "Youngs": "#D94F9D",
+    "ELVIRA": "#00A6C8",
+    "LVIRA": "#84B547",
+    "safe_linear": "#74A9CF",
+    "linear": "#2F6FA3",
+    "linear+C0": "#2F6FA3",
+    "linear+corner": "#173F73",
+    "safe_circle": "#E6AB02",
+    "circular": "#D55E00",
+    "circular+C0": "#D55E00",
+    "circular+corner": "#B91C1C",
+    "circular+corner+C0": "#B91C1C",
+}
+
+PAPER_METHOD_LINESTYLES = {
+    "Youngs": "-",
+    "ELVIRA": "--",
+    "LVIRA": "-.",
+    "safe_linear": "--",
+    "linear": "-",
+    "linear+C0": ":",
+    "linear+corner": "-",
+    "safe_circle": "--",
+    "circular": "-",
+    "circular+C0": ":",
+    "circular+corner": "-",
+    "circular+corner+C0": ":",
+}
+
+PAPER_HIGH_ORDER_COLORS = {
+    "plvira": "#2D7D64",
+    "pcic_center": "#7C5AA6",
+    "quasi": "#4B5563",
+    "ours_per_cell": "#E6AB02",
+    "ours_graph": "#D55E00",
+    "ours_c0": "#D55E00",
 }
 
 PAPER_METRIC_LABELS = {

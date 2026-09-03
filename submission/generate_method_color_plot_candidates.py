@@ -20,6 +20,12 @@ from experiments.baselines.plot_ellipse_all_method_paper_comparison import (
     load_case_metrics,
     plot_paper_figure,
 )
+from experiments.plotting import (
+    PAPER_HIGH_ORDER_COLORS,
+    PAPER_METHOD_COLORS,
+    PAPER_METHOD_LINESTYLES,
+    PAPER_METHOD_MARKERS,
+)
 import experiments.static.generate_pooled_perturbed_panels as pooled
 import experiments.static.run_perturbed_sweeps as perturbed
 from submission.pdf_vector_qa import inspect_pdf
@@ -33,59 +39,10 @@ OUTPUT_ROOT = (
     / "method_color_plot_candidates_v2"
 )
 
-METHOD_COLORS = {
-    "Youngs": "#D94F9D",
-    "ELVIRA": "#00A6C8",
-    "LVIRA": "#84B547",
-    "safe_linear": "#74A9CF",
-    "linear": "#2F6FA3",
-    "linear+C0": "#2F6FA3",
-    "linear+corner": "#173F73",
-    "safe_circle": "#E6AB02",
-    "circular": "#D55E00",
-    "circular+C0": "#D55E00",
-    "circular+corner": "#B91C1C",
-    "circular+corner+C0": "#B91C1C",
-}
-
-METHOD_LINESTYLES = {
-    "Youngs": "-",
-    "ELVIRA": "--",
-    "LVIRA": "-.",
-    "safe_linear": "--",
-    "linear": "-",
-    "linear+C0": ":",
-    "linear+corner": "-",
-    "safe_circle": "--",
-    "circular": "-",
-    "circular+C0": ":",
-    "circular+corner": "-",
-    "circular+corner+C0": ":",
-}
-
-METHOD_MARKERS = {
-    "Youngs": "o",
-    "ELVIRA": "s",
-    "LVIRA": "D",
-    "safe_linear": "^",
-    "linear": "v",
-    "linear+C0": "P",
-    "linear+corner": "X",
-    "safe_circle": "^",
-    "circular": "v",
-    "circular+C0": "P",
-    "circular+corner": "X",
-    "circular+corner+C0": "P",
-}
-
-HIGH_ORDER_COLORS = {
-    "plvira": "#2D7D64",
-    "pcic_center": "#7C5AA6",
-    "quasi": "#4B5563",
-    "ours_per_cell": "#E6AB02",
-    "ours_graph": "#D55E00",
-    "ours_c0": "#D55E00",
-}
+METHOD_COLORS = PAPER_METHOD_COLORS
+METHOD_LINESTYLES = PAPER_METHOD_LINESTYLES
+METHOD_MARKERS = PAPER_METHOD_MARKERS
+HIGH_ORDER_COLORS = PAPER_HIGH_ORDER_COLORS
 
 
 def sha256(path: Path) -> str:

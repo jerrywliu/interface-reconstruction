@@ -19,6 +19,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from experiments.plotting import (
+    PAPER_HIGH_ORDER_COLORS,
     add_convergence_order_triangle,
     apply_paper_serif_style,
 )
@@ -76,7 +77,7 @@ PAPER_METHOD_SPECS = (
     {
         "id": "ours_c0",
         "label": "Ours (graph-coordinated + joint C0)",
-        "linestyle": "-",
+        "linestyle": ":",
         "linewidth": 2.5,
         "marker": "P",
     },
@@ -84,12 +85,7 @@ PAPER_METHOD_SPECS = (
 
 PAPER_PALETTES = {
     "current": {
-        "plvira": "#6c757d",
-        "pcic_center": "#495057",
-        "quasi": "#212529",
-        "ours_per_cell": "#f59e0b",
-        "ours_graph": "#d97706",
-        "ours_c0": "#b91c1c",
+        **PAPER_HIGH_ORDER_COLORS,
     },
     "b19_categorical": {
         "plvira": "#B14E5E",

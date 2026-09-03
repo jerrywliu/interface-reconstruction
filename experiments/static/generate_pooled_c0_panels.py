@@ -16,14 +16,23 @@ if str(REPO_ROOT) not in sys.path:
 
 import matplotlib.pyplot as plt
 
+from experiments.plotting import (
+    apply_paper_metric_axis_style,
+    apply_paper_serif_style,
+    paper_markers_by_label,
+)
 from experiments.static.generate_pooled_perturbed_panels import _pooled_curves
 from experiments.static.run_perturbed_sweeps import (
+    DISPLAY_LABELS,
     RESOLUTION_AXIS_LABEL,
     _draw_method_curves,
     _merge_legend_entries,
     _metric_label,
     _save_figure,
 )
+
+
+apply_paper_serif_style()
 
 
 DEFAULT_SEALED = (
@@ -39,6 +48,7 @@ BASELINE_METHODS = {
     "ellipses": ("linear", "circular"),
     "zalesak": ("circular", "circular+corner"),
 }
+MARKERS_BY_LABEL = paper_markers_by_label(DISPLAY_LABELS)
 
 
 def _add_value(data: dict, row: dict, method: str) -> None:
@@ -89,7 +99,7 @@ def load_c0_case_index(sealed_csv: Path, plots_root: Path) -> dict:
 
 
 def plot_resolution_panel(data: dict, experiment: str, output: Path) -> None:
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
+    fig, axes = plt.subplots(1, 2, figsize=(7.05, 2.85))
     legend_entries = {}
     for axis, metric in zip(axes, ("hausdorff", "facet_gap")):
         curves = _pooled_curves(data[experiment], metric, "resolution")
@@ -101,10 +111,16 @@ def plot_resolution_panel(data: dict, experiment: str, output: Path) -> None:
             x_mode="resolution",
             exp_name=experiment,
         )
+        apply_paper_metric_axis_style(
+            axis,
+            metric,
+            "resolution",
+            markers_by_label=MARKERS_BY_LABEL,
+        )
         axis.set_title(
-            f"{_metric_label(metric)} vs Cells per Side",
-            fontsize=11.5,
-            fontweight="bold",
+            _metric_label(metric),
+            fontsize=9.0,
+            fontweight="normal",
         )
         _merge_legend_entries(legend_entries, axis)
     if legend_entries:
@@ -113,11 +129,11 @@ def plot_resolution_panel(data: dict, experiment: str, output: Path) -> None:
             list(legend_entries.keys()),
             loc="lower center",
             ncol=3,
-            fontsize=8.5,
-            frameon=True,
+            fontsize=7.2,
+            frameon=False,
             bbox_to_anchor=(0.5, -0.02),
         )
-    fig.tight_layout(rect=[0, 0.12, 1, 1], w_pad=1.6)
+    fig.tight_layout(rect=[0, 0.16, 1, 1], w_pad=1.2)
     _save_figure(fig, output)
     plt.close(fig)
 
