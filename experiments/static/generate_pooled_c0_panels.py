@@ -174,6 +174,7 @@ def main() -> None:
     parser.add_argument("--plots-root", type=Path, default=REPO_ROOT / "plots")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     args = parser.parse_args()
+    args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=True)
     data = load_c0_case_index(args.sealed, args.plots_root)
     for experiment in ("ellipses", "zalesak"):
