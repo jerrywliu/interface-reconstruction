@@ -472,7 +472,10 @@ def _generate_figure(
             if isinstance(show_main_endpoints, bool):
                 panel_endpoints = show_main_endpoints
             else:
-                panel_endpoints = show_main_endpoints[int(round(resolution * 100))]
+                panel_endpoints = show_main_endpoints.get(
+                    int(round(resolution * 100)),
+                    True,
+                )
             panel_spec = maintext_figs._endpoint_visibility_spec(
                 maintext_figs._panel_spyglass_spec({
                     "case_index": exp_spec["case_index"],
