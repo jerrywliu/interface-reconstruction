@@ -28,7 +28,12 @@ INPUTS = {
     ),
 }
 
-PALETTES = ("b19_categorical", "colorblind_categorical", "grouped")
+PALETTES = (
+    "b19_categorical",
+    "semantic_hybrid",
+    "colorblind_categorical",
+    "grouped",
+)
 
 
 def parse_args() -> argparse.Namespace:

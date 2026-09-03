@@ -115,6 +115,14 @@ PAPER_PALETTES = {
         "ours_graph": "#2F6FA3",
         "ours_c0": "#D55E00",
     },
+    "semantic_hybrid": {
+        "plvira": "#7C5AA6",
+        "pcic_center": "#2D7D64",
+        "quasi": "#4B5563",
+        "ours_per_cell": "#E6AB02",
+        "ours_graph": "#D55E00",
+        "ours_c0": "#9C2F5F",
+    },
 }
 
 
