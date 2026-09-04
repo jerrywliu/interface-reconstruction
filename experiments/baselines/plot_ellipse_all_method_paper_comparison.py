@@ -445,8 +445,8 @@ def plot_paper_figure(
     *,
     triangle_anchors: Mapping[str, tuple[float, float]] | None = None,
     methods: Sequence[Mapping[str, Any]] = PAPER_METHODS,
-    figure_size: tuple[float, float] = (11.2, 7.4),
-    large_text: bool = False,
+    figure_size: tuple[float, float] = (11.2, 8.2),
+    large_text: bool = True,
     broken_facet_gap: bool = False,
 ) -> None:
     method_by_id = {method["id"]: method for method in methods}
@@ -456,15 +456,15 @@ def plot_paper_figure(
         if large_text:
             mpl.rcParams.update(
                 {
-                    "font.size": 10.5,
-                    "axes.labelsize": 11.2,
-                    "axes.titlesize": 11.2,
-                    "legend.fontsize": 10.0,
+                    "font.size": 13.0,
+                    "axes.labelsize": 14.3,
+                    "axes.titlesize": 14.3,
+                    "legend.fontsize": 12.8,
                 }
             )
-        tick_fontsize = 9.5 if large_text else 7.5
-        note_fontsize = 9.5 if large_text else 7.5
-        triangle_fontsize = 9.5 if large_text else 7.0
+        tick_fontsize = 12.8 if large_text else 8.5
+        note_fontsize = 12.8 if large_text else 8.5
+        triangle_fontsize = 12.8 if large_text else 8.6
         if broken_facet_gap:
             figure = plt.figure(figsize=figure_size)
             grid = figure.add_gridspec(
@@ -647,7 +647,7 @@ def plot_paper_figure(
         handle_by_label = dict(zip(labels, handles))
         # Matplotlib fills multirow legends column-first. Interleave the source
         # order so the rendered first row is baselines and the second is ours.
-        legend_method_order = (
+        legend_method_order = tuple(methods) if large_text else (
             methods[0],
             methods[3],
             methods[1],
@@ -663,7 +663,7 @@ def plot_paper_figure(
             legend_handles,
             legend_labels,
             loc="lower center",
-            ncol=3,
+            ncol=2 if large_text else 3,
             frameon=True,
             bbox_to_anchor=(0.5, 0.005),
         )
@@ -674,11 +674,15 @@ def plot_paper_figure(
             figure.subplots_adjust(
                 left=0.075,
                 right=0.985,
-                bottom=0.135,
+                bottom=0.185 if large_text else 0.135,
                 top=0.965,
             )
         else:
-            figure.tight_layout(rect=(0.0, 0.105, 1.0, 1.0), h_pad=2.0, w_pad=1.6)
+            figure.tight_layout(
+                rect=(0.0, 0.16 if large_text else 0.105, 1.0, 1.0),
+                h_pad=2.0,
+                w_pad=1.6,
+            )
         pdf_path.parent.mkdir(parents=True, exist_ok=True)
         figure.savefig(pdf_path, bbox_inches="tight")
         figure.savefig(png_path, dpi=300, bbox_inches="tight")

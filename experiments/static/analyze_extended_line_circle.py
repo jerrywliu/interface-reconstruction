@@ -17,6 +17,7 @@ import numpy as np
 from matplotlib.ticker import NullFormatter
 
 from experiments.plotting import (
+    apply_paper_serif_style,
     PAPER_METHOD_COLORS,
     PAPER_METHOD_LINESTYLES,
     PAPER_METHOD_MARKERS,
@@ -185,17 +186,7 @@ def _case_orders(case_rows: Sequence[Mapping[str, str]]) -> list[dict[str, Any]]
 
 
 def _plot(summary_rows: Sequence[Mapping[str, str]], output_dir: Path) -> None:
-    plt.rcParams.update(
-        {
-            "font.family": "serif",
-            "font.size": 8.5,
-            "axes.labelsize": 8.5,
-            "axes.titlesize": 9.0,
-            "legend.fontsize": 7.2,
-            "pdf.fonttype": 42,
-            "ps.fonttype": 42,
-        }
-    )
+    apply_paper_serif_style()
     fig, axes = plt.subplots(2, 2, figsize=(7.05, 5.25), sharex=True)
     for column, wiggle in enumerate(EXPECTED_WIGGLES):
         for row_index, metric in enumerate(METRICS):

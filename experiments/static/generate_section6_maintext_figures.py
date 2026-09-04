@@ -1671,7 +1671,7 @@ def _generate_broken_resolution_quantitative_panel(
             rotation=90,
             ha="center",
             va="center",
-            fontsize=8.5,
+            fontsize=9.8,
         )
     _save_figure(fig, out_path)
     plt.close(fig)
@@ -2097,7 +2097,11 @@ def _plot_panel(
     ax.set_xticks([])
     ax.set_yticks([])
     ax.set_facecolor("white")
-    ax.set_title(title, fontsize=9.0, fontweight="normal")
+    ax.set_title(
+        title,
+        fontsize=float(spec.get("panel_title_fontsize", 12.8)),
+        fontweight="normal",
+    )
 
     inset_bounds = _inset_bounds(exp_name, spec)
     if inset_bounds is not None:

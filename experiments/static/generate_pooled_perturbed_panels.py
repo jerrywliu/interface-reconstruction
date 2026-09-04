@@ -228,6 +228,7 @@ def _plot_grid(
     if rows == 1:
         axes = np.asarray([axes])
     legend_entries = {}
+    dense_panel = rows == 4
 
     for row_index, metric in enumerate(metrics):
         curves_by_axis = {
@@ -255,11 +256,17 @@ def _plot_grid(
                 x_mode,
                 markers_by_label=MARKERS_BY_LABEL,
             )
+            if dense_panel:
+                axis.tick_params(axis="both", which="major", labelsize=10.6)
+                axis.xaxis.label.set_size(12.0)
+                axis.yaxis.label.set_size(12.0)
             axis.set_title(
                 ("Perturbation sweep" if axis_name == "wiggle" else "Resolution study")
                 if row_index == 0
                 else ""
             )
+            if dense_panel:
+                axis.title.set_fontsize(12.1)
             if row_index == rows - 1:
                 axis.set_xlabel(
                     (
@@ -287,7 +294,7 @@ def _plot_grid(
                 ),
                 width=0.11,
                 trend="decreasing",
-                fontsize=7.5,
+                fontsize=10.6 if dense_panel else 8.6,
             )
 
     if legend_entries:
@@ -300,6 +307,7 @@ def _plot_grid(
             bbox_to_anchor=(0.5, 1.005),
             columnspacing=0.9,
             handletextpad=0.4,
+            fontsize=10.6 if dense_panel else 8.5,
         )
     fig.tight_layout(rect=[0, 0, 1, 0.90], h_pad=0.9, w_pad=0.8)
     _save_figure(fig, output)
@@ -343,6 +351,7 @@ def _plot_broken_grid(
     )
     axes_by_metric = {}
     legend_entries = {}
+    dense_panel = len(metrics) == 4
 
     for row, (metric, band) in enumerate(row_specs):
         if metric is None:
@@ -371,6 +380,10 @@ def _plot_broken_grid(
                 x_mode,
                 markers_by_label=MARKERS_BY_LABEL,
             )
+            if dense_panel:
+                axis.tick_params(axis="both", which="major", labelsize=10.6)
+                axis.xaxis.label.set_size(12.0)
+                axis.yaxis.label.set_size(12.0)
             axis.set_ylabel("")
             if y_window is not None:
                 axis.set_ylim(*y_window)
@@ -380,6 +393,8 @@ def _plot_broken_grid(
                     if axis_name == "wiggle"
                     else "Resolution study"
                 )
+                if dense_panel:
+                    axis.title.set_fontsize(12.1)
             final_band = metric == metrics[-1] and band in {"lower", "full"}
             if final_band:
                 axis.set_xlabel(
@@ -418,7 +433,7 @@ def _plot_broken_grid(
                 ),
                 width=0.11,
                 trend="decreasing",
-                fontsize=7.5,
+                fontsize=10.6 if dense_panel else 8.6,
             )
 
     if legend_entries:
@@ -431,6 +446,7 @@ def _plot_broken_grid(
             bbox_to_anchor=(0.5, 0.998),
             columnspacing=0.9,
             handletextpad=0.4,
+            fontsize=10.6 if dense_panel else 8.5,
         )
     fig.subplots_adjust(left=0.105, right=0.985, bottom=0.07, top=0.90)
     fig.canvas.draw()
@@ -446,7 +462,7 @@ def _plot_broken_grid(
             rotation=90,
             ha="center",
             va="center",
-            fontsize=8.5,
+            fontsize=12.0 if dense_panel else 9.8,
         )
     _save_figure(fig, output)
     plt.close(fig)

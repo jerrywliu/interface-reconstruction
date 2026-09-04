@@ -16,6 +16,7 @@ if str(REPO_ROOT) not in sys.path:
 
 import matplotlib.pyplot as plt
 
+from experiments.submission.generate_revision_layout_prototypes import _trim_for_box
 from experiments.plotting import (
     apply_paper_metric_axis_style,
     apply_paper_serif_style,
@@ -43,9 +44,6 @@ DEFAULT_SEALED = (
 )
 DEFAULT_JOINT_GLOB = "appendix_b5_joint_c0_20260814_perturb_sweep_*"
 DEFAULT_OUTPUT = REPO_ROOT / "results/submission/c0_pooled_panels_20260828"
-PAPER_ASSETS = (
-    REPO_ROOT.parent / "overleaf/interface-reconstruction-paper/figs/cameraready"
-)
 JOINT_METHOD = {"ellipses": "linear+C0", "zalesak": "circular+C0"}
 BASELINE_METHODS = {
     "ellipses": ("linear", "circular"),
@@ -160,7 +158,7 @@ def plot_resolution_panel(data: dict, experiment: str, output: Path) -> None:
             _merge_legend_entries(legend_entries, axis)
         panel_axes[0].set_title(
             _metric_label(metric),
-            fontsize=9.0,
+            fontsize=10.2,
             fontweight="normal",
         )
         panel_axes[-1].set_xlabel(RESOLUTION_AXIS_LABEL)
@@ -172,7 +170,7 @@ def plot_resolution_panel(data: dict, experiment: str, output: Path) -> None:
             list(legend_entries.keys()),
             loc="lower center",
             ncol=3,
-            fontsize=7.2,
+            fontsize=8.5,
             frameon=False,
             bbox_to_anchor=(0.5, -0.02),
         )
@@ -189,7 +187,7 @@ def plot_resolution_panel(data: dict, experiment: str, output: Path) -> None:
             rotation=90,
             ha="center",
             va="center",
-            fontsize=8.5,
+            fontsize=9.8,
         )
     _save_figure(fig, output)
     plt.close(fig)
@@ -198,30 +196,65 @@ def plot_resolution_panel(data: dict, experiment: str, output: Path) -> None:
 def build_benchmark_pages(output_dir: Path) -> tuple[Path, Path]:
     ellipse_metrics = output_dir / "ellipses_appendix_c0_resolution.pdf"
     zalesak_metrics = output_dir / "zalesak_appendix_c0_resolution.pdf"
-    reviewed_compact = PAPER_ASSETS / "compact_joint_c0_one_page.pdf"
+    representative_dir = (
+        REPO_ROOT
+        / "results/static/camera_ready/appendix_b5_joint_c0_20260814"
+        / "representative_cases"
+    )
     pages = []
     page_specs = (
         (
             "ellipse_joint_c0_comparison",
             ellipse_metrics,
-            "0bp 385bp 0bp 212bp",
+            representative_dir / "ellipses_appendix_c0_representative_clean.pdf",
+            (
+                "Graph-coordinated linear",
+                r"Graph-coordinated linear + joint $C^0$",
+                "Graph-coordinated circular",
+            ),
         ),
         (
             "zalesak_joint_c0_comparison",
             zalesak_metrics,
-            "0bp 0bp 0bp 600bp",
+            representative_dir / "zalesak_appendix_c0_representative_clean.pdf",
+            (
+                "Graph-coordinated circular",
+                r"Graph-coordinated circular + joint $C^0$",
+                "Graph-coordinated circular+corner",
+            ),
         ),
     )
-    for stem, metrics, trim in page_specs:
+    panel_boxes = (
+        (0.0, 0.04, 0.5, 0.5),
+        (0.5, 0.04, 1.0, 0.5),
+        (0.0, 0.54, 0.5, 1.0),
+    )
+    for stem, metrics, representatives, labels in page_specs:
+        if not representatives.is_file():
+            raise FileNotFoundError(
+                f"missing representative panel source: {representatives}"
+            )
+        representative_cells = []
+        for label, box in zip(labels, panel_boxes):
+            representative_cells.append(
+                rf"\begin{{minipage}}[t]{{2.28in}}\centering"
+                rf"\fontsize{{8.5}}{{9.2}}\selectfont {label}\\[-2pt]"
+                rf"\includegraphics[width=2.28in,trim={{{_trim_for_box(representatives, box)}}},clip]"
+                rf"{{{representatives}}}\end{{minipage}}"
+            )
         tex_path = output_dir / f"{stem}.tex"
         tex_path.write_text(
             rf"""\documentclass[border=3pt]{{standalone}}
 \usepackage{{graphicx}}
+\usepackage{{array}}
 \begin{{document}}
 \begin{{minipage}}{{7.15in}}
 \centering
 \includegraphics[width=6.95in]{{{metrics}}}\\[-4pt]
-\includegraphics[width=7.0in,trim={{{trim}}},clip]{{{reviewed_compact}}}
+\setlength{{\tabcolsep}}{{1pt}}
+\begin{{tabular}}{{ccc}}
+{" & ".join(representative_cells)}
+\end{{tabular}}
 \end{{minipage}}
 \end{{document}}
 """,

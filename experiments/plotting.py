@@ -17,13 +17,15 @@ PAPER_SERIF_RCPARAMS = {
     "font.family": "serif",
     "font.serif": ["DejaVu Serif"],
     "mathtext.fontset": "dejavuserif",
-    "font.size": 8.5,
+    "font.size": 9.8,
     "font.weight": "normal",
-    "axes.labelsize": 8.5,
+    "axes.labelsize": 9.8,
     "axes.labelweight": "normal",
-    "axes.titlesize": 9.0,
+    "axes.titlesize": 10.2,
     "axes.titleweight": "normal",
-    "legend.fontsize": 7.2,
+    "legend.fontsize": 8.5,
+    "xtick.labelsize": 8.5,
+    "ytick.labelsize": 8.5,
     "pdf.fonttype": 42,
     "ps.fonttype": 42,
     "svg.fonttype": "none",
@@ -141,7 +143,7 @@ def apply_paper_metric_axis_style(
     axis.tick_params(
         axis="both",
         which="major",
-        labelsize=7.5,
+        labelsize=8.5,
         width=0.6,
         length=3.0,
     )
@@ -294,7 +296,7 @@ def add_convergence_order_triangle(
     run_label: Optional[str] = "1",
     color: str = "#4b5563",
     linewidth: float = 0.9,
-    fontsize: float = 7.0,
+    fontsize: float = 8.6,
     zorder: float = 5.0,
 ) -> ConvergenceOrderTriangle:
     """Add a publication-style order triangle to log-log axes.

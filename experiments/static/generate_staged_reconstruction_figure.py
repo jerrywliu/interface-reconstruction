@@ -381,7 +381,7 @@ def add_fraction_key(ax, fraction_cmap) -> None:
     inset.set_ylim(0, 1)
     inset.set_xticks([0, 0.5, 1])
     inset.set_yticks([])
-    inset.tick_params(axis="x", labelsize=6.5, length=1.6, pad=1)
+    inset.tick_params(axis="x", labelsize=9.7, length=1.6, pad=1)
     for spine in inset.spines.values():
         spine.set_linewidth(0.45)
     inset.text(
@@ -390,7 +390,7 @@ def add_fraction_key(ax, fraction_cmap) -> None:
         r"$C$",
         ha="right",
         va="center",
-        fontsize=7,
+        fontsize=9.7,
         transform=inset.transAxes,
     )
 
@@ -402,9 +402,9 @@ def build_figure(
 ) -> None:
     mpl.rcParams.update(
         {
-            "font.family": "DejaVu Sans",
-            "font.size": 9,
-            "axes.titlesize": 10.5,
+            "font.family": "DejaVu Serif",
+            "font.size": 9.8,
+            "axes.titlesize": 11.0,
             "axes.titleweight": "normal",
             "pdf.fonttype": 42,
             "ps.fonttype": 42,
@@ -465,7 +465,7 @@ def build_figure(
         handlelength=1.8,
         columnspacing=1.25,
         handletextpad=0.45,
-        fontsize=8.2,
+        fontsize=10.0,
     )
 
     for suffix, kwargs in {

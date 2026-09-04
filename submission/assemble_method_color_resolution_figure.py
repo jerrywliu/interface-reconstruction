@@ -71,7 +71,7 @@ def main() -> None:
         r"\setlength{\tabcolsep}{2pt}",
         r"\renewcommand{\arraystretch}{0.92}",
         r"\begin{tabular}{>{\raggedleft\arraybackslash}p{0.70in}cc}",
-        r" & \textbf{$N=32$} & \textbf{$N=64$}\\",
+        r" & {\large\bfseries $N=32$} & {\large\bfseries $N=64$}\\",
     ]
     for name in names:
         boxes = spyglass_boxes if name in {"squares", "zalesak"} else row_boxes
@@ -83,7 +83,7 @@ def main() -> None:
                 rf"{{{paths[name]}}}"
             )
         tex_lines.append(
-            rf"\textbf{{{display[name]}}} & "
+            rf"{{\large\bfseries {display[name]}}} & "
             + " & ".join(cells)
             + r"\\[-1pt]"
         )

@@ -93,6 +93,7 @@ APPENDIX_EXPERIMENTS = [
             "min_span": 66.0,
             "margin_frac": 0.12,
             "inset": None,
+            "panel_title_fontsize": 15.0,
         },
     },
     {
@@ -137,6 +138,7 @@ APPENDIX_EXPERIMENTS = [
             "min_span": 42.0,
             "margin_frac": 0.12,
             "inset": {"kind": "zalesak_corner", "zoom": 3.0},
+            "panel_title_fontsize": 15.0,
         },
     },
 ]
