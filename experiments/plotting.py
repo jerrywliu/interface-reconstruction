@@ -208,12 +208,28 @@ def plot_series_in_y_window(
         labelled = True
 
     finite_band = finite & np.isfinite(q25) & np.isfinite(q75)
-    if np.any(finite_band):
+    visible_band = finite_band & (q75 >= lower) & (q25 <= upper)
+    clipped_q25 = np.maximum(q25, lower)
+    clipped_q75 = np.minimum(q75, upper)
+    for start, stop in contiguous_true_runs(visible_band):
+        if stop - start == 1:
+            bar_kwargs = {
+                key: value
+                for key, value in fill_kwargs.items()
+                if key in {"alpha", "color", "zorder"}
+            }
+            axis.vlines(
+                x_values[start],
+                clipped_q25[start],
+                clipped_q75[start],
+                linewidth=2.0,
+                **bar_kwargs,
+            )
+            continue
         axis.fill_between(
-            x_values,
-            q25,
-            q75,
-            where=finite_band,
+            x_values[start:stop],
+            clipped_q25[start:stop],
+            clipped_q75[start:stop],
             interpolate=False,
             **fill_kwargs,
         )

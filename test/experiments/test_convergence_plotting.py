@@ -91,3 +91,23 @@ def test_windowed_series_does_not_connect_across_omitted_range():
     assert [line.get_xdata().tolist() for line in axis.lines] == [[1.0], [4.0]]
     assert [line.get_label() for line in axis.lines] == ["method", "_nolegend_"]
     plt.close(figure)
+
+
+def test_windowed_iqr_does_not_interpolate_to_an_out_of_window_sample():
+    figure, axis = plt.subplots()
+    plot_series_in_y_window(
+        axis,
+        np.asarray([1.0, 2.0, 3.0]),
+        np.asarray([2.0e-3, 1.0e-3, 1.0e-9]),
+        np.asarray([1.0e-3, 5.0e-4, 5.0e-10]),
+        np.asarray([3.0e-3, 2.0e-3, 2.0e-9]),
+        y_window=(1.0e-4, 1.0e-2),
+        label="method",
+        line_kwargs={"color": "black", "marker": "o"},
+        fill_kwargs={"alpha": 0.1, "color": "black"},
+    )
+
+    ribbon_paths = axis.collections[0].get_paths()
+    assert ribbon_paths
+    assert max(vertex[0] for path in ribbon_paths for vertex in path.vertices) == 2.0
+    plt.close(figure)
