@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-from typing import Literal, Mapping, Optional, Tuple
+from typing import Literal, Mapping, Optional, Sequence, Tuple
 
 import matplotlib as mpl
 from matplotlib.axes import Axes
@@ -156,6 +156,97 @@ def apply_paper_metric_axis_style(
             labels=[str(int(round(value))) for value in resolution_ticks],
         )
         axis.xaxis.set_minor_formatter(NullFormatter())
+
+
+def contiguous_true_runs(mask: Sequence[bool]) -> tuple[tuple[int, int], ...]:
+    """Return half-open index ranges for contiguous true values."""
+
+    runs = []
+    start = None
+    for index, value in enumerate(mask):
+        if value and start is None:
+            start = index
+        elif not value and start is not None:
+            runs.append((start, index))
+            start = None
+    if start is not None:
+        runs.append((start, len(mask)))
+    return tuple(runs)
+
+
+def plot_series_in_y_window(
+    axis: Axes,
+    x_values,
+    median,
+    q25,
+    q75,
+    *,
+    y_window: tuple[float, float],
+    label: str,
+    line_kwargs: Mapping,
+    fill_kwargs: Mapping,
+) -> None:
+    """Draw one series without connecting samples across an omitted y-range."""
+
+    import numpy as np
+
+    x_values = np.asarray(x_values, dtype=float)
+    median = np.asarray(median, dtype=float)
+    q25 = np.asarray(q25, dtype=float)
+    q75 = np.asarray(q75, dtype=float)
+    finite = np.isfinite(x_values) & np.isfinite(median)
+    lower, upper = sorted(y_window)
+    visible = finite & (median >= lower) & (median <= upper)
+    labelled = False
+    for start, stop in contiguous_true_runs(visible):
+        axis.plot(
+            x_values[start:stop],
+            median[start:stop],
+            label=label if not labelled else "_nolegend_",
+            **line_kwargs,
+        )
+        labelled = True
+
+    finite_band = finite & np.isfinite(q25) & np.isfinite(q75)
+    if np.any(finite_band):
+        axis.fill_between(
+            x_values,
+            q25,
+            q75,
+            where=finite_band,
+            interpolate=False,
+            **fill_kwargs,
+        )
+
+
+def draw_log_axis_break_marks(
+    upper: Axes,
+    lower: Axes,
+    *,
+    color: str = "#111827",
+    linewidth: float = 0.8,
+    size: float = 0.014,
+) -> None:
+    """Style paired axes and add conventional diagonal omission marks."""
+
+    upper.spines["bottom"].set_visible(False)
+    lower.spines["top"].set_visible(False)
+    upper.tick_params(axis="x", which="both", bottom=False, labelbottom=False)
+    lower.tick_params(axis="x", which="both", top=False)
+    style = {"color": color, "clip_on": False, "linewidth": linewidth}
+    for x_coordinate in (0.0, 1.0):
+        upper.plot(
+            (x_coordinate - size, x_coordinate + size),
+            (-size, size),
+            transform=upper.transAxes,
+            **style,
+        )
+        lower.plot(
+            (x_coordinate - size, x_coordinate + size),
+            (1.0 - size, 1.0 + size),
+            transform=lower.transAxes,
+            **style,
+        )
 
 
 @dataclass(frozen=True)

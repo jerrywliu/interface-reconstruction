@@ -22,7 +22,11 @@ from pathlib import Path
 import matplotlib as mpl
 import numpy as np
 
-from experiments.plotting import PAPER_METHOD_COLORS, PAPER_METHOD_LINESTYLES
+from experiments.plotting import (
+    PAPER_METHOD_COLORS,
+    PAPER_METHOD_LINESTYLES,
+    plot_series_in_y_window,
+)
 from experiments.static.sweep_diagnostics import (
     DiagnosticBundleError,
     archive_run_bundle,
@@ -84,9 +88,7 @@ DISPLAY_LABELS = {
     "circular": "Ours (circular, graph-coordinated)",
     "circular+C0": "Ours (circular, graph-coordinated + joint C0)",
     "circular+corner": "Ours (circular + corners, graph-coordinated)",
-    "circular+corner+C0": (
-        "Ours (circular + corners, graph-coordinated + joint C0)"
-    ),
+    "circular+corner+C0": ("Ours (circular + corners, graph-coordinated + joint C0)"),
 }
 
 METHOD_STYLES = {
@@ -560,9 +562,11 @@ def _plot_metric_vs_wiggle(exp, algo, metric, res_map, out_dir):
             med = (
                 _aggregate(stats.get("median"))
                 if "median" in stats
-                else _aggregate(stats.get("mean"))
-                if "mean" in stats
-                else _aggregate(stats.get("value"))
+                else (
+                    _aggregate(stats.get("mean"))
+                    if "mean" in stats
+                    else _aggregate(stats.get("value"))
+                )
             )
             q25 = _aggregate(stats.get("p25")) if "p25" in stats else med
             q75 = _aggregate(stats.get("p75")) if "p75" in stats else med
@@ -720,7 +724,15 @@ def _build_method_curves_by_resolution(exp_data, metric):
     return curves
 
 
-def _draw_method_curves(ax, curves, metric, x_label, x_mode, exp_name=None):
+def _draw_method_curves(
+    ax,
+    curves,
+    metric,
+    x_label,
+    x_mode,
+    exp_name=None,
+    y_window=None,
+):
     min_error = 1e-14
     for algo in _ordered_methods(curves.keys()):
         series = curves[algo]
@@ -739,22 +751,45 @@ def _draw_method_curves(ax, curves, metric, x_label, x_mode, exp_name=None):
         p75_v = np.maximum(p75[valid], min_error)
         style = METHOD_STYLES.get(algo, {})
         label = _display_method_label(algo)
-        ax.plot(
-            x_values_v,
-            medians_v,
-            marker="o",
-            markersize=4.2,
-            label=label,
-            **style,
-        )
-        ax.fill_between(
-            x_values_v,
-            p25_v,
-            p75_v,
-            alpha=0.08,
-            color=style.get("color", None),
-            zorder=1,
-        )
+        if y_window is None:
+            ax.plot(
+                x_values_v,
+                medians_v,
+                marker="o",
+                markersize=4.2,
+                label=label,
+                **style,
+            )
+            ax.fill_between(
+                x_values_v,
+                p25_v,
+                p75_v,
+                alpha=0.08,
+                color=style.get("color", None),
+                zorder=1,
+            )
+        else:
+            plot_series_in_y_window(
+                ax,
+                x_values_v,
+                medians_v,
+                p25_v,
+                p75_v,
+                y_window=y_window,
+                label=label,
+                line_kwargs={
+                    **style,
+                    "marker": "o",
+                    "markersize": 4.2,
+                    "zorder": 2,
+                },
+                fill_kwargs={
+                    "alpha": 0.08,
+                    "color": style.get("color", None),
+                    "linewidth": 0.0,
+                    "zorder": 1,
+                },
+            )
 
     floor_curve = _solver_floor_curve(
         exp_name=exp_name,
@@ -762,20 +797,41 @@ def _draw_method_curves(ax, curves, metric, x_label, x_mode, exp_name=None):
         x_mode=x_mode,
         raw_x_values=np.unique(
             np.concatenate(
-                [np.asarray(series["x_values"], dtype=float) for series in curves.values()]
+                [
+                    np.asarray(series["x_values"], dtype=float)
+                    for series in curves.values()
+                ]
             )
         ),
     )
     if floor_curve is not None:
-        ax.plot(
-            floor_curve["x_values"],
-            floor_curve["y_values"],
-            color="#111827",
-            linestyle=":",
-            linewidth=1.6,
-            label=floor_curve["label"],
-            zorder=3,
-        )
+        if y_window is None:
+            ax.plot(
+                floor_curve["x_values"],
+                floor_curve["y_values"],
+                color="#111827",
+                linestyle=":",
+                linewidth=1.6,
+                label=floor_curve["label"],
+                zorder=3,
+            )
+        else:
+            plot_series_in_y_window(
+                ax,
+                floor_curve["x_values"],
+                floor_curve["y_values"],
+                floor_curve["y_values"],
+                floor_curve["y_values"],
+                y_window=y_window,
+                label=floor_curve["label"],
+                line_kwargs={
+                    "color": "#111827",
+                    "linestyle": ":",
+                    "linewidth": 1.6,
+                    "zorder": 3,
+                },
+                fill_kwargs={"alpha": 0.0},
+            )
 
     metric_label = _metric_label(metric)
     ax.set_xlabel(x_label, fontsize=11)
@@ -793,7 +849,9 @@ def _draw_method_curves(ax, curves, metric, x_label, x_mode, exp_name=None):
         ax.set_xticks(tick_values)
 
 
-def _generate_experiment_method_summary_plots(data, exp_name, metric_candidates, out_dir):
+def _generate_experiment_method_summary_plots(
+    data, exp_name, metric_candidates, out_dir
+):
     import matplotlib.pyplot as plt
 
     exp_data = data.get(exp_name, {})
@@ -835,7 +893,9 @@ def _generate_experiment_method_summary_plots(data, exp_name, metric_candidates,
 
     metric_order = [metric for metric in metric_candidates if metric in metric_curves]
     if len(metric_order) >= 2:
-        fig, axes = plt.subplots(1, len(metric_order), figsize=(6 * len(metric_order), 5.5))
+        fig, axes = plt.subplots(
+            1, len(metric_order), figsize=(6 * len(metric_order), 5.5)
+        )
         if len(metric_order) == 1:
             axes = [axes]
         for ax, metric in zip(axes, metric_order):
@@ -847,7 +907,9 @@ def _generate_experiment_method_summary_plots(data, exp_name, metric_candidates,
                 x_mode="perturbation",
                 exp_name=exp_name,
             )
-            ax.set_title(metric.replace("_", " ").title(), fontsize=12, fontweight="bold")
+            ax.set_title(
+                metric.replace("_", " ").title(), fontsize=12, fontweight="bold"
+            )
         handles, labels = axes[0].get_legend_handles_labels()
         if handles:
             axes[0].legend(handles, labels, fontsize=9, frameon=True)
@@ -1436,9 +1498,7 @@ def _generate_summary_plots(csv_path, out_dir):
     for exp, exp_data in data.items():
         for algo, algo_data in exp_data.items():
             for metric, res_map in algo_data.items():
-                plot_path = _plot_metric_vs_wiggle(
-                    exp, algo, metric, res_map, out_dir
-                )
+                plot_path = _plot_metric_vs_wiggle(exp, algo, metric, res_map, out_dir)
                 plots_by_exp.setdefault(exp, []).append(plot_path)
 
     circle_summary_plots = _generate_circle_method_summary_plots(data, out_dir)
@@ -1465,11 +1525,7 @@ def _generate_summary_plots(csv_path, out_dir):
 
 
 def _filter_all_methods_summary_paths(plot_paths):
-    return [
-        path
-        for path in plot_paths
-        if "_all_methods_" in Path(path).name.lower()
-    ]
+    return [path for path in plot_paths if "_all_methods_" in Path(path).name.lower()]
 
 
 def _send_results_to_slack_logged(message, file_paths):
@@ -1708,11 +1764,11 @@ def _write_sweep_manifest(
             "summary_plots": str(Path(summary_dir).resolve()),
             "logs": str(Path(log_dir).resolve()),
             "raw_run_bundles": (
-                str(Path(args.raw_bundle_dir).resolve())
-                if args.raw_bundle_dir
-                else ""
+                str(Path(args.raw_bundle_dir).resolve()) if args.raw_bundle_dir else ""
             ),
-            "source_state": str((Path(diagnostics_dir) / "source_state.json").resolve()),
+            "source_state": str(
+                (Path(diagnostics_dir) / "source_state.json").resolve()
+            ),
             "source_snapshot": str(
                 (Path(diagnostics_dir) / "source_snapshot.tar.gz").resolve()
             ),
@@ -1724,7 +1780,9 @@ def _write_sweep_manifest(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run perturbed-quad sweeps for static experiments.")
+    parser = argparse.ArgumentParser(
+        description="Run perturbed-quad sweeps for static experiments."
+    )
     parser.add_argument("--circles", type=int, default=25, help="num circles")
     parser.add_argument("--ellipses", type=int, default=25, help="num ellipses")
     parser.add_argument("--lines", type=int, default=25, help="num lines")
@@ -1871,8 +1929,7 @@ def main():
         else os.getenv("SLACK_NOTIFY", "").lower() in {"1", "true", "yes"}
     )
     summary_dir = Path(
-        args.summary_dir
-        or os.path.join("results", "static", "perturbed_plots")
+        args.summary_dir or os.path.join("results", "static", "perturbed_plots")
     ).resolve()
 
     if args.plot_from_csv:
@@ -1885,7 +1942,9 @@ def main():
             for exp, plot_paths in plots_by_exp.items():
                 summary_paths = _filter_all_methods_summary_paths(plot_paths)
                 if summary_paths:
-                    resolved_paths = [str(Path(path).resolve()) for path in summary_paths]
+                    resolved_paths = [
+                        str(Path(path).resolve()) for path in summary_paths
+                    ]
                     _send_results_to_slack_logged(
                         f"Perturbed sweep all-method summaries: {exp}",
                         resolved_paths,
@@ -1897,18 +1956,15 @@ def main():
     seeds = _parse_list(args.seeds, int) or DEFAULT_SEEDS
     only_experiments = set(_parse_str_list(args.only))
     selected_algos = set(_parse_str_list(args.algos))
-    corner_behavior_profiles = (
-        _parse_str_list(args.corner_behavior_profiles)
-        or [args.corner_behavior_profile]
-    )
+    corner_behavior_profiles = _parse_str_list(args.corner_behavior_profiles) or [
+        args.corner_behavior_profile
+    ]
 
     valid_experiments = {exp["name"] for exp in EXPERIMENTS}
     unknown_experiments = sorted(only_experiments - valid_experiments)
     if unknown_experiments:
         parser.error(f"unknown experiments: {','.join(unknown_experiments)}")
-    valid_algos = {
-        algo.lower() for exp in EXPERIMENTS for algo in exp["algorithms"]
-    }
+    valid_algos = {algo.lower() for exp in EXPERIMENTS for algo in exp["algorithms"]}
     unknown_algos = sorted(selected_algos - valid_algos)
     if unknown_algos:
         parser.error(f"unknown algorithms: {','.join(unknown_algos)}")
@@ -1933,13 +1989,13 @@ def main():
     out_csv = args.out_csv or os.path.join(
         "results", "static", f"perturbed_sweep_{stamp}.csv"
     )
-    diagnostics_dir = Path(
-        args.diagnostics_dir or Path(out_csv).parent / "diagnostics"
-    )
+    diagnostics_dir = Path(args.diagnostics_dir or Path(out_csv).parent / "diagnostics")
     sweep_manifest_path = Path(out_csv).parent / "sweep_manifest.json"
     failures_path = Path(out_csv).parent / "failures.csv"
     release_root = Path(out_csv).parent.resolve()
-    raw_bundle_dir = Path(args.raw_bundle_dir).resolve() if args.raw_bundle_dir else None
+    raw_bundle_dir = (
+        Path(args.raw_bundle_dir).resolve() if args.raw_bundle_dir else None
+    )
     if raw_bundle_dir is not None:
         try:
             raw_bundle_dir.relative_to(release_root)
@@ -2043,7 +2099,9 @@ def main():
         writer.writeheader()
 
         if args.collect_existing:
-            print(f"Collecting existing perturbed sweep metrics at {datetime.now().isoformat()}")
+            print(
+                f"Collecting existing perturbed sweep metrics at {datetime.now().isoformat()}"
+            )
         else:
             print(f"Perturbed sweeps started at {datetime.now().isoformat()}")
         print(f"Planned runs: {planned_runs}")
@@ -2146,9 +2204,7 @@ def main():
                             "resolution": spec["resolution"],
                             "wiggle": spec["wiggle"],
                             "seed": spec["seed"],
-                            "corner_behavior_profile": spec[
-                                "corner_behavior_profile"
-                            ],
+                            "corner_behavior_profile": spec["corner_behavior_profile"],
                             "metric_key": key,
                             "metric_value": value,
                             "save_name": spec["save_name"],

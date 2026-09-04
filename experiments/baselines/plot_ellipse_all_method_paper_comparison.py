@@ -22,6 +22,8 @@ from experiments.plotting import (
     PAPER_HIGH_ORDER_COLORS,
     add_convergence_order_triangle,
     apply_paper_serif_style,
+    draw_log_axis_break_marks,
+    plot_series_in_y_window,
 )
 from submission.pdf_vector_qa import inspect_pdf
 
@@ -445,6 +447,7 @@ def plot_paper_figure(
     methods: Sequence[Mapping[str, Any]] = PAPER_METHODS,
     figure_size: tuple[float, float] = (11.2, 7.4),
     large_text: bool = False,
+    broken_facet_gap: bool = False,
 ) -> None:
     method_by_id = {method["id"]: method for method in methods}
     resolutions = sorted({int(row["cells_per_side"]) for row in summary})
@@ -462,10 +465,35 @@ def plot_paper_figure(
         tick_fontsize = 9.5 if large_text else 7.5
         note_fontsize = 9.5 if large_text else 7.5
         triangle_fontsize = 9.5 if large_text else 7.0
-        figure, axes = plt.subplots(2, 2, figsize=figure_size, sharex=True)
-        for axis, (metric, title, ylabel, order, anchor) in zip(
-            axes.ravel()[:3], ERROR_PANELS
-        ):
+        if broken_facet_gap:
+            figure = plt.figure(figsize=figure_size)
+            grid = figure.add_gridspec(
+                3,
+                2,
+                height_ratios=(1.35, 0.92, 0.38),
+                hspace=0.24,
+                wspace=0.24,
+            )
+            metric_axes = {
+                "native_symmetric_hausdorff": (figure.add_subplot(grid[0, 0]),),
+                "geometric_curvature_mean_absolute_error": (
+                    figure.add_subplot(grid[0, 1]),
+                ),
+            }
+            gap_upper = figure.add_subplot(grid[1, 0])
+            gap_lower = figure.add_subplot(grid[2, 0], sharex=gap_upper)
+            metric_axes["facet_gap"] = (gap_upper, gap_lower)
+            coverage_axis = figure.add_subplot(grid[1:, 1])
+        else:
+            figure, axes = plt.subplots(2, 2, figsize=figure_size, sharex=True)
+            metric_axes = {
+                metric: (axis,)
+                for axis, (metric, *_rest) in zip(axes.ravel()[:3], ERROR_PANELS)
+            }
+            coverage_axis = axes[1, 1]
+
+        for metric, title, ylabel, order, anchor in ERROR_PANELS:
+            panel_axes = metric_axes[metric]
             for method in methods:
                 selected = sorted(
                     (row for row in summary if row["method_id"] == method["id"]),
@@ -486,34 +514,71 @@ def plot_paper_figure(
                     np.asarray([float(row[f"{metric}_q75"]) for row in selected]),
                     metric,
                 )
-                axis.fill_between(
-                    x,
-                    q25,
-                    q75,
-                    color=method["color"],
-                    alpha=0.08,
-                    linewidth=0,
-                    zorder=1,
-                )
-                axis.plot(
-                    x,
-                    median,
-                    color=method["color"],
-                    linestyle=method["linestyle"],
-                    linewidth=method["linewidth"],
-                    marker=method["marker"],
-                    markersize=4.2,
-                    label=method["label"],
-                    zorder=2,
-                )
-            axis.set_xscale("log")
-            axis.set_yscale("log")
-            axis.set_title(title)
-            axis.set_ylabel(ylabel)
-            axis.grid(True, which="major", alpha=0.30)
-            axis.tick_params(labelsize=tick_fontsize)
+                for axis in panel_axes:
+                    if metric == "facet_gap" and broken_facet_gap:
+                        y_window = (
+                            (5.0e-6, 1.0e-1)
+                            if axis is panel_axes[0]
+                            else (5.0e-13, 1.0e-10)
+                        )
+                        plot_series_in_y_window(
+                            axis,
+                            x,
+                            median,
+                            q25,
+                            q75,
+                            y_window=y_window,
+                            label=method["label"],
+                            line_kwargs={
+                                "color": method["color"],
+                                "linestyle": method["linestyle"],
+                                "linewidth": method["linewidth"],
+                                "marker": method["marker"],
+                                "markersize": 4.2,
+                                "zorder": 2,
+                            },
+                            fill_kwargs={
+                                "color": method["color"],
+                                "alpha": 0.08,
+                                "linewidth": 0,
+                                "zorder": 1,
+                            },
+                        )
+                    else:
+                        axis.fill_between(
+                            x,
+                            q25,
+                            q75,
+                            color=method["color"],
+                            alpha=0.08,
+                            linewidth=0,
+                            zorder=1,
+                        )
+                        axis.plot(
+                            x,
+                            median,
+                            color=method["color"],
+                            linestyle=method["linestyle"],
+                            linewidth=method["linewidth"],
+                            marker=method["marker"],
+                            markersize=4.2,
+                            label=method["label"],
+                            zorder=2,
+                        )
+            for axis in panel_axes:
+                axis.set_xscale("log")
+                axis.set_yscale("log")
+                axis.grid(True, which="major", alpha=0.30)
+                axis.tick_params(labelsize=tick_fontsize)
+            panel_axes[0].set_title(title)
+            panel_axes[0].set_ylabel(ylabel)
+            if len(panel_axes) == 2:
+                panel_axes[0].set_ylim(5.0e-6, 1.0e-1)
+                panel_axes[1].set_ylim(5.0e-13, 1.0e-10)
+                panel_axes[1].set_ylabel("")
+                draw_log_axis_break_marks(panel_axes[0], panel_axes[1])
             add_convergence_order_triangle(
-                axis,
+                panel_axes[0],
                 order,
                 order_label=f"{order:g}",
                 anchor=(triangle_anchors or {}).get(metric, anchor),
@@ -522,7 +587,7 @@ def plot_paper_figure(
                 fontsize=triangle_fontsize,
             )
 
-        gap_axis = axes[1, 0]
+        gap_axis = metric_axes["facet_gap"][0]
         gap_axis.text(
             0.98,
             0.95,
@@ -534,7 +599,6 @@ def plot_paper_figure(
             color="#4b5563",
         )
 
-        coverage_axis = axes[1, 1]
         for method in methods:
             selected = sorted(
                 (row for row in summary if row["method_id"] == method["id"]),
@@ -560,12 +624,26 @@ def plot_paper_figure(
         coverage_axis.grid(True, which="major", alpha=0.30)
         coverage_axis.tick_params(labelsize=tick_fontsize)
 
-        for axis in axes.ravel():
+        all_axes = [
+            axis for panel_axes in metric_axes.values() for axis in panel_axes
+        ] + [coverage_axis]
+        for axis in all_axes:
             axis.set_xticks(resolutions, tuple(str(value) for value in resolutions))
-        for axis in axes[1, :]:
-            axis.set_xlabel("Cells per side, N")
+        if broken_facet_gap:
+            for axis in (
+                metric_axes["native_symmetric_hausdorff"]
+                + metric_axes["geometric_curvature_mean_absolute_error"]
+            ):
+                axis.tick_params(axis="x", labelbottom=False)
+            metric_axes["facet_gap"][-1].set_xlabel("Cells per side, N")
+            coverage_axis.set_xlabel("Cells per side, N")
+        else:
+            for axis in axes[1, :]:
+                axis.set_xlabel("Cells per side, N")
 
-        handles, labels = axes[0, 0].get_legend_handles_labels()
+        handles, labels = metric_axes["native_symmetric_hausdorff"][
+            0
+        ].get_legend_handles_labels()
         handle_by_label = dict(zip(labels, handles))
         # Matplotlib fills multirow legends column-first. Interleave the source
         # order so the rendered first row is baselines and the second is ours.
@@ -592,7 +670,15 @@ def plot_paper_figure(
         legend.get_frame().set_edgecolor("#d1d5db")
         legend.get_frame().set_linewidth(0.8)
 
-        figure.tight_layout(rect=(0.0, 0.105, 1.0, 1.0), h_pad=2.0, w_pad=1.6)
+        if broken_facet_gap:
+            figure.subplots_adjust(
+                left=0.075,
+                right=0.985,
+                bottom=0.135,
+                top=0.965,
+            )
+        else:
+            figure.tight_layout(rect=(0.0, 0.105, 1.0, 1.0), h_pad=2.0, w_pad=1.6)
         pdf_path.parent.mkdir(parents=True, exist_ok=True)
         figure.savefig(pdf_path, bbox_inches="tight")
         figure.savefig(png_path, dpi=300, bbox_inches="tight")
@@ -796,7 +882,7 @@ def main() -> None:
     manifest_path = output_root / "ellipse_all_methods_metrics_paper.manifest.json"
     output_root.mkdir(parents=True, exist_ok=True)
 
-    plot_paper_figure(summary, pdf_path, png_path)
+    plot_paper_figure(summary, pdf_path, png_path, broken_facet_gap=True)
     write_csv(win_path, win_counts)
     write_hash_ledger(hash_path, (pdf_path, png_path, win_path))
     hash_issues = verify_hash_ledger(hash_path)

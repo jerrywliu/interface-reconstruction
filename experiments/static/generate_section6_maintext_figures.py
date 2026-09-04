@@ -51,9 +51,11 @@ from experiments.static.run_perturbed_sweeps import (
     _make_save_name,
 )
 from experiments.plotting import (
+    PAPER_METRIC_LABELS,
     add_convergence_order_triangle,
     apply_paper_metric_axis_style,
     apply_paper_serif_style,
+    draw_log_axis_break_marks,
     paper_markers_by_label,
 )
 from experiments.static.zalesak import (
@@ -99,6 +101,12 @@ RESOLUTION_QUANT_SPECS = {
     **QUANT_SPECS,
     "circles": {"metrics": ("hausdorff", "facet_gap")},
     "ellipses": {"metrics": ("hausdorff", "facet_gap")},
+}
+
+RESOLUTION_BREAK_SPECS = {
+    "squares": {"lower": (2.0e-11, 2.0e-8), "upper": (3.0e-3, 1.2)},
+    "circles": {"lower": (5.0e-11, 1.0e-8), "upper": (5.0e-5, 3.0e-1)},
+    "zalesak": {"lower": (1.0e-10, 4.0e-8), "upper": (3.0e-3, 1.2)},
 }
 
 REPRESENTATIVE_CASES = {
@@ -346,7 +354,9 @@ def _load_case_metric_index(path: Path) -> dict:
                     metric, {}
                 ).setdefault(resolution, {}).setdefault(wiggle, {}).setdefault(
                     "value", []
-                ).append(value)
+                ).append(
+                    value
+                )
     return data
 
 
@@ -409,7 +419,14 @@ def _backfill_circle_tangent_rows(rows: list[dict]) -> list[dict]:
     circle_algos_present = {
         row["algo"] for row in rows if row.get("experiment") == "circles"
     }
-    backfill_algos = ["Youngs", "ELVIRA", "safe_linear", "linear", "safe_circle", "circular"]
+    backfill_algos = [
+        "Youngs",
+        "ELVIRA",
+        "safe_linear",
+        "linear",
+        "safe_circle",
+        "circular",
+    ]
     if "LVIRA" in circle_algos_present:
         backfill_algos.insert(2, "LVIRA")
     backfilled = 0
@@ -421,8 +438,12 @@ def _backfill_circle_tangent_rows(rows: list[dict]) -> list[dict]:
                 metrics_path = PLOTS_ROOT / save_name / "metrics" / "tangent_error.txt"
                 normalized_algo = algo
                 if algo == "ELVIRA" and not metrics_path.exists():
-                    legacy_save_name = _make_save_name("circles", "LVIRA", resolution, wiggle, seed)
-                    metrics_path = PLOTS_ROOT / legacy_save_name / "metrics" / "tangent_error.txt"
+                    legacy_save_name = _make_save_name(
+                        "circles", "LVIRA", resolution, wiggle, seed
+                    )
+                    metrics_path = (
+                        PLOTS_ROOT / legacy_save_name / "metrics" / "tangent_error.txt"
+                    )
                 if not metrics_path.exists():
                     continue
                 values = _read_metric_values(metrics_path)
@@ -541,7 +562,9 @@ def _metadata_plot_geometry(
     mesh_segments: np.ndarray | None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Rebuild smooth plot geometry from exact primitive records when present."""
-    step = _mesh_step_from_segments(mesh_segments) if mesh_segments is not None else None
+    step = (
+        _mesh_step_from_segments(mesh_segments) if mesh_segments is not None else None
+    )
     max_spacing = max((step or 1.0) / 4.0, 1.0e-3)
     segments = []
     endpoints = []
@@ -587,7 +610,9 @@ def _line_segment_intersection(
     return None
 
 
-def _arc_segment_intersections(record: dict, q0: np.ndarray, q1: np.ndarray) -> list[np.ndarray]:
+def _arc_segment_intersections(
+    record: dict, q0: np.ndarray, q1: np.ndarray
+) -> list[np.ndarray]:
     center = np.asarray(record["center"], dtype=float)
     radius = abs(float(record["radius"]))
     direction = q1 - q0
@@ -624,7 +649,9 @@ def _deduplicate_points(points: list[np.ndarray], tolerance: float) -> np.ndarra
     unique = []
     for point in points:
         point = np.asarray(point, dtype=float)
-        if not any(np.linalg.norm(point - existing) <= tolerance for existing in unique):
+        if not any(
+            np.linalg.norm(point - existing) <= tolerance for existing in unique
+        ):
             unique.append(point)
     if not unique:
         return np.empty((0, 2), dtype=float)
@@ -659,10 +686,13 @@ def _corner_boundary_crossings(
                     )
                     candidates = [] if candidate is None else [candidate]
                 for point in candidates:
-                    if min(
-                        np.linalg.norm(point - p_left),
-                        np.linalg.norm(point - p_right),
-                    ) <= tolerance:
+                    if (
+                        min(
+                            np.linalg.norm(point - p_left),
+                            np.linalg.norm(point - p_right),
+                        )
+                        <= tolerance
+                    ):
                         continue
                     crossings.append(point)
     return _deduplicate_points(crossings, tolerance)
@@ -693,7 +723,9 @@ def _corner_tip_cluster_tolerance(
     exp_name: str | None,
     mesh_segments: np.ndarray | None,
 ) -> float:
-    step = _mesh_step_from_segments(mesh_segments) if mesh_segments is not None else None
+    step = (
+        _mesh_step_from_segments(mesh_segments) if mesh_segments is not None else None
+    )
     if step is None:
         return 1.0e-6
     tol = CORNER_TIP_CLUSTER_FACTOR * step
@@ -816,7 +848,9 @@ def _line_case_params(case_index: int) -> dict:
     raise ValueError(f"Invalid line case index: {case_index}")
 
 
-def _line_true_segments(case_index: int, bounds: tuple[float, float, float, float]) -> np.ndarray:
+def _line_true_segments(
+    case_index: int, bounds: tuple[float, float, float, float]
+) -> np.ndarray:
     params = _line_case_params(case_index)
     p1 = params["p1"]
     p2 = params["p2"]
@@ -835,7 +869,9 @@ def _line_true_segments(case_index: int, bounds: tuple[float, float, float, floa
     return np.asarray([[a, b]], dtype=float)
 
 
-def _line_fill_polygon(case_index: int, bounds: tuple[float, float, float, float]) -> np.ndarray:
+def _line_fill_polygon(
+    case_index: int, bounds: tuple[float, float, float, float]
+) -> np.ndarray:
     params = _line_case_params(case_index)
     p1 = params["p1"]
     p2 = params["p2"]
@@ -850,7 +886,9 @@ def _line_fill_polygon(case_index: int, bounds: tuple[float, float, float, float
     )
 
     def _cross(point):
-        return (p2[0] - p1[0]) * (point[1] - p1[1]) - (p2[1] - p1[1]) * (point[0] - p1[0])
+        return (p2[0] - p1[0]) * (point[1] - p1[1]) - (p2[1] - p1[1]) * (
+            point[0] - p1[0]
+        )
 
     def _intersect(start, end):
         s_val = _cross(start)
@@ -1048,7 +1086,12 @@ def _load_true_segments(exp_name: str, save_name: str, case_index: int) -> np.nd
 
 def _load_reconstructed_segments(save_name: str, case_index: int) -> np.ndarray:
     facet_path = (
-        PLOTS_ROOT / save_name / "vtk" / "reconstructed" / "facets" / f"{case_index}.vtp"
+        PLOTS_ROOT
+        / save_name
+        / "vtk"
+        / "reconstructed"
+        / "facets"
+        / f"{case_index}.vtp"
     )
     return _segments_from_polydata(_read_polydata(facet_path))
 
@@ -1057,7 +1100,12 @@ def _load_reconstructed_segments_and_endpoints(
     save_name: str, case_index: int
 ) -> tuple[np.ndarray, np.ndarray]:
     facet_path = (
-        PLOTS_ROOT / save_name / "vtk" / "reconstructed" / "facets" / f"{case_index}.vtp"
+        PLOTS_ROOT
+        / save_name
+        / "vtk"
+        / "reconstructed"
+        / "facets"
+        / f"{case_index}.vtp"
     )
     poly = _read_polydata(facet_path)
     return _segments_from_polydata(poly), _facet_endpoints_from_polydata(poly)
@@ -1071,7 +1119,12 @@ def _load_reconstructed_plot_geometry(
     mesh_segments: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     facet_path = (
-        PLOTS_ROOT / save_name / "vtk" / "reconstructed" / "facets" / f"{case_index}.vtp"
+        PLOTS_ROOT
+        / save_name
+        / "vtk"
+        / "reconstructed"
+        / "facets"
+        / f"{case_index}.vtp"
     )
     poly = _read_polydata(facet_path)
     metadata = _read_facet_metadata(facet_path)
@@ -1132,7 +1185,16 @@ def _compute_view_bounds(
     )
 
 
-def _add_segments(ax, segments: np.ndarray, *, color: str, linewidth: float, alpha: float = 1.0, linestyle: str | tuple = "-", zorder: int = 1):
+def _add_segments(
+    ax,
+    segments: np.ndarray,
+    *,
+    color: str,
+    linewidth: float,
+    alpha: float = 1.0,
+    linestyle: str | tuple = "-",
+    zorder: int = 1,
+):
     if len(segments) == 0:
         return
     coll = LineCollection(
@@ -1182,7 +1244,14 @@ def _add_corner_markers(
         )
 
 
-def _add_fill_patch(ax, vertices: np.ndarray, *, facecolor: str = FLUID_FILL_COLOR, alpha: float = FLUID_FILL_ALPHA, zorder: int = 0):
+def _add_fill_patch(
+    ax,
+    vertices: np.ndarray,
+    *,
+    facecolor: str = FLUID_FILL_COLOR,
+    alpha: float = FLUID_FILL_ALPHA,
+    zorder: int = 0,
+):
     if len(vertices) < 3:
         return
     patch = PolygonPatch(
@@ -1308,7 +1377,13 @@ def _add_true_region_fill(
         return
 
 
-def _generate_quantitative_panel(exp_name: str, exp_data: dict, methods: list[str], metrics: tuple[str, str], out_path: Path):
+def _generate_quantitative_panel(
+    exp_name: str,
+    exp_data: dict,
+    methods: list[str],
+    metrics: tuple[str, str],
+    out_path: Path,
+):
     metric_left, metric_right = metrics
     filtered = {algo: exp_data[algo] for algo in methods if algo in exp_data}
     wiggle_curves = {}
@@ -1410,6 +1485,15 @@ def _generate_resolution_quantitative_panel(
         if (curves := curve_builder(filtered, metric))
     }
 
+    if exp_name in RESOLUTION_BREAK_SPECS:
+        _generate_broken_resolution_quantitative_panel(
+            exp_name,
+            metrics,
+            resolution_curves,
+            out_path,
+        )
+        return
+
     fig, axes = plt.subplots(1, 2, figsize=(7.05, 2.95))
     legend_entries = {}
     for ax, metric in zip(axes, metrics):
@@ -1484,7 +1568,7 @@ def _generate_resolution_quantitative_panel(
             list(legend_entries.values()),
             list(legend_entries.keys()),
             loc="upper center",
-            ncol=min(2, len(legend_entries)),
+            ncol=min(3, len(legend_entries)),
             frameon=False,
             bbox_to_anchor=(0.5, 1.01),
             columnspacing=0.9,
@@ -1495,7 +1579,107 @@ def _generate_resolution_quantitative_panel(
     plt.close(fig)
 
 
-def _inset_bounds(exp_name: str, spec: dict) -> tuple[float, float, float, float] | None:
+def _generate_broken_resolution_quantitative_panel(
+    exp_name: str,
+    metrics: tuple[str, str],
+    resolution_curves: dict,
+    out_path: Path,
+) -> None:
+    limits = RESOLUTION_BREAK_SPECS[exp_name]
+    fig = plt.figure(figsize=(7.05, 3.45))
+    grid = fig.add_gridspec(
+        2,
+        2,
+        height_ratios=(1.75, 0.62),
+        hspace=0.06,
+        wspace=0.34,
+    )
+    axes = []
+    legend_entries = {}
+    for column, metric in enumerate(metrics):
+        upper = fig.add_subplot(grid[0, column])
+        lower = fig.add_subplot(grid[1, column], sharex=upper)
+        curves = resolution_curves.get(metric)
+        if not curves:
+            upper.set_axis_off()
+            lower.set_axis_off()
+            continue
+        for axis, window in ((upper, limits["upper"]), (lower, limits["lower"])):
+            _draw_method_curves(
+                axis,
+                curves,
+                metric,
+                x_label="",
+                x_mode="resolution",
+                exp_name=exp_name,
+                y_window=window,
+            )
+            apply_paper_metric_axis_style(
+                axis,
+                metric,
+                "resolution",
+                markers_by_label=MARKERS_BY_LABEL,
+            )
+            axis.set_ylabel("")
+        upper.set_ylim(*limits["upper"])
+        lower.set_ylim(*limits["lower"])
+        upper.set_title(
+            f"{metric.replace('_', ' ').title()} vs cells per side",
+            fontweight="normal",
+        )
+        lower.set_xlabel(r"Cells per side, $N$")
+        draw_log_axis_break_marks(upper, lower)
+        for axis in (upper, lower):
+            handles, labels = axis.get_legend_handles_labels()
+            for handle, label in zip(handles, labels):
+                if label and not label.startswith("_") and label not in legend_entries:
+                    legend_entries[label] = handle
+        axes.extend((upper, lower))
+
+    active_axes = [axis for axis in axes if axis.axison]
+    if active_axes:
+        xmin = min(axis.get_xlim()[0] for axis in active_axes)
+        xmax = max(axis.get_xlim()[1] for axis in active_axes)
+        for axis in active_axes:
+            axis.set_xlim(xmin, xmax)
+
+    if legend_entries:
+        fig.legend(
+            list(legend_entries.values()),
+            list(legend_entries.keys()),
+            loc="upper center",
+            ncol=min(2, len(legend_entries)),
+            frameon=False,
+            bbox_to_anchor=(0.5, 1.0),
+            columnspacing=0.9,
+            handletextpad=0.4,
+        )
+    fig.subplots_adjust(left=0.10, right=0.985, bottom=0.15, top=0.77)
+    fig.canvas.draw()
+    for column, metric in enumerate(metrics):
+        upper = axes[2 * column]
+        lower = axes[2 * column + 1]
+        bounds = [upper.get_position(), lower.get_position()]
+        x = min(bound.x0 for bound in bounds) - 0.055
+        y = 0.5 * (
+            min(bound.y0 for bound in bounds) + max(bound.y1 for bound in bounds)
+        )
+        fig.text(
+            x,
+            y,
+            PAPER_METRIC_LABELS.get(metric, metric.replace("_", " ").title()),
+            rotation=90,
+            ha="center",
+            va="center",
+            fontsize=8.5,
+        )
+    _save_figure(fig, out_path)
+    plt.close(fig)
+
+
+def _inset_bounds(
+    exp_name: str, spec: dict
+) -> tuple[float, float, float, float] | None:
     override_bounds = spec.get("inset_bounds")
     if override_bounds is not None:
         return tuple(float(v) for v in override_bounds)
@@ -2070,7 +2254,9 @@ def _generate_representative_figure(
         x0, x1, y0, y1 = _segments_bounds(mesh_segments)
         true_segments = _line_true_segments(spec["case_index"], (x0, x1, y0, y1))
     else:
-        true_segments = _load_true_segments(exp_name, base_save_name, spec["case_index"])
+        true_segments = _load_true_segments(
+            exp_name, base_save_name, spec["case_index"]
+        )
         x0, x1, y0, y1 = _compute_view_bounds(
             true_segments,
             min_span=spec["min_span"],
@@ -2081,9 +2267,7 @@ def _generate_representative_figure(
     fig_width = 10.4 if has_spyglass else 8.2
     fig, axes = plt.subplots(2, 2, figsize=(fig_width, 7.6))
     flat_axes = axes.ravel()
-    for panel_index, (ax, (algo, title)) in enumerate(
-        zip(flat_axes, spec["methods"])
-    ):
+    for panel_index, (ax, (algo, title)) in enumerate(zip(flat_axes, spec["methods"])):
         panel_spec = _panel_spyglass_spec(spec, panel_index % 2)
         save_name = _prefixed_save_name(
             exp_name,
@@ -2175,7 +2359,9 @@ def _generate_resolution_strip(
         mesh_segments = _mesh_segments(mesh_path)
         if exp_name == "lines":
             x0m, x1m, y0m, y1m = _segments_bounds(mesh_segments)
-            true_segments = _line_true_segments(spec["case_index"], (x0m, x1m, y0m, y1m))
+            true_segments = _line_true_segments(
+                spec["case_index"], (x0m, x1m, y0m, y1m)
+            )
         else:
             true_segments = _load_true_segments(exp_name, save_name, spec["case_index"])
         bounds = _compute_view_bounds(
@@ -2218,7 +2404,9 @@ def _generate_resolution_strip(
 def main():
     global PLOTS_ROOT
 
-    parser = argparse.ArgumentParser(description="Generate Section 6 main-text figures.")
+    parser = argparse.ArgumentParser(
+        description="Generate Section 6 main-text figures."
+    )
     parser.add_argument(
         "--csv",
         type=Path,
@@ -2321,9 +2509,7 @@ def main():
         selected_experiments = list(MAINTEXT_METHODS.keys())
     else:
         selected_experiments = [
-            name.strip()
-            for name in args.experiments.split(",")
-            if name.strip()
+            name.strip() for name in args.experiments.split(",") if name.strip()
         ]
         unknown = sorted(set(selected_experiments) - set(MAINTEXT_METHODS.keys()))
         if unknown:

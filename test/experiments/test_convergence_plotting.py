@@ -4,9 +4,14 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import numpy as np
 import pytest
 
-from experiments.plotting import add_convergence_order_triangle
+from experiments.plotting import (
+    add_convergence_order_triangle,
+    contiguous_true_runs,
+    plot_series_in_y_window,
+)
 
 
 def _log_axes():
@@ -57,4 +62,32 @@ def test_triangle_preserves_limits_and_rejects_linear_axes():
     figure, axis = plt.subplots()
     with pytest.raises(ValueError, match="log-log"):
         add_convergence_order_triangle(axis, 2.0)
+    plt.close(figure)
+
+
+def test_contiguous_true_runs_returns_half_open_ranges():
+    assert contiguous_true_runs([True, True, False, True, False]) == (
+        (0, 2),
+        (3, 4),
+    )
+
+
+def test_windowed_series_does_not_connect_across_omitted_range():
+    figure, axis = plt.subplots()
+    values = np.asarray([1.0e-9, 1.0e-4, 1.0e-3, 2.0e-9])
+    plot_series_in_y_window(
+        axis,
+        np.asarray([1.0, 2.0, 3.0, 4.0]),
+        values,
+        values,
+        values,
+        y_window=(1.0e-10, 1.0e-8),
+        label="method",
+        line_kwargs={"color": "black", "marker": "o"},
+        fill_kwargs={"alpha": 0.0},
+    )
+
+    assert len(axis.lines) == 2
+    assert [line.get_xdata().tolist() for line in axis.lines] == [[1.0], [4.0]]
+    assert [line.get_label() for line in axis.lines] == ["method", "_nolegend_"]
     plt.close(figure)
