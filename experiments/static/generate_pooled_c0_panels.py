@@ -18,10 +18,12 @@ import matplotlib.pyplot as plt
 
 from experiments.submission.generate_revision_layout_prototypes import _trim_for_box
 from experiments.plotting import (
+    add_shared_vertical_metric_label,
     apply_paper_metric_axis_style,
     apply_paper_serif_style,
     draw_log_axis_break_marks,
     paper_markers_by_label,
+    paper_metric_panel_title,
 )
 from experiments.static.generate_pooled_perturbed_panels import _pooled_curves
 from experiments.static.run_perturbed_sweeps import (
@@ -29,7 +31,6 @@ from experiments.static.run_perturbed_sweeps import (
     RESOLUTION_AXIS_LABEL,
     _draw_method_curves,
     _merge_legend_entries,
-    _metric_label,
     _save_figure,
 )
 
@@ -157,7 +158,7 @@ def plot_resolution_panel(data: dict, experiment: str, output: Path) -> None:
                 axis.set_ylim(*y_window)
             _merge_legend_entries(legend_entries, axis)
         panel_axes[0].set_title(
-            _metric_label(metric),
+            paper_metric_panel_title(metric),
             fontsize=10.2,
             fontweight="normal",
         )
@@ -175,18 +176,12 @@ def plot_resolution_panel(data: dict, experiment: str, output: Path) -> None:
             bbox_to_anchor=(0.5, -0.02),
         )
     fig.subplots_adjust(left=0.14, right=0.985, bottom=0.24, top=0.90)
-    fig.canvas.draw()
     for metric in ("hausdorff", "facet_gap"):
         panel_axes = axes_by_metric[metric]
-        bounds = [axis.get_position() for axis in panel_axes]
-        fig.text(
-            min(bound.x0 for bound in bounds) - 0.105,
-            0.5
-            * (min(bound.y0 for bound in bounds) + max(bound.y1 for bound in bounds)),
-            _metric_label(metric),
-            rotation=90,
-            ha="center",
-            va="center",
+        add_shared_vertical_metric_label(
+            fig,
+            panel_axes,
+            metric,
             fontsize=9.8,
         )
     _save_figure(fig, output)
@@ -210,9 +205,9 @@ def build_benchmark_pages(output_dir: Path) -> tuple[Path, Path]:
             representative_dir
             / "ellipses_appendix_c0_representative_with_endpoints.pdf",
             (
-                r"\shortstack{Ours: graph-coordinated\\linear}",
-                r"\shortstack{Ours: graph-coordinated linear\\+ joint $C^0$}",
-                r"\shortstack{Ours: graph-coordinated\\circular}",
+                r"\shortstack{Ours (linear,\\graph-coordinated)}",
+                r"\shortstack{Ours (linear,\\graph-coordinated + joint $C^0$)}",
+                r"\shortstack{Ours (circular,\\graph-coordinated)}",
             ),
         ),
         (
@@ -221,9 +216,9 @@ def build_benchmark_pages(output_dir: Path) -> tuple[Path, Path]:
             representative_dir / "zalesak_appendix_c0_representative_clean.pdf",
             None,
             (
-                r"\shortstack{Ours: graph-coordinated\\circular}",
-                r"\shortstack{Ours: graph-coordinated circular\\+ joint $C^0$}",
-                r"\shortstack{Ours: graph-coordinated\\circular + corners}",
+                r"\shortstack{Ours (circular,\\graph-coordinated)}",
+                r"\shortstack{Ours (circular,\\graph-coordinated + joint $C^0$)}",
+                r"\shortstack{Ours (circular + corners,\\graph-coordinated)}",
             ),
         ),
     )

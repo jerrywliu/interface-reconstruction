@@ -23,6 +23,7 @@ import matplotlib as mpl
 import numpy as np
 
 from experiments.plotting import (
+    PAPER_METRIC_LABELS,
     PAPER_METHOD_COLORS,
     PAPER_METHOD_LINESTYLES,
     plot_series_in_y_window,
@@ -82,13 +83,15 @@ DISPLAY_LABELS = {
     "LVIRA": "LVIRA",
     "safe_linear": "Ours (linear, per-cell)",
     "linear": "Ours (linear, graph-coordinated)",
-    "linear+C0": "Ours (linear, graph-coordinated + joint C0)",
+    "linear+C0": r"Ours (linear, graph-coordinated + joint $C^0$)",
     "linear+corner": "Ours (linear + corners, graph-coordinated)",
     "safe_circle": "Ours (circular, per-cell)",
     "circular": "Ours (circular, graph-coordinated)",
-    "circular+C0": "Ours (circular, graph-coordinated + joint C0)",
+    "circular+C0": r"Ours (circular, graph-coordinated + joint $C^0$)",
     "circular+corner": "Ours (circular + corners, graph-coordinated)",
-    "circular+corner+C0": ("Ours (circular + corners, graph-coordinated + joint C0)"),
+    "circular+corner+C0": (
+        r"Ours (circular + corners, graph-coordinated + joint $C^0$)"
+    ),
 }
 
 METHOD_STYLES = {
@@ -109,13 +112,7 @@ for _method, _style in METHOD_STYLES.items():
     _style["color"] = PAPER_METHOD_COLORS[_method]
     _style["linestyle"] = PAPER_METHOD_LINESTYLES[_method]
 
-METRIC_LABELS = {
-    "hausdorff": "Hausdorff",
-    "facet_gap": "Facet Gap",
-    "curvature_error": "Curvature Error",
-    "tangent_error": "Tangent Error",
-    "area_error": "Area Error",
-}
+METRIC_LABELS = {**PAPER_METRIC_LABELS, "area_error": "Area error"}
 
 PERTURBATION_AXIS_LABEL = "Perturbation magnitude"
 RESOLUTION_AXIS_LABEL = "Cells per side, N"

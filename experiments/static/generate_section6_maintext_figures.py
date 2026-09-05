@@ -51,12 +51,13 @@ from experiments.static.run_perturbed_sweeps import (
     _make_save_name,
 )
 from experiments.plotting import (
-    PAPER_METRIC_LABELS,
     add_convergence_order_triangle,
+    add_shared_vertical_metric_label,
     apply_paper_metric_axis_style,
     apply_paper_serif_style,
     draw_log_axis_break_marks,
     paper_markers_by_label,
+    paper_metric_panel_title,
     readable_resolution_ticks,
 )
 from experiments.static.zalesak import (
@@ -1526,7 +1527,7 @@ def _generate_resolution_quantitative_panel(
             markers_by_label=MARKERS_BY_LABEL,
         )
         ax.set_title(
-            f"{metric.replace('_', ' ').title()} vs cells per side",
+            paper_metric_panel_title(metric, x_phrase="cells per side"),
             fontweight="normal",
         )
         handles, labels = ax.get_legend_handles_labels()
@@ -1573,7 +1574,7 @@ def _generate_resolution_quantitative_panel(
             list(legend_entries.values()),
             list(legend_entries.keys()),
             loc="upper center",
-            ncol=min(3, len(legend_entries)),
+            ncol=2 if exp_name == "ellipses" else min(3, len(legend_entries)),
             frameon=False,
             bbox_to_anchor=(0.5, 1.01),
             columnspacing=0.9,
@@ -1633,7 +1634,7 @@ def _generate_broken_resolution_quantitative_panel(
         upper.set_ylim(*metric_limits["upper"])
         lower.set_ylim(*metric_limits["lower"])
         upper.set_title(
-            f"{metric.replace('_', ' ').title()} vs cells per side",
+            paper_metric_panel_title(metric, x_phrase="cells per side"),
             fontweight="normal",
         )
         lower.set_xlabel(r"Cells per side, $N$")
@@ -1663,23 +1664,19 @@ def _generate_broken_resolution_quantitative_panel(
             columnspacing=0.9,
             handletextpad=0.4,
         )
-    fig.subplots_adjust(left=0.15, right=0.985, bottom=0.15, top=0.77)
-    fig.canvas.draw()
+    fig.subplots_adjust(
+        left=0.15,
+        right=0.985,
+        bottom=0.15,
+        top=0.70 if exp_name == "circles" else 0.77,
+    )
     for column, metric in enumerate(metrics):
         upper = axes[2 * column]
         lower = axes[2 * column + 1]
-        bounds = [upper.get_position(), lower.get_position()]
-        x = min(bound.x0 for bound in bounds) - 0.105
-        y = 0.5 * (
-            min(bound.y0 for bound in bounds) + max(bound.y1 for bound in bounds)
-        )
-        fig.text(
-            x,
-            y,
-            PAPER_METRIC_LABELS.get(metric, metric.replace("_", " ").title()),
-            rotation=90,
-            ha="center",
-            va="center",
+        add_shared_vertical_metric_label(
+            fig,
+            (upper, lower),
+            metric,
             fontsize=9.8,
         )
     _save_figure(fig, out_path)

@@ -16,8 +16,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from experiments.plotting import (
-    PAPER_METRIC_LABELS,
     add_convergence_order_triangle,
+    add_shared_vertical_metric_label,
+    align_axes_below_figure_legend,
     apply_paper_metric_axis_style,
     apply_paper_serif_style,
     draw_log_axis_break_marks,
@@ -230,7 +231,7 @@ def _plot_grid(
 
     exp_data = data[experiment]
     rows = len(metrics)
-    figure_size = (7.05, 5.35) if rows == 2 else (7.05, 9.5)
+    figure_size = (7.05, 5.35) if rows == 2 else (7.05, 7.75)
     fig, axes = plt.subplots(rows, 2, figsize=figure_size, sharex="col")
     if rows == 1:
         axes = np.asarray([axes])
@@ -304,8 +305,9 @@ def _plot_grid(
                 fontsize=10.6 if dense_panel else 8.6,
             )
 
+    legend = None
     if legend_entries:
-        fig.legend(
+        legend = fig.legend(
             list(legend_entries.values()),
             list(legend_entries.keys()),
             loc="upper center",
@@ -316,7 +318,17 @@ def _plot_grid(
             handletextpad=0.4,
             fontsize=10.6 if dense_panel else 8.5,
         )
-    fig.tight_layout(rect=[0.02, 0, 1, 0.90], h_pad=0.9, w_pad=1.4)
+    fig.tight_layout(
+        rect=[0.02, 0, 1, 0.90],
+        h_pad=0.7 if dense_panel else 0.9,
+        w_pad=1.0 if dense_panel else 1.4,
+    )
+    if legend is not None:
+        align_axes_below_figure_legend(
+            fig,
+            legend,
+            [axis for row_axes in axes for axis in row_axes],
+        )
     _save_figure(fig, output)
     plt.close(fig)
 
@@ -347,14 +359,14 @@ def _plot_broken_grid(
             row_specs.append((None, "spacer"))
             height_ratios.append(0.20)
 
-    figure_size = (7.05, 6.55) if len(metrics) == 2 else (7.05, 9.9)
+    figure_size = (7.05, 6.55) if len(metrics) == 2 else (7.05, 7.75)
     fig = plt.figure(figsize=figure_size)
     grid = fig.add_gridspec(
         len(row_specs),
         2,
         height_ratios=height_ratios,
         hspace=0.08,
-        wspace=0.27,
+        wspace=0.22,
     )
     axes_by_metric = {}
     legend_entries = {}
@@ -447,8 +459,9 @@ def _plot_broken_grid(
                 fontsize=10.6 if dense_panel else 8.6,
             )
 
+    legend = None
     if legend_entries:
-        fig.legend(
+        legend = fig.legend(
             list(legend_entries.values()),
             list(legend_entries.keys()),
             loc="upper center",
@@ -460,24 +473,24 @@ def _plot_broken_grid(
             fontsize=10.6 if dense_panel else 8.5,
         )
     fig.subplots_adjust(
-        left=0.14,
+        left=0.125,
         right=0.985,
         bottom=0.07,
-        top=0.82 if dense_panel else 0.84,
+        top=0.84,
     )
-    fig.canvas.draw()
+    if legend is not None:
+        align_axes_below_figure_legend(
+            fig,
+            legend,
+            [axis for bands in axes_by_metric.values() for axes in bands.values() for axis in axes],
+        )
     for metric in metrics:
         bands = axes_by_metric[metric]
         left_axes = [axes[0] for axes in bands.values()]
-        bottom = min(axis.get_position().y0 for axis in left_axes)
-        top = max(axis.get_position().y1 for axis in left_axes)
-        fig.text(
-            0.022,
-            0.5 * (bottom + top),
-            PAPER_METRIC_LABELS.get(metric, metric.replace("_", " ").title()),
-            rotation=90,
-            ha="center",
-            va="center",
+        add_shared_vertical_metric_label(
+            fig,
+            left_axes,
+            metric,
             fontsize=12.0 if dense_panel else 9.8,
         )
     _save_figure(fig, output)

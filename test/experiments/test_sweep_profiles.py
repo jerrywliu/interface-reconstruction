@@ -70,5 +70,5 @@ def test_final_namespace_and_approved_circular_labels():
     )
 
     assert spec["save_name"].startswith("submission_20260730_perturb_sweep_")
-    assert DISPLAY_LABELS["safe_circle"] == "Ours (circular, independent cells)"
-    assert DISPLAY_LABELS["circular"] == "Ours (circular, topology + merging)"
+    assert DISPLAY_LABELS["safe_circle"] == "Ours (circular, per-cell)"
+    assert DISPLAY_LABELS["circular"] == "Ours (circular, graph-coordinated)"

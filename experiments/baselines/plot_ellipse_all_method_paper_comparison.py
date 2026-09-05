@@ -65,21 +65,21 @@ PAPER_METHOD_SPECS = (
     },
     {
         "id": "ours_per_cell",
-        "label": "Ours (per-cell)",
+        "label": "Ours (circular, per-cell)",
         "linestyle": "--",
         "linewidth": 1.9,
         "marker": "^",
     },
     {
         "id": "ours_graph",
-        "label": "Ours (graph-coordinated)",
+        "label": "Ours (circular, graph-coordinated)",
         "linestyle": "-",
         "linewidth": 2.3,
         "marker": "v",
     },
     {
         "id": "ours_c0",
-        "label": "Ours (graph-coordinated + joint C0)",
+        "label": r"Ours (circular, graph-coordinated + joint $C^0$)",
         "linestyle": ":",
         "linewidth": 2.5,
         "marker": "P",
@@ -139,8 +139,8 @@ PAPER_METHODS = paper_methods()
 ERROR_PANELS = (
     (
         "native_symmetric_hausdorff",
-        "(a) Native Hausdorff",
-        "Native Hausdorff",
+        "(a) Hausdorff error",
+        "Hausdorff error",
         3.0,
         (0.10, 0.32),
     ),
@@ -153,8 +153,8 @@ ERROR_PANELS = (
     ),
     (
         "facet_gap",
-        "(c) Facet gap",
-        "Facet gap",
+        "(c) Facet-gap error",
+        "Facet-gap error",
         3.0,
         (0.70, 0.54),
     ),
@@ -731,7 +731,10 @@ def inspect_pdf_document(pdf_path: Path) -> dict[str, Any]:
         text=True,
         timeout=30,
     ).stdout
-    required_labels = [method["label"] for method in PAPER_METHODS]
+    extracted_text = extracted_text.replace("C 0", "C0")
+    required_labels = [
+        method["label"].replace(r"$C^0$", "C0") for method in PAPER_METHODS
+    ]
     missing_labels = [label for label in required_labels if label not in extracted_text]
     prohibited_labels = ["topology + merging", "independent cells"]
     present_prohibited = [

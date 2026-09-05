@@ -15,8 +15,8 @@ def test_circle_paper_figure_reuses_exact_ellipse_style_contract():
     assert ellipse.ERROR_PANELS == (
         (
             "native_symmetric_hausdorff",
-            "(a) Native Hausdorff",
-            "Native Hausdorff",
+            "(a) Hausdorff error",
+            "Hausdorff error",
             3.0,
             (0.10, 0.32),
         ),
@@ -27,7 +27,13 @@ def test_circle_paper_figure_reuses_exact_ellipse_style_contract():
             1.0,
             (0.45, 0.66),
         ),
-        ("facet_gap", "(c) Facet gap", "Facet gap", 3.0, (0.70, 0.54)),
+        (
+            "facet_gap",
+            "(c) Facet-gap error",
+            "Facet-gap error",
+            3.0,
+            (0.70, 0.54),
+        ),
     )
     assert tuple(method["id"] for method in ellipse.PAPER_METHODS) == (
         "plvira",

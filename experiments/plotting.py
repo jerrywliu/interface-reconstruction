@@ -8,6 +8,8 @@ from typing import Literal, Mapping, Optional, Sequence, Tuple
 
 import matplotlib as mpl
 from matplotlib.axes import Axes
+from matplotlib.figure import Figure
+from matplotlib.legend import Legend
 from matplotlib.lines import Line2D
 from matplotlib.text import Text
 from matplotlib.ticker import NullFormatter
@@ -93,6 +95,93 @@ PAPER_METRIC_LABELS = {
     "curvature_error": "Curvature MAE",
     "tangent_error": "Tangent error",
 }
+
+
+def paper_metric_panel_title(metric: str, *, x_phrase: Optional[str] = None) -> str:
+    """Return the manuscript-facing metric title used above plot panels."""
+
+    label = PAPER_METRIC_LABELS.get(metric, metric.replace("_", " ").title())
+    return f"{label} vs {x_phrase}" if x_phrase else label
+
+
+def add_shared_vertical_metric_label(
+    figure: Figure,
+    axes: Sequence[Axes],
+    metric: str,
+    *,
+    fontsize: float,
+    gap_points: float = 5.0,
+) -> Text:
+    """Place one vertical label a fixed visual gap left of y tick labels."""
+
+    visible_axes = [axis for axis in axes if axis.axison]
+    if not visible_axes:
+        raise ValueError("at least one visible axis is required")
+
+    figure.canvas.draw()
+    renderer = figure.canvas.get_renderer()
+    tick_boxes = [
+        tick.get_window_extent(renderer)
+        for axis in visible_axes
+        for tick in axis.get_yticklabels()
+        if tick.get_visible() and tick.get_text()
+    ]
+    if not tick_boxes:
+        raise ValueError("shared metric labels require visible y tick labels")
+
+    bottom = min(axis.get_position().y0 for axis in visible_axes)
+    top = max(axis.get_position().y1 for axis in visible_axes)
+    label = figure.text(
+        0.0,
+        0.5 * (bottom + top),
+        PAPER_METRIC_LABELS.get(metric, metric.replace("_", " ").title()),
+        rotation=90,
+        ha="center",
+        va="center",
+        fontsize=fontsize,
+    )
+    figure.canvas.draw()
+    label_box = label.get_window_extent(renderer)
+    tick_left = min(box.x0 for box in tick_boxes)
+    gap_pixels = gap_points * figure.dpi / 72.0
+    label_center = tick_left - gap_pixels - 0.5 * label_box.width
+    label.set_x((label_center - figure.bbox.x0) / figure.bbox.width)
+    return label
+
+
+def align_axes_below_figure_legend(
+    figure: Figure,
+    legend: Legend,
+    axes: Sequence[Axes],
+    *,
+    gap_points: float = 7.0,
+) -> None:
+    """Set a consistent visual gap between a figure legend and top titles."""
+
+    visible_axes = [axis for axis in axes if axis.axison]
+    if not visible_axes:
+        raise ValueError("at least one visible axis is required")
+
+    for _ in range(2):
+        figure.canvas.draw()
+        renderer = figure.canvas.get_renderer()
+        legend_bottom = legend.get_window_extent(renderer).y0
+        content_top = max(
+            (
+                axis.title.get_window_extent(renderer).y1
+                if axis.title.get_visible() and axis.title.get_text()
+                else axis.get_window_extent(renderer).y1
+            )
+            for axis in visible_axes
+        )
+        gap_pixels = gap_points * figure.dpi / 72.0
+        adjustment = (content_top + gap_pixels - legend_bottom) / figure.bbox.height
+        if abs(adjustment) < 1.0e-4:
+            break
+        new_top = figure.subplotpars.top - adjustment
+        if not figure.subplotpars.bottom < new_top < 1.0:
+            raise ValueError("legend spacing leaves no valid subplot region")
+        figure.subplots_adjust(top=new_top)
 
 
 def apply_paper_serif_style() -> None:
