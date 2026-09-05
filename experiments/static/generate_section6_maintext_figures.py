@@ -53,6 +53,7 @@ from experiments.static.run_perturbed_sweeps import (
 from experiments.plotting import (
     add_convergence_order_triangle,
     add_shared_vertical_metric_label,
+    align_axes_below_figure_legend,
     apply_paper_metric_axis_style,
     apply_paper_serif_style,
     draw_log_axis_break_marks,
@@ -120,6 +121,11 @@ RESOLUTION_BREAK_SPECS = {
     },
 }
 
+MAIN_RESOLUTION_LEGEND_GAP_POINTS = {
+    "lines": 5.0,
+    "circles": 11.0,
+}
+
 REPRESENTATIVE_CASES = {
     "lines": {
         "resolution": 0.32,
@@ -180,7 +186,7 @@ REPRESENTATIVE_CASES = {
         ],
         "min_span": 66.0,
         "margin_frac": 0.12,
-        "inset": None,
+        "inset": {"kind": "ellipse_curvature_tip", "half_span": 5.0},
     },
     "zalesak": {
         "resolution": 1.00,
@@ -1569,8 +1575,9 @@ def _generate_resolution_quantitative_panel(
             width=0.12,
         )
 
+    legend = None
     if legend_entries:
-        fig.legend(
+        legend = fig.legend(
             list(legend_entries.values()),
             list(legend_entries.keys()),
             loc="upper center",
@@ -1581,6 +1588,13 @@ def _generate_resolution_quantitative_panel(
             handletextpad=0.4,
         )
     fig.tight_layout(rect=[0.02, 0.04, 1, 0.79], w_pad=1.4)
+    if legend is not None:
+        align_axes_below_figure_legend(
+            fig,
+            legend,
+            active_axes,
+            gap_points=MAIN_RESOLUTION_LEGEND_GAP_POINTS.get(exp_name, 7.0),
+        )
     _save_figure(fig, out_path)
     plt.close(fig)
 
@@ -1653,8 +1667,9 @@ def _generate_broken_resolution_quantitative_panel(
         for axis in active_axes:
             axis.set_xlim(xmin, xmax)
 
+    legend = None
     if legend_entries:
-        fig.legend(
+        legend = fig.legend(
             list(legend_entries.values()),
             list(legend_entries.keys()),
             loc="upper center",
@@ -1670,6 +1685,13 @@ def _generate_broken_resolution_quantitative_panel(
         bottom=0.15,
         top=0.70 if exp_name == "circles" else 0.77,
     )
+    if legend is not None:
+        align_axes_below_figure_legend(
+            fig,
+            legend,
+            active_axes,
+            gap_points=MAIN_RESOLUTION_LEGEND_GAP_POINTS.get(exp_name, 7.0),
+        )
     for column, metric in enumerate(metrics):
         upper = axes[2 * column]
         lower = axes[2 * column + 1]
@@ -1722,6 +1744,19 @@ def _inset_bounds(
             float(corner[0] + half_span),
             float(corner[1] - half_span),
             float(corner[1] + half_span),
+        )
+    if inset_spec["kind"] == "ellipse_curvature_tip":
+        params = _ellipse_case_params(case_index)
+        direction = np.asarray(
+            [math.cos(params["theta"]), math.sin(params["theta"])], dtype=float
+        )
+        center = params["center"] + params["major_axis"] * direction
+        half_span = float(inset_spec.get("half_span", 5.0))
+        return (
+            float(center[0] - half_span),
+            float(center[0] + half_span),
+            float(center[1] - half_span),
+            float(center[1] + half_span),
         )
     return None
 

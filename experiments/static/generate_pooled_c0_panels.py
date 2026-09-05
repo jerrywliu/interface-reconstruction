@@ -246,14 +246,14 @@ def build_benchmark_pages(output_dir: Path) -> tuple[Path, Path]:
                 zoom_trim = _trim_for_box(zoom_source, ellipse_zoom_boxes[index])
                 representative_cells.append(
                     rf"\begin{{minipage}}[t]{{2.28in}}\centering"
-                    rf"\fontsize{{8.5}}{{9.2}}\selectfont {label}\\[4pt]"
+                    rf"\fontsize{{8.5}}{{9.2}}\selectfont {label}\\[7pt]"
                     rf"\zoomcell{{{representatives}}}{{{main_trim}}}"
                     rf"{{{zoom_source}}}{{{zoom_trim}}}\end{{minipage}}"
                 )
             else:
                 representative_cells.append(
                     rf"\begin{{minipage}}[t]{{2.28in}}\centering"
-                    rf"\fontsize{{8.5}}{{9.2}}\selectfont {label}\\[4pt]"
+                    rf"\fontsize{{8.5}}{{9.2}}\selectfont {label}\\[7pt]"
                     rf"\includegraphics[width=2.28in,trim={{{main_trim}}},clip]"
                     rf"{{{representatives}}}\end{{minipage}}"
                 )

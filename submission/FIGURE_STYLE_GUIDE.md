@@ -46,6 +46,8 @@ Use `Mixed-cell coverage` rather than a shortened coverage label when the panel 
 - Axis labels and panel titles must be at least 8 pt at final manuscript size.
 - Shared vertical metric labels use a 5 pt visible gap from the left edge of the y-axis tick labels.
 - Figure legends use a 7 pt visible gap above the topmost panel title.
+- Figure 10 uses a 5 pt legend gap, Figure 12 uses an 11 pt gap, and Figure B.18 uses a 4 pt gap to account for their different legend row counts and panel density.
+- Figure B.22 uses a 3 pt shared-label gap because its compact broken-axis layout otherwise leaves excessive white space.
 - Dense appendix grids should use the available text width and should not be shrunk by a LaTeX height constraint.
 - Legend rows may change by figure, but their order and label wording must not change.
 

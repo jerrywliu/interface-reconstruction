@@ -1,6 +1,8 @@
 import numpy as np
 
 from experiments.static.generate_section6_maintext_figures import (
+    MAIN_RESOLUTION_LEGEND_GAP_POINTS,
+    REPRESENTATIVE_CASES,
     RESOLUTION_QUANT_SPECS,
     _build_pooled_method_curves_by_resolution,
     _generate_resolution_quantitative_panel,
@@ -12,6 +14,14 @@ def test_circle_maintext_uses_facet_gap():
         "hausdorff",
         "facet_gap",
     )
+
+
+def test_maintext_layout_exceptions_and_ellipse_spyglass_are_explicit():
+    assert MAIN_RESOLUTION_LEGEND_GAP_POINTS == {"lines": 5.0, "circles": 11.0}
+    assert REPRESENTATIVE_CASES["ellipses"]["inset"] == {
+        "kind": "ellipse_curvature_tip",
+        "half_span": 5.0,
+    }
 
 
 def test_pooled_resolution_curves_use_all_case_values():

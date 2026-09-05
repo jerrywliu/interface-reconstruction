@@ -98,6 +98,9 @@ BREAK_SPECS = {
     },
 }
 
+POOLED_LEGEND_GAP_POINTS = {"circles": 4.0}
+POOLED_METRIC_LABEL_GAP_POINTS = {"zalesak": 3.0}
+
 
 def _native_curvature_lookup(path: Path) -> dict[tuple, float]:
     values = {}
@@ -483,6 +486,7 @@ def _plot_broken_grid(
             fig,
             legend,
             [axis for bands in axes_by_metric.values() for axes in bands.values() for axis in axes],
+            gap_points=POOLED_LEGEND_GAP_POINTS.get(experiment, 7.0),
         )
     for metric in metrics:
         bands = axes_by_metric[metric]
@@ -492,6 +496,7 @@ def _plot_broken_grid(
             left_axes,
             metric,
             fontsize=12.0 if dense_panel else 9.8,
+            gap_points=POOLED_METRIC_LABEL_GAP_POINTS.get(experiment, 5.0),
         )
     _save_figure(fig, output)
     plt.close(fig)

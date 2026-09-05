@@ -5,6 +5,8 @@ from experiments.plotting import PAPER_SERIF_RCPARAMS
 from experiments.static.generate_pooled_perturbed_panels import (
     MARKERS_BY_LABEL,
     ORDER_TRIANGLE_ANCHORS,
+    POOLED_LEGEND_GAP_POINTS,
+    POOLED_METRIC_LABEL_GAP_POINTS,
     _pooled_curves,
 )
 
@@ -48,3 +50,5 @@ def test_approved_paper_style_is_shared_with_appendix_generator():
         },
         "ellipses": {"facet_gap": (0.72, 0.36)},
     }
+    assert POOLED_LEGEND_GAP_POINTS == {"circles": 4.0}
+    assert POOLED_METRIC_LABEL_GAP_POINTS == {"zalesak": 3.0}
