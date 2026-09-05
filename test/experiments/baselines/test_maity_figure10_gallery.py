@@ -49,13 +49,16 @@ def test_gallery_roster_uses_approved_paper_colors_and_unchanged_variants():
 
 
 def test_expected_pdf_deliverable_names_are_unique():
-    names = ["maity_figure10_all_methods_gallery.pdf"]
+    names = [
+        "maity_figure10_all_methods_gallery.pdf",
+        "maity_figure10_all_methods_gallery_no_endpoints_2col.pdf",
+    ]
     names.extend(
         f"maity_fig10_{method['id']}_N{resolution}.pdf"
         for method in gallery.METHODS
         for resolution in gallery.SOURCE_RESOLUTIONS
     )
 
-    assert len(names) == 13
-    assert len(set(names)) == 13
+    assert len(names) == 14
+    assert len(set(names)) == 14
     assert all(Path(name).suffix == ".pdf" for name in names)

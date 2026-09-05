@@ -587,6 +587,7 @@ def _style_axis(
     primitives: Sequence[ExternalPrimitive],
     summary: Mapping[str, Any],
     title: str,
+    endpoints: bool = True,
 ) -> None:
     _plot_grid(axis, resolution)
     _plot_primitives(
@@ -606,7 +607,7 @@ def _style_axis(
         color=str(method["color"]),
         linestyle=method["linestyle"],
         linewidth=1.25,
-        endpoints=True,
+        endpoints=endpoints,
         zorder=2,
     )
     axis.set_xlim(0.0, 1.0)
@@ -758,6 +759,82 @@ def _save_gallery(
     return pdf, png
 
 
+def _save_two_column_gallery_without_endpoints(
+    output: Path,
+    case: ProjectBenchmarkCase,
+    loaded: Mapping[tuple[str, int], Sequence[ExternalPrimitive]],
+    summaries: Mapping[tuple[str, int], Mapping[str, Any]],
+) -> tuple[Path, Path]:
+    truth = case.truth_primitives()
+    with mpl.rc_context():
+        apply_paper_serif_style()
+        mpl.rcParams.update(
+            {
+                "axes.titlesize": 8.2,
+                "xtick.labelsize": 7.0,
+                "ytick.labelsize": 7.0,
+            }
+        )
+        figure, axes = plt.subplots(
+            len(METHODS),
+            len(SOURCE_RESOLUTIONS),
+            figsize=(7.25, 17.4),
+            squeeze=False,
+        )
+        panel_letters = iter("abcdefghijkl")
+        for method_index, method in enumerate(METHODS):
+            method_id = str(method["id"])
+            for resolution_index, resolution in enumerate(SOURCE_RESOLUTIONS):
+                axis = axes[method_index, resolution_index]
+                _style_axis(
+                    axis,
+                    method=method,
+                    resolution=resolution,
+                    truth=truth,
+                    primitives=loaded[(method_id, resolution)],
+                    summary=summaries[(method_id, resolution)],
+                    title=(
+                        f"({next(panel_letters)}) {method['gallery_label']}, "
+                        f"$N={resolution}$"
+                    ),
+                    endpoints=False,
+                )
+                if method_index == len(METHODS) - 1:
+                    axis.set_xlabel("$x$", fontsize=8.0)
+                else:
+                    axis.tick_params(labelbottom=False)
+                if resolution_index == 0:
+                    axis.set_ylabel("$y$", fontsize=8.0)
+                else:
+                    axis.tick_params(labelleft=False)
+        figure.suptitle(
+            "Maity et al. Figure 10 ellipse: matched native reconstructions",
+            fontsize=9.6,
+            y=0.997,
+        )
+        figure.text(
+            0.5,
+            0.006,
+            "Unit-square Cartesian grid; dashed black is the exact ellipse; colored curves are native reconstructions.",
+            ha="center",
+            va="bottom",
+            fontsize=7.0,
+            color="#4b5563",
+        )
+        figure.tight_layout(
+            rect=(0.0, 0.018, 1.0, 0.985),
+            pad=0.5,
+            h_pad=0.9,
+            w_pad=0.65,
+        )
+        pdf = output / "maity_figure10_all_methods_gallery_no_endpoints_2col.pdf"
+        png = pdf.with_suffix(".png")
+        figure.savefig(pdf, bbox_inches="tight")
+        figure.savefig(png, bbox_inches="tight", dpi=300)
+        plt.close(figure)
+    return pdf, png
+
+
 def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as stream:
@@ -840,7 +917,7 @@ No reconstruction kernel or method parameter was tuned for this benchmark. The g
 - Cartesian cell boundaries in unit-square source coordinates.
 - Exact analytic ellipse as a dashed black curve.
 - Each method's native reconstructed primitives as colored curves using the approved paper palette.
-- Native primitive endpoints as small open circles.
+- Native primitive endpoints as small open circles in the original overview and separate panels. The two-column overview omits these markers so the reconstructed curves remain unobstructed.
 - Coverage annotations only when a reproduction does not return a facet for every mixed cell.
 
 The gallery does not plot the paper's `E1` area-error aggregate because this task is a representative reconstruction gallery rather than a 100-realization convergence replay.
@@ -857,6 +934,7 @@ The gallery does not plot the paper's `E1` area-error aggregate because this tas
 ## Outputs
 
 - Combined appendix overview: `maity_figure10_all_methods_gallery.pdf`.
+- Two-column overview without endpoint markers: `maity_figure10_all_methods_gallery_no_endpoints_2col.pdf`.
 - Separate method/resolution panels:
 
 {panel_lines}
@@ -937,10 +1015,13 @@ def build(output: Path) -> list[Path]:
             pdfs.append(pdf)
             previews.append(png)
     gallery_pdf, gallery_png = _save_gallery(output, case, loaded, summaries)
-    pdfs.insert(0, gallery_pdf)
-    previews.insert(0, gallery_png)
+    clean_gallery_pdf, clean_gallery_png = _save_two_column_gallery_without_endpoints(
+        output, case, loaded, summaries
+    )
+    pdfs[:0] = [gallery_pdf, clean_gallery_pdf]
+    previews[:0] = [gallery_png, clean_gallery_png]
     readme = _write_readme(
-        output, case, source_reference, fraction_records, rows, pdfs[1:]
+        output, case, source_reference, fraction_records, rows, pdfs[2:]
     )
 
     manifest = {
