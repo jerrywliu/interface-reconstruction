@@ -62,7 +62,7 @@ ORDER_TRIANGLE_ANCHORS = {
         "hausdorff": (0.72, 0.78),
         "facet_gap": (0.72, 0.78),
     },
-    "ellipses": {"facet_gap": (0.65, 0.36)},
+    "ellipses": {"facet_gap": (0.72, 0.36)},
 }
 OUTPUT_NAMES = {
     "lines": "line_reconstruction_perturbed_all_methods_2x2.png",
@@ -75,18 +75,25 @@ MARKERS_BY_LABEL = paper_markers_by_label(DISPLAY_LABELS)
 BREAK_SPECS = {
     "squares": {
         "metrics": {"hausdorff", "facet_gap"},
-        "lower": (2.0e-11, 2.0e-8),
-        "upper": (3.0e-3, 1.2),
+        "ranges": {
+            "hausdorff": {"lower": (2.0e-11, 2.0e-8), "upper": (1.0e-1, 1.2)},
+            "facet_gap": {"lower": (2.0e-11, 2.0e-8), "upper": (3.0e-3, 3.0e-1)},
+        },
     },
     "circles": {
         "metrics": {"hausdorff", "facet_gap", "curvature_error"},
-        "lower": (5.0e-11, 1.0e-8),
-        "upper": (5.0e-5, 3.0e-1),
+        "ranges": {
+            "hausdorff": {"lower": (5.0e-11, 1.0e-8), "upper": (3.0e-3, 3.0e-1)},
+            "facet_gap": {"lower": (5.0e-11, 1.0e-8), "upper": (3.0e-3, 3.0e-1)},
+            "curvature_error": {"lower": (5.0e-11, 1.0e-8), "upper": (5.0e-5, 3.0e-1)},
+        },
     },
     "zalesak": {
         "metrics": {"hausdorff", "facet_gap"},
-        "lower": (1.0e-10, 4.0e-8),
-        "upper": (3.0e-3, 1.2),
+        "ranges": {
+            "hausdorff": {"lower": (1.0e-10, 4.0e-8), "upper": (1.0e-1, 1.2)},
+            "facet_gap": {"lower": (1.0e-10, 4.0e-8), "upper": (3.0e-3, 3.0e-1)},
+        },
     },
 }
 
@@ -309,7 +316,7 @@ def _plot_grid(
             handletextpad=0.4,
             fontsize=10.6 if dense_panel else 8.5,
         )
-    fig.tight_layout(rect=[0, 0, 1, 0.90], h_pad=0.9, w_pad=0.8)
+    fig.tight_layout(rect=[0.02, 0, 1, 0.90], h_pad=0.9, w_pad=1.4)
     _save_figure(fig, output)
     plt.close(fig)
 
@@ -364,7 +371,11 @@ def _plot_broken_grid(
             axis = fig.add_subplot(grid[row, column], sharex=share_axis)
             curves = _pooled_curves(exp_data, metric, axis_name)
             x_mode = "perturbation" if axis_name == "wiggle" else "resolution"
-            y_window = spec[band] if band in {"upper", "lower"} else None
+            y_window = (
+                spec["ranges"][metric][band]
+                if band in {"upper", "lower"}
+                else None
+            )
             _draw_method_curves(
                 axis,
                 curves,
@@ -448,7 +459,12 @@ def _plot_broken_grid(
             handletextpad=0.4,
             fontsize=10.6 if dense_panel else 8.5,
         )
-    fig.subplots_adjust(left=0.105, right=0.985, bottom=0.07, top=0.90)
+    fig.subplots_adjust(
+        left=0.14,
+        right=0.985,
+        bottom=0.07,
+        top=0.82 if dense_panel else 0.84,
+    )
     fig.canvas.draw()
     for metric in metrics:
         bands = axes_by_metric[metric]
@@ -456,7 +472,7 @@ def _plot_broken_grid(
         bottom = min(axis.get_position().y0 for axis in left_axes)
         top = max(axis.get_position().y1 for axis in left_axes)
         fig.text(
-            0.016,
+            0.022,
             0.5 * (bottom + top),
             PAPER_METRIC_LABELS.get(metric, metric.replace("_", " ").title()),
             rotation=90,

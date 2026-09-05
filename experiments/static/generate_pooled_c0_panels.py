@@ -174,13 +174,13 @@ def plot_resolution_panel(data: dict, experiment: str, output: Path) -> None:
             frameon=False,
             bbox_to_anchor=(0.5, -0.02),
         )
-    fig.subplots_adjust(left=0.105, right=0.985, bottom=0.24, top=0.90)
+    fig.subplots_adjust(left=0.14, right=0.985, bottom=0.24, top=0.90)
     fig.canvas.draw()
     for metric in ("hausdorff", "facet_gap"):
         panel_axes = axes_by_metric[metric]
         bounds = [axis.get_position() for axis in panel_axes]
         fig.text(
-            min(bound.x0 for bound in bounds) - 0.055,
+            min(bound.x0 for bound in bounds) - 0.105,
             0.5
             * (min(bound.y0 for bound in bounds) + max(bound.y1 for bound in bounds)),
             _metric_label(metric),
@@ -207,20 +207,23 @@ def build_benchmark_pages(output_dir: Path) -> tuple[Path, Path]:
             "ellipse_joint_c0_comparison",
             ellipse_metrics,
             representative_dir / "ellipses_appendix_c0_representative_clean.pdf",
+            representative_dir
+            / "ellipses_appendix_c0_representative_with_endpoints.pdf",
             (
-                "Graph-coordinated linear",
-                r"Graph-coordinated linear + joint $C^0$",
-                "Graph-coordinated circular",
+                r"\shortstack{Ours: graph-coordinated\\linear}",
+                r"\shortstack{Ours: graph-coordinated linear\\+ joint $C^0$}",
+                r"\shortstack{Ours: graph-coordinated\\circular}",
             ),
         ),
         (
             "zalesak_joint_c0_comparison",
             zalesak_metrics,
             representative_dir / "zalesak_appendix_c0_representative_clean.pdf",
+            None,
             (
-                "Graph-coordinated circular",
-                r"Graph-coordinated circular + joint $C^0$",
-                "Graph-coordinated circular+corner",
+                r"\shortstack{Ours: graph-coordinated\\circular}",
+                r"\shortstack{Ours: graph-coordinated circular\\+ joint $C^0$}",
+                r"\shortstack{Ours: graph-coordinated\\circular + corners}",
             ),
         ),
     )
@@ -229,24 +232,60 @@ def build_benchmark_pages(output_dir: Path) -> tuple[Path, Path]:
         (0.5, 0.04, 1.0, 0.5),
         (0.0, 0.54, 0.5, 1.0),
     )
-    for stem, metrics, representatives, labels in page_specs:
+    ellipse_zoom_boxes = (
+        (0.31, 0.11, 0.44, 0.24),
+        (0.81, 0.11, 0.94, 0.24),
+        (0.31, 0.61, 0.44, 0.74),
+    )
+    for stem, metrics, representatives, zoom_source, labels in page_specs:
         if not representatives.is_file():
             raise FileNotFoundError(
                 f"missing representative panel source: {representatives}"
             )
         representative_cells = []
-        for label, box in zip(labels, panel_boxes):
-            representative_cells.append(
-                rf"\begin{{minipage}}[t]{{2.28in}}\centering"
-                rf"\fontsize{{8.5}}{{9.2}}\selectfont {label}\\[-2pt]"
-                rf"\includegraphics[width=2.28in,trim={{{_trim_for_box(representatives, box)}}},clip]"
-                rf"{{{representatives}}}\end{{minipage}}"
-            )
+        for index, (label, box) in enumerate(zip(labels, panel_boxes)):
+            if zoom_source is None and index == 2:
+                box = (box[0], 0.56, box[2], box[3])
+            main_trim = _trim_for_box(representatives, box)
+            if zoom_source is not None:
+                zoom_trim = _trim_for_box(zoom_source, ellipse_zoom_boxes[index])
+                representative_cells.append(
+                    rf"\begin{{minipage}}[t]{{2.28in}}\centering"
+                    rf"\fontsize{{8.5}}{{9.2}}\selectfont {label}\\[4pt]"
+                    rf"\zoomcell{{{representatives}}}{{{main_trim}}}"
+                    rf"{{{zoom_source}}}{{{zoom_trim}}}\end{{minipage}}"
+                )
+            else:
+                representative_cells.append(
+                    rf"\begin{{minipage}}[t]{{2.28in}}\centering"
+                    rf"\fontsize{{8.5}}{{9.2}}\selectfont {label}\\[4pt]"
+                    rf"\includegraphics[width=2.28in,trim={{{main_trim}}},clip]"
+                    rf"{{{representatives}}}\end{{minipage}}"
+                )
         tex_path = output_dir / f"{stem}.tex"
         tex_path.write_text(
             rf"""\documentclass[border=3pt]{{standalone}}
 \usepackage{{graphicx}}
 \usepackage{{array}}
+\usepackage{{tikz}}
+\usetikzlibrary{{calc}}
+\definecolor{{spyglass}}{{RGB}}{{128,28,238}}
+\newcommand{{\zoomcell}}[4]{{%
+  \begin{{tikzpicture}}[baseline=0pt]
+    \path[use as bounding box] (0,-0.79in) rectangle (2.28in,0.79in);
+    \node[inner sep=0pt] (main) at (1.39in,0)
+      {{\includegraphics[height=1.55in,trim={{#2}},clip]{{#1}}}};
+    \begin{{scope}}[
+      shift={{(main.south west)}},
+      x={{($(main.south east)-(main.south west)$)}},
+      y={{($(main.north west)-(main.south west)$)}}]
+      \draw[spyglass,dashed,line width=0.5pt] (0.62,0.565) rectangle (0.88,0.848);
+    \end{{scope}}
+    \node[inner sep=0pt] (zoom) at (0.29in,0)
+      {{\includegraphics[width=0.56in,trim={{#4}},clip]{{#3}}}};
+    \draw[spyglass,line width=0.75pt] (zoom.south west) rectangle (zoom.north east);
+  \end{{tikzpicture}}%
+}}
 \begin{{document}}
 \begin{{minipage}}{{7.15in}}
 \centering

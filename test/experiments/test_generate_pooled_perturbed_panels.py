@@ -46,5 +46,5 @@ def test_approved_paper_style_is_shared_with_appendix_generator():
             "hausdorff": (0.72, 0.78),
             "facet_gap": (0.72, 0.78),
         },
-        "ellipses": {"facet_gap": (0.65, 0.36)},
+        "ellipses": {"facet_gap": (0.72, 0.36)},
     }

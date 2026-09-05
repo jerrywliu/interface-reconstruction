@@ -110,6 +110,39 @@ def paper_markers_by_label(display_labels: Mapping[str, str]) -> dict[str, str]:
     }
 
 
+def readable_resolution_ticks(
+    values: Sequence[float],
+    *,
+    max_ticks: int = 5,
+) -> tuple[float, ...]:
+    """Choose evenly spaced log-axis labels without changing plotted samples."""
+
+    ticks = tuple(sorted({float(value) for value in values if value > 0.0}))
+    if len(ticks) > max_ticks:
+        log_min = math.log(ticks[0])
+        log_max = math.log(ticks[-1])
+        targets = (
+            log_min + index * (log_max - log_min) / (max_ticks - 1)
+            for index in range(max_ticks)
+        )
+        selected = []
+        for target in targets:
+            nearest = min(ticks, key=lambda value: abs(math.log(value) - target))
+            if nearest not in selected:
+                selected.append(nearest)
+    else:
+        selected = list(ticks)
+
+    separated = [selected[0]]
+    for value in selected[1:]:
+        if value / separated[-1] < 1.25:
+            if len(separated) > 1:
+                separated[-1] = value
+            continue
+        separated.append(value)
+    return tuple(separated)
+
+
 def apply_paper_metric_axis_style(
     axis: Axes,
     metric: str,
@@ -136,7 +169,10 @@ def apply_paper_metric_axis_style(
         collection.set_alpha(0.10)
         collection.set_linewidth(0.0)
 
-    axis.set_ylabel(PAPER_METRIC_LABELS.get(metric, metric.replace("_", " ").title()))
+    axis.set_ylabel(
+        PAPER_METRIC_LABELS.get(metric, metric.replace("_", " ").title()),
+        labelpad=9.0,
+    )
     axis.grid(False)
     axis.grid(True, which="major", color="#d1d5db", linewidth=0.45)
     axis.grid(True, which="minor", color="#e5e7eb", linewidth=0.3)
@@ -152,6 +188,7 @@ def apply_paper_metric_axis_style(
         spine.set_linewidth(0.6)
 
     if x_mode == "resolution":
+        resolution_ticks = readable_resolution_ticks(resolution_ticks)
         axis.set_xscale("log")
         axis.set_xticks(
             resolution_ticks,

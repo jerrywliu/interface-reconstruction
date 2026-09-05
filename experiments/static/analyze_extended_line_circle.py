@@ -231,7 +231,8 @@ def _plot(summary_rows: Sequence[Mapping[str, str]], output_dir: Path) -> None:
                 "Cartesian mesh" if wiggle == 0.0 else r"Perturbed mesh ($w=0.2$)"
             )
             axis.set_ylabel(
-                "Hausdorff error" if metric == "hausdorff" else "Facet-gap error"
+                "Hausdorff error" if metric == "hausdorff" else "Facet-gap error",
+                labelpad=9.0,
             )
             axis.margins(x=0.08, y=0.18)
             add_convergence_order_triangle(
@@ -254,7 +255,7 @@ def _plot(summary_rows: Sequence[Mapping[str, str]], output_dir: Path) -> None:
         columnspacing=1.0,
         handletextpad=0.45,
     )
-    fig.tight_layout(rect=(0, 0, 1, 0.94), h_pad=1.0, w_pad=1.0)
+    fig.tight_layout(rect=(0.02, 0, 1, 0.94), h_pad=1.0, w_pad=1.4)
     fig.savefig(output_dir / "line_circle_extended_convergence.pdf", bbox_inches="tight")
     fig.savefig(
         output_dir / "line_circle_extended_convergence.png",

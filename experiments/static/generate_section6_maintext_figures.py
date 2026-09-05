@@ -57,6 +57,7 @@ from experiments.plotting import (
     apply_paper_serif_style,
     draw_log_axis_break_marks,
     paper_markers_by_label,
+    readable_resolution_ticks,
 )
 from experiments.static.zalesak import (
     RANDOM_SEED as ZALESAK_RANDOM_SEED,
@@ -104,9 +105,18 @@ RESOLUTION_QUANT_SPECS = {
 }
 
 RESOLUTION_BREAK_SPECS = {
-    "squares": {"lower": (2.0e-11, 2.0e-8), "upper": (3.0e-3, 1.2)},
-    "circles": {"lower": (5.0e-11, 1.0e-8), "upper": (5.0e-5, 3.0e-1)},
-    "zalesak": {"lower": (1.0e-10, 4.0e-8), "upper": (3.0e-3, 1.2)},
+    "squares": {
+        "hausdorff": {"lower": (2.0e-11, 2.0e-8), "upper": (1.0e-1, 1.2)},
+        "facet_gap": {"lower": (2.0e-11, 2.0e-8), "upper": (3.0e-3, 3.0e-1)},
+    },
+    "circles": {
+        "hausdorff": {"lower": (5.0e-11, 1.0e-8), "upper": (3.0e-3, 3.0e-1)},
+        "facet_gap": {"lower": (5.0e-11, 1.0e-8), "upper": (3.0e-3, 3.0e-1)},
+    },
+    "zalesak": {
+        "hausdorff": {"lower": (1.0e-10, 4.0e-8), "upper": (1.0e-1, 1.2)},
+        "facet_gap": {"lower": (1.0e-10, 4.0e-8), "upper": (3.0e-3, 3.0e-1)},
+    },
 }
 
 REPRESENTATIVE_CASES = {
@@ -1526,7 +1536,7 @@ def _generate_resolution_quantitative_panel(
 
     active_axes = [ax for ax in axes if ax.axison]
     if exp_name == "ellipses":
-        resolution_ticks = sorted(
+        resolution_ticks = readable_resolution_ticks(sorted(
             {
                 STATIC_GRID_SIZE * float(value)
                 for curves in resolution_curves.values()
@@ -1534,7 +1544,7 @@ def _generate_resolution_quantitative_panel(
                 for value in series["x_values"]
                 if np.isfinite(value) and value > 0
             }
-        )
+        ))
         for ax in active_axes:
             ax.set_xscale("log")
             ax.set_yscale("log")
@@ -1550,11 +1560,6 @@ def _generate_resolution_quantitative_panel(
             ax.set_xlim(xmin, xmax)
 
     if exp_name == "ellipses" and len(active_axes) == 2:
-        ymin = min(ax.get_ylim()[0] for ax in active_axes)
-        ymax = max(ax.get_ylim()[1] for ax in active_axes)
-        for ax in active_axes:
-            ax.set_ylim(ymin, ymax)
-
         facet_gap_index = metrics.index("facet_gap")
         add_convergence_order_triangle(
             axes[facet_gap_index],
@@ -1574,7 +1579,7 @@ def _generate_resolution_quantitative_panel(
             columnspacing=0.9,
             handletextpad=0.4,
         )
-    fig.tight_layout(rect=[0, 0.04, 1, 0.79], w_pad=0.8)
+    fig.tight_layout(rect=[0.02, 0.04, 1, 0.79], w_pad=1.4)
     _save_figure(fig, out_path)
     plt.close(fig)
 
@@ -1597,6 +1602,7 @@ def _generate_broken_resolution_quantitative_panel(
     axes = []
     legend_entries = {}
     for column, metric in enumerate(metrics):
+        metric_limits = limits[metric]
         upper = fig.add_subplot(grid[0, column])
         lower = fig.add_subplot(grid[1, column], sharex=upper)
         curves = resolution_curves.get(metric)
@@ -1604,7 +1610,10 @@ def _generate_broken_resolution_quantitative_panel(
             upper.set_axis_off()
             lower.set_axis_off()
             continue
-        for axis, window in ((upper, limits["upper"]), (lower, limits["lower"])):
+        for axis, window in (
+            (upper, metric_limits["upper"]),
+            (lower, metric_limits["lower"]),
+        ):
             _draw_method_curves(
                 axis,
                 curves,
@@ -1621,8 +1630,8 @@ def _generate_broken_resolution_quantitative_panel(
                 markers_by_label=MARKERS_BY_LABEL,
             )
             axis.set_ylabel("")
-        upper.set_ylim(*limits["upper"])
-        lower.set_ylim(*limits["lower"])
+        upper.set_ylim(*metric_limits["upper"])
+        lower.set_ylim(*metric_limits["lower"])
         upper.set_title(
             f"{metric.replace('_', ' ').title()} vs cells per side",
             fontweight="normal",
@@ -1654,13 +1663,13 @@ def _generate_broken_resolution_quantitative_panel(
             columnspacing=0.9,
             handletextpad=0.4,
         )
-    fig.subplots_adjust(left=0.10, right=0.985, bottom=0.15, top=0.77)
+    fig.subplots_adjust(left=0.15, right=0.985, bottom=0.15, top=0.77)
     fig.canvas.draw()
     for column, metric in enumerate(metrics):
         upper = axes[2 * column]
         lower = axes[2 * column + 1]
         bounds = [upper.get_position(), lower.get_position()]
-        x = min(bound.x0 for bound in bounds) - 0.055
+        x = min(bound.x0 for bound in bounds) - 0.105
         y = 0.5 * (
             min(bound.y0 for bound in bounds) + max(bound.y1 for bound in bounds)
         )

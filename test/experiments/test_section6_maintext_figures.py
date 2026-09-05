@@ -31,7 +31,7 @@ def test_pooled_resolution_curves_use_all_case_values():
     assert np.allclose(curves["linear"]["p75"], [17.5])
 
 
-def test_ellipse_resolution_panel_matches_vertical_limits_and_marks_order(
+def test_ellipse_resolution_panel_uses_metric_specific_limits_and_marks_order(
     tmp_path, monkeypatch
 ):
     curves_by_metric = {
@@ -71,7 +71,7 @@ def test_ellipse_resolution_panel_matches_vertical_limits_and_marks_order(
     )
 
     axes = saved[0].axes[:2]
-    assert np.allclose(axes[0].get_ylim(), axes[1].get_ylim())
+    assert not np.allclose(axes[0].get_ylim(), axes[1].get_ylim())
     assert all(axis.get_xscale() == "log" for axis in axes)
     assert np.allclose(axes[0].get_xticks(), [32.0, 64.0, 128.0])
     assert all(axis.title.get_fontweight() == "normal" for axis in axes)

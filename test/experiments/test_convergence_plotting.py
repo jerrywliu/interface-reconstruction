@@ -11,6 +11,7 @@ from experiments.plotting import (
     add_convergence_order_triangle,
     contiguous_true_runs,
     plot_series_in_y_window,
+    readable_resolution_ticks,
 )
 
 
@@ -69,6 +70,23 @@ def test_contiguous_true_runs_returns_half_open_ranges():
     assert contiguous_true_runs([True, True, False, True, False]) == (
         (0, 2),
         (3, 4),
+    )
+
+
+def test_readable_resolution_ticks_thins_dense_labels_without_moving_endpoints():
+    assert readable_resolution_ticks((32, 50, 64, 100, 128, 150, 256, 300)) == (
+        32.0,
+        50.0,
+        100.0,
+        150.0,
+        300.0,
+    )
+    assert readable_resolution_ticks((256, 300, 512)) == (256.0, 512.0)
+    assert readable_resolution_ticks((50, 64, 100, 128, 150)) == (
+        50.0,
+        64.0,
+        100.0,
+        150.0,
     )
 
 

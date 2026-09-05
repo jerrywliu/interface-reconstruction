@@ -24,6 +24,7 @@ from experiments.plotting import (
     apply_paper_serif_style,
     draw_log_axis_break_marks,
     plot_series_in_y_window,
+    readable_resolution_ticks,
 )
 from submission.pdf_vector_qa import inspect_pdf
 
@@ -571,7 +572,7 @@ def plot_paper_figure(
                 axis.grid(True, which="major", alpha=0.30)
                 axis.tick_params(labelsize=tick_fontsize)
             panel_axes[0].set_title(title)
-            panel_axes[0].set_ylabel(ylabel)
+            panel_axes[0].set_ylabel(ylabel, labelpad=10.0)
             if len(panel_axes) == 2:
                 panel_axes[0].set_ylim(5.0e-6, 1.0e-1)
                 panel_axes[1].set_ylim(5.0e-13, 1.0e-10)
@@ -620,15 +621,19 @@ def plot_paper_figure(
         coverage_axis.set_xscale("log")
         coverage_axis.set_ylim(max(0.0, min(coverage_values) - 0.35), 100.15)
         coverage_axis.set_title("(d) Mixed-cell coverage")
-        coverage_axis.set_ylabel("Coverage (%)")
+        coverage_axis.set_ylabel("Coverage (%)", labelpad=10.0)
         coverage_axis.grid(True, which="major", alpha=0.30)
         coverage_axis.tick_params(labelsize=tick_fontsize)
 
         all_axes = [
             axis for panel_axes in metric_axes.values() for axis in panel_axes
         ] + [coverage_axis]
+        labeled_resolutions = readable_resolution_ticks(resolutions)
         for axis in all_axes:
-            axis.set_xticks(resolutions, tuple(str(value) for value in resolutions))
+            axis.set_xticks(
+                labeled_resolutions,
+                tuple(str(int(value)) for value in labeled_resolutions),
+            )
         if broken_facet_gap:
             for axis in (
                 metric_axes["native_symmetric_hausdorff"]
@@ -672,10 +677,11 @@ def plot_paper_figure(
 
         if broken_facet_gap:
             figure.subplots_adjust(
-                left=0.075,
+                left=0.10,
                 right=0.985,
                 bottom=0.185 if large_text else 0.135,
                 top=0.965,
+                wspace=0.30,
             )
         else:
             figure.tight_layout(
