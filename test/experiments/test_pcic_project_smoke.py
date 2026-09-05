@@ -6,6 +6,7 @@ from experiments.baselines.external_runner import run_external_static_baseline
 from experiments.baselines.project_benchmarks import canonical_benchmark_cases
 from experiments.baselines.run_pcic_project_smoke import (
     _complete_7x7_block,
+    _pcic_7x7_block,
     _pcic_method,
     aggregate_pcic_rows,
     run_case,
@@ -21,6 +22,36 @@ def test_complete_7x7_block_is_centered_and_rejects_boundary():
     assert all(len(column) == 7 for column in block)
     assert block[3][3] is mesh.polys[16][16]
     assert _complete_7x7_block(mesh, 2, 16) is None
+
+
+def test_zero_exterior_policy_pads_boundary_halo_with_empty_ghost_cells():
+    case = canonical_benchmark_cases("circles", (0,))[0]
+    mesh = case.build_mesh(32)
+    case.initialize_fractions(mesh)
+    block = _pcic_7x7_block(mesh, 1, 16, "zero_exterior")
+
+    assert len(block) == 7
+    assert all(len(column) == 7 for column in block)
+    assert block[3][3] is mesh.polys[1][16]
+    assert block[0][3].getFraction() == 0.0
+    assert max(point[0] for point in block[0][3].points) <= 0.0
+
+
+def test_zero_exterior_policy_removes_maity_boundary_halo_failures(tmp_path):
+    from experiments.baselines.build_maity_figure10_gallery import source_case
+
+    row = run_case(
+        source_case(),
+        10,
+        "translate_center",
+        tmp_path,
+        boundary_policy="zero_exterior",
+    )
+
+    assert row["boundary_7x7_unsupported_cells"] == 0
+    assert row["reconstructed_cells"] == 20
+    assert row["mixed_cells"] == 22
+    assert row["unresolved_cells"] == 2
 
 
 @pytest.mark.parametrize("correction", ("translate_center", "adjust_radius"))

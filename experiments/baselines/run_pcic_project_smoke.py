@@ -52,10 +52,12 @@ from main.algos.baselines.pcic import (
     source_variant_for_correction,
 )
 from main.structs.facets.linear_facet import LinearFacet
+from main.structs.polys.base_polygon import BasePolygon
 
 
 METHOD = "PCIC"
 CORRECTIONS = ("translate_center", "adjust_radius")
+BOUNDARY_POLICIES = ("unsupported", "zero_exterior")
 
 PCIC_CASE_FIELDS = CASE_FIELDS + (
     "correction",
@@ -112,12 +114,61 @@ def _complete_7x7_block(mesh, x: int, y: int):
     )
 
 
-def _pcic_method(mesh, correction: str):
+def _cartesian_cell_spacing(mesh) -> tuple[float, float]:
+    if len(mesh.polys) < 2 or len(mesh.polys[0]) < 2:
+        raise ValueError("PCIC ghost padding requires at least a 2-by-2 Cartesian mesh")
+    x0 = float(np.mean([point[0] for point in mesh.polys[0][0].points]))
+    x1 = float(np.mean([point[0] for point in mesh.polys[1][0].points]))
+    y0 = float(np.mean([point[1] for point in mesh.polys[0][0].points]))
+    y1 = float(np.mean([point[1] for point in mesh.polys[0][1].points]))
+    return x1 - x0, y1 - y0
+
+
+def _zero_exterior_ghost(mesh, x: int, y: int) -> BasePolygon:
+    nx = len(mesh.polys)
+    ny = len(mesh.polys[0])
+    source_x = min(max(x, 0), nx - 1)
+    source_y = min(max(y, 0), ny - 1)
+    spacing_x, spacing_y = _cartesian_cell_spacing(mesh)
+    shift_x = (x - source_x) * spacing_x
+    shift_y = (y - source_y) * spacing_y
+    source = mesh.polys[source_x][source_y]
+    ghost = BasePolygon(
+        [[point[0] + shift_x, point[1] + shift_y] for point in source.points]
+    )
+    ghost.setFraction(0.0)
+    ghost.setFractionTolerance(source.getFractionTolerance())
+    return ghost
+
+
+def _pcic_7x7_block(mesh, x: int, y: int, boundary_policy: str):
+    if boundary_policy not in BOUNDARY_POLICIES:
+        raise ValueError(
+            f"Unknown PCIC boundary policy {boundary_policy!r}; "
+            f"expected one of {BOUNDARY_POLICIES}"
+        )
+    block = _complete_7x7_block(mesh, x, y)
+    if block is not None or boundary_policy == "unsupported":
+        return block
+    nx = len(mesh.polys)
+    ny = len(mesh.polys[0])
+    return tuple(
+        tuple(
+            mesh.polys[x + dx][y + dy]
+            if 0 <= x + dx < nx and 0 <= y + dy < ny
+            else _zero_exterior_ghost(mesh, x + dx, y + dy)
+            for dy in range(-3, 4)
+        )
+        for dx in range(-3, 4)
+    )
+
+
+def _pcic_method(mesh, correction: str, boundary_policy: str = "unsupported"):
     variant = source_variant_for_correction(correction)
 
     def method(context: ExternalCellContext):
         x, y = context.cell_index
-        block = _complete_7x7_block(mesh, x, y)
+        block = _pcic_7x7_block(mesh, x, y, boundary_policy)
         if block is None:
             raise UnsupportedExternalCell(
                 "PCIC requires a complete Cartesian 7x7 predictor halo",
@@ -164,6 +215,7 @@ def _pcic_method(mesh, correction: str):
             {
                 "correction": correction,
                 "required_halo": "7x7",
+                "boundary_policy": boundary_policy,
                 "phase_policy": "infer_from_plic",
                 "center_translation_root_policy": "nearest_bracket",
             }
@@ -289,7 +341,11 @@ def _counter_json(rows: Sequence[Mapping[str, Any]], status: str) -> str:
 
 
 def run_case(
-    case, resolution: int, correction: str, output_directory: Path
+    case,
+    resolution: int,
+    correction: str,
+    output_directory: Path,
+    boundary_policy: str = "unsupported",
 ) -> Dict[str, Any]:
     mesh = case.build_mesh(resolution)
     case.initialize_fractions(mesh)
@@ -298,7 +354,7 @@ def run_case(
     started = time.perf_counter()
     result = run_external_static_baseline(
         mesh,
-        _pcic_method(mesh, correction),
+        _pcic_method(mesh, correction, boundary_policy),
         source_method=METHOD,
         source_variant=variant,
         config={
@@ -311,6 +367,7 @@ def run_case(
             "lls_overcrowded_radius_scale": 0.5,
             "center_translation_root_policy": "nearest_bracket",
             "required_halo": "7x7",
+            "boundary_policy": boundary_policy,
         },
     )
     runtime = time.perf_counter() - started
@@ -549,6 +606,7 @@ def run(
     resolutions: Sequence[int],
     case_indices: Sequence[int],
     corrections: Sequence[str] = CORRECTIONS,
+    boundary_policy: str = "unsupported",
 ) -> list:
     wall_started = time.perf_counter()
     output_directory.mkdir(parents=True, exist_ok=True)
@@ -580,7 +638,11 @@ def run(
             "center_translation_root": "nearest conservative bracket",
             "multi_arc_chord": "PLIC proximity/alignment; preserve all paired arcs",
         },
-        "boundary_policy": "unsupported when the complete published 7x7 predictor halo is unavailable",
+        "boundary_policy": (
+            "unsupported when the complete 7x7 predictor halo is unavailable"
+            if boundary_policy == "unsupported"
+            else "known empty exterior phase represented by zero-volume-fraction Cartesian ghost cells"
+        ),
         "curvature_metric": "unsigned absolute local error |1/|R|-kappa_truth| at each returned arc midpoint; straight-limit fallbacks use zero curvature",
         "hausdorff_metric": "symmetric sampled point-cloud smoke diagnostic with spacing min(h/128, 2.5e-3)",
         "geometry_error_metric": "sampled reconstruction-to-truth maximum with the same spacing; does not penalize missing unsupported truth segments",
@@ -598,7 +660,13 @@ def run(
                         f"case={case.case_index} N={resolution}",
                         flush=True,
                     )
-                    row = run_case(case, resolution, correction, output_directory)
+                    row = run_case(
+                        case,
+                        resolution,
+                        correction,
+                        output_directory,
+                        boundary_policy=boundary_policy,
+                    )
                     rows.append(row)
                     append_csv(case_csv, row, PCIC_CASE_FIELDS)
                     print(
@@ -644,6 +712,11 @@ def main() -> None:
     )
     parser.add_argument("--cases", default=",".join(map(str, DEFAULT_CASE_INDICES)))
     parser.add_argument("--corrections", default=",".join(CORRECTIONS))
+    parser.add_argument(
+        "--boundary-policy",
+        choices=BOUNDARY_POLICIES,
+        default="unsupported",
+    )
     args = parser.parse_args()
     run(
         args.output,
@@ -651,6 +724,7 @@ def main() -> None:
         _parse_csv(args.resolutions, int),
         _parse_csv(args.cases, int),
         _parse_csv(args.corrections, str),
+        args.boundary_policy,
     )
 
 

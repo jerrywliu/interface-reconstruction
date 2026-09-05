@@ -152,6 +152,7 @@ METHODS = (
 
 IMPLEMENTATION_PATHS = (
     Path("experiments/baselines/build_maity_figure10_gallery.py"),
+    Path("experiments/baselines/run_pcic_project_smoke.py"),
     Path("main/algos/baselines/plvira.py"),
     Path("main/algos/baselines/plvira_ghf.py"),
     Path("main/algos/baselines/pcic.py"),
@@ -404,7 +405,13 @@ def _run_external_methods(
         if not paths["plvira"].exists():
             run_plvira_case(case, resolution, roots["plvira"])
         if not paths["pcic_center"].exists():
-            run_pcic_case(case, resolution, "translate_center", roots["pcic_center"])
+            run_pcic_case(
+                case,
+                resolution,
+                "translate_center",
+                roots["pcic_center"],
+                boundary_policy="zero_exterior",
+            )
         if not paths["quasi"].exists():
             run_quasi_case(case, resolution, roots["quasi"])
         for method_id, path in paths.items():
@@ -820,7 +827,7 @@ Volume fractions are recomputed from the analytic rotated ellipse on the exact C
 ## Methods and unchanged implementation scope
 
 - `PLVIRA`: the existing Cartesian generalized-height-function PLVIRA reproduction.
-- `PCIC (center translation)`: the existing paper-facing bare-PCIC reproduction and its selected conservative center-translation correction.
+- `PCIC (center translation)`: the existing paper-facing bare-PCIC reproduction and its selected conservative center-translation correction. Because this closed ellipse has known empty exterior phase at the domain boundary, missing Cartesian halo cells are represented by zero-volume-fraction ghost cells.
 - `QUASI`: the existing frozen Cartesian port and continuity-sweep policy.
 - `Ours: circular (per-cell)`: `safe_circle`, with no graph propagation, merging, or C0 pass.
 - `Ours: circular (graph-coordinated)`: `circular`, with the production graph/merge path and no C0 pass.
@@ -842,7 +849,7 @@ The gallery does not plot the paper's `E1` area-error aggregate because this tas
 
 {coverage_lines}
 
-- PLVIRA and PCIC remain qualified Cartesian reproductions. PCIC requires the reproduction's complete `7 x 7` predictor halo, so the coarse `N=10` panel may contain explicitly unsupported cells even though the published implementation shown in Figure 10 returns a complete curve.
+- PLVIRA and PCIC remain qualified Cartesian reproductions. Zero-exterior padding removes PCIC's coarse-grid boundary-halo failures. Two `N=10` tip cells remain unresolved because the fitted circle does not cross the target-cell boundary, leaving no fitted chord for the published center-translation direction.
 - QUASI retains its frozen root, ordering, fallback, and ten-sweep stopping policies; a drawn curve does not imply that the endpoint sweep met its convergence rule.
 - The source does not identify which of its ten random ellipses supplies the representative panels, nor the exact center, semiaxes, angle, or seed. Consequently this is source-faithful to the published Figure 10 geometry and grid, but it is not a bitwise reproduction of an undisclosed random realization.
 - The source Figure 10 compares PLIC, bare PCIC, and C0-corrected PCIC. This package instead holds the source benchmark fixed and evaluates the manuscript's already-approved PLVIRA, PCIC, QUASI, and proposed-method comparison set.
@@ -963,6 +970,10 @@ def build(output: Path) -> list[Path]:
             "theta_degrees": SOURCE_THETA_DEGREES,
             "parameter_provenance": "clean values inferred from publisher Figure 10 asset",
             "scaled_project_case": case.to_dict(),
+        },
+        "boundary_policies": {
+            "pcic": "zero-volume-fraction Cartesian ghost cells for the known empty exterior phase",
+            "scope": "closed interior ellipse benchmark only",
         },
         "source_reference": source_reference,
         "methods": [dict(method) for method in METHODS],
