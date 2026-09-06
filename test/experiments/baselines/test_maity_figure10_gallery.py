@@ -68,6 +68,7 @@ def test_expected_pdf_deliverable_names_are_unique():
     names = [
         "maity_figure10_all_methods_gallery.pdf",
         "maity_figure10_all_methods_gallery_no_endpoints_2col.pdf",
+        "maity_figure10_all_methods_gallery_metrics_2page.pdf",
     ]
     names.extend(
         f"maity_fig10_{method['id']}_N{resolution}.pdf"
@@ -75,6 +76,15 @@ def test_expected_pdf_deliverable_names_are_unique():
         for resolution in gallery.SOURCE_RESOLUTIONS
     )
 
-    assert len(names) == 14
-    assert len(set(names)) == 14
+    assert len(names) == 15
+    assert len(set(names)) == 15
     assert all(Path(name).suffix == ".pdf" for name in names)
+
+
+def test_metric_title_reports_hausdorff_and_mean_gap():
+    title = gallery._metric_title(
+        {"hausdorff_distance": 1.25e-3, "facet_gap": 0.0}
+    )
+
+    assert "d_H=1.25\\times 10^{-3}" in title
+    assert "g_h=0" in title

@@ -22,6 +22,7 @@ from typing import Any, Mapping, Sequence
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
 import numpy as np
 
 from experiments.baselines.project_benchmarks import (
@@ -41,12 +42,17 @@ from main.algos.baselines.external_geometry import (
     ExternalPrimitive,
     ExternalReconstructionStatus,
 )
+from main.algos.baselines.external_metrics import (
+    shared_edge_gap_metrics,
+    symmetric_hausdorff_external,
+)
 from main.algos.baselines.project_facet_adapter import (
     external_primitives_from_facet_metadata,
 )
 from main.structs.meshes.merge_mesh import MergeMesh
 from util.initialize.areas import initializeEllipse
 from util.initialize.points import makeFineCartesianGrid
+from util.metrics.metrics import calculate_facet_gaps
 from util.reconstruction import runReconstruction
 
 
@@ -444,6 +450,9 @@ def _run_external_methods(
                 for primitive in record.primitives()
             )
             loaded[(method_id, resolution)] = primitives
+            truth = case.truth_primitives()
+            hausdorff = symmetric_hausdorff_external(primitives, truth) / DOMAIN_SIZE
+            gap = float(shared_edge_gap_metrics(result)["mean"]) / DOMAIN_SIZE
             counts = dict(result.metadata["status_counts"])
             reconstructed = counts["reconstructed"] + counts["paper_fallback"]
             rows.append(
@@ -457,6 +466,9 @@ def _run_external_methods(
                     "unresolved_cells": counts["unresolved"],
                     "primitive_count": len(primitives),
                     "facet_count": len(primitives),
+                    "hausdorff_distance": hausdorff,
+                    "facet_gap": gap,
+                    "metric_coordinates": "unit_square",
                     "geometry_path": str(path.resolve()),
                 }
             )
@@ -487,25 +499,30 @@ def _run_project_method(
         / "facets"
         / f"{CASE_INDEX}.facet_metadata.json"
     )
-    facets = None
-    if not path.exists():
-        output_dirs = _output_dirs(raw)
-        facets, _ = runReconstruction(
-            mesh,
-            method["facet_algo"],
-            bool(method["do_c0"]),
-            CASE_INDEX,
-            output_dirs,
-            algo_kwargs={
-                "plic_fallback": "LVIRA",
-                "corner_behavior_profile": "pre_f8_corner",
-                "c0_mode": "joint",
-                "c0_joint_max_nfev": 500,
-            },
-            return_polys=True,
-        )
+    output_dirs = _output_dirs(raw)
+    facets, reconstructed_polys = runReconstruction(
+        mesh,
+        method["facet_algo"],
+        bool(method["do_c0"]),
+        CASE_INDEX,
+        output_dirs,
+        algo_kwargs={
+            "plic_fallback": "LVIRA",
+            "corner_behavior_profile": "pre_f8_corner",
+            "c0_mode": "joint",
+            "c0_joint_max_nfev": 500,
+        },
+        return_polys=True,
+    )
     payload = json.loads(path.read_text(encoding="utf-8"))
     primitives = tuple(external_primitives_from_facet_metadata(payload))
+    truth = case.truth_primitives()
+    hausdorff = symmetric_hausdorff_external(primitives, truth) / DOMAIN_SIZE
+    gap = calculate_facet_gaps(
+        mesh,
+        facets,
+        reconstructed_polys=reconstructed_polys,
+    ) / DOMAIN_SIZE
     mixed_cells = int(
         np.count_nonzero(
             (np.asarray(fractions) > 1.0e-10)
@@ -521,7 +538,10 @@ def _run_project_method(
         "unsupported_cells": 0,
         "unresolved_cells": 0,
         "primitive_count": len(primitives),
-        "facet_count": len(facets) if facets is not None else len(primitives),
+        "facet_count": len(facets),
+        "hausdorff_distance": hausdorff,
+        "facet_gap": gap,
+        "metric_coordinates": "unit_square",
         "geometry_path": str(path.resolve()),
     }
 
@@ -649,6 +669,21 @@ def _style_axis(
             bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.88, "pad": 1.2},
             zorder=5,
         )
+
+
+def _scientific_math(value: float) -> str:
+    if value == 0.0:
+        return "0"
+    exponent = int(math.floor(math.log10(abs(value))))
+    mantissa = value / 10.0**exponent
+    return rf"{mantissa:.2f}\times 10^{{{exponent}}}"
+
+
+def _metric_title(summary: Mapping[str, Any]) -> str:
+    return (
+        rf"$d_H={_scientific_math(float(summary['hausdorff_distance']))}$, "
+        rf"$g_h={_scientific_math(float(summary['facet_gap']))}$"
+    )
 
 
 def _save_individual(
@@ -852,6 +887,97 @@ def _save_two_column_gallery_without_endpoints(
     return pdf, png
 
 
+def _save_two_page_metric_gallery(
+    output: Path,
+    case: ProjectBenchmarkCase,
+    loaded: Mapping[tuple[str, int], Sequence[ExternalPrimitive]],
+    summaries: Mapping[tuple[str, int], Mapping[str, Any]],
+) -> tuple[Path, tuple[Path, Path]]:
+    """Save the logical 6x2 gallery as two legible 3x2 appendix pages."""
+
+    truth = case.truth_primitives()
+    pdf = output / "maity_figure10_all_methods_gallery_metrics_2page.pdf"
+    previews = (
+        output / "maity_figure10_all_methods_gallery_metrics_page1.png",
+        output / "maity_figure10_all_methods_gallery_metrics_page2.png",
+    )
+    panel_letters = iter("abcdefghijkl")
+    with mpl.rc_context():
+        apply_paper_serif_style()
+        mpl.rcParams.update(
+            {
+                "axes.titlesize": 8.0,
+                "xtick.labelsize": 7.0,
+                "ytick.labelsize": 7.0,
+            }
+        )
+        pages = PdfPages(pdf)
+        for page_index, page_methods in enumerate((METHODS[:3], METHODS[3:])):
+            figure, axes = plt.subplots(
+                len(page_methods),
+                len(SOURCE_RESOLUTIONS),
+                figsize=(7.25, 9.25),
+                squeeze=False,
+            )
+            for method_index, method in enumerate(page_methods):
+                method_id = str(method["id"])
+                for resolution_index, resolution in enumerate(SOURCE_RESOLUTIONS):
+                    axis = axes[method_index, resolution_index]
+                    summary = summaries[(method_id, resolution)]
+                    title = (
+                        f"({next(panel_letters)}) {method['gallery_label']}, "
+                        f"$N={resolution}$\n{_metric_title(summary)}"
+                    )
+                    _style_axis(
+                        axis,
+                        method=method,
+                        resolution=resolution,
+                        truth=truth,
+                        primitives=loaded[(method_id, resolution)],
+                        summary=summary,
+                        title=title,
+                        endpoints=False,
+                    )
+                    if method_index == len(page_methods) - 1:
+                        axis.set_xlabel("$x$", fontsize=8.0)
+                    else:
+                        axis.tick_params(labelbottom=False)
+                    if resolution_index == 0:
+                        axis.set_ylabel("$y$", fontsize=8.0)
+                    else:
+                        axis.tick_params(labelleft=False)
+            family = (
+                "Reproduced higher-order methods"
+                if page_index == 0
+                else "Proposed circular variants"
+            )
+            figure.suptitle(
+                f"Maity ellipse reconstruction: {family}",
+                fontsize=9.6,
+                y=0.997,
+            )
+            figure.text(
+                0.5,
+                0.006,
+                "Dashed black: exact ellipse; colored: reconstruction. Metrics use unit-square coordinates.",
+                ha="center",
+                va="bottom",
+                fontsize=7.0,
+                color="#4b5563",
+            )
+            figure.tight_layout(
+                rect=(0.0, 0.018, 1.0, 0.98),
+                pad=0.5,
+                h_pad=1.25,
+                w_pad=0.65,
+            )
+            pages.savefig(figure, bbox_inches="tight")
+            figure.savefig(previews[page_index], bbox_inches="tight", dpi=300)
+            plt.close(figure)
+        pages.close()
+    return pdf, previews
+
+
 def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as stream:
@@ -981,6 +1107,7 @@ No reconstruction kernel or method parameter was tuned for this benchmark. The g
 - Each method's native reconstructed primitives as colored curves using the approved paper palette.
 - Native primitive endpoints as small open circles in the original overview and separate panels. The two-column overview omits these markers so the reconstructed curves remain unobstructed.
 - Coverage annotations only when a reproduction does not return a facet for every mixed cell.
+- The two-page metric gallery reports symmetric Hausdorff distance `d_H` and mean facet gap `g_h` in unit-square coordinates beside every reconstruction.
 
 The gallery does not plot the paper's `E1` area-error aggregate because this task is a representative reconstruction gallery rather than a 100-realization convergence replay.
 
@@ -997,6 +1124,7 @@ The gallery does not plot the paper's `E1` area-error aggregate because this tas
 
 - Combined appendix overview: `maity_figure10_all_methods_gallery.pdf`.
 - Two-column overview without endpoint markers: `maity_figure10_all_methods_gallery_no_endpoints_2col.pdf`.
+- Two-page appendix candidate with per-panel metrics: `maity_figure10_all_methods_gallery_metrics_2page.pdf`.
 - Separate method/resolution panels:
 
 {panel_lines}
@@ -1080,10 +1208,13 @@ def build(output: Path, geometry: str = "figure") -> list[Path]:
     clean_gallery_pdf, clean_gallery_png = _save_two_column_gallery_without_endpoints(
         output, case, loaded, summaries
     )
-    pdfs[:0] = [gallery_pdf, clean_gallery_pdf]
-    previews[:0] = [gallery_png, clean_gallery_png]
+    metric_gallery_pdf, metric_gallery_previews = _save_two_page_metric_gallery(
+        output, case, loaded, summaries
+    )
+    pdfs[:0] = [gallery_pdf, clean_gallery_pdf, metric_gallery_pdf]
+    previews[:0] = [gallery_png, clean_gallery_png, *metric_gallery_previews]
     readme = _write_readme(
-        output, case, source_reference, fraction_records, rows, pdfs[2:]
+        output, case, source_reference, fraction_records, rows, pdfs[3:]
     )
 
     manifest = {
