@@ -78,6 +78,7 @@ SOURCE_THETA_RADIANS = math.radians(SOURCE_THETA_DEGREES)
 SOURCE_RESOLUTIONS = (10, 20)
 CASE_INDEX = 0
 BENCHMARK_ID = "maity_fig10_representative_ellipse"
+EQUATION_BENCHMARK_ID = "maity_equation_ellipse"
 
 # Independent pixel fit of the representative ellipse in the publisher asset,
 # expressed in the apparent 10-by-10 grid coordinates.
@@ -162,8 +163,24 @@ IMPLEMENTATION_PATHS = (
 )
 
 
-def source_case() -> ProjectBenchmarkCase:
-    """Return the clean figure-derived Figure 10 ellipse in project units."""
+def source_case(geometry: str = "figure") -> ProjectBenchmarkCase:
+    """Return the requested Maity ellipse realization in project units."""
+
+    if geometry == "figure":
+        major_axis_unit = FIGURE_MAJOR_AXIS_UNIT
+        minor_axis_unit = FIGURE_MINOR_AXIS_UNIT
+        benchmark_id = BENCHMARK_ID
+        provenance = "clean values inferred from publisher Figure 10 asset"
+    elif geometry == "equation":
+        major_axis_unit = math.sqrt(TEXT_A_SQUARED)
+        minor_axis_unit = math.sqrt(TEXT_B_SQUARED)
+        benchmark_id = EQUATION_BENCHMARK_ID
+        provenance = (
+            "semiaxes from Maity et al. Section 3.1 equation; "
+            "center and angle inferred from publisher Figure 10 asset"
+        )
+    else:
+        raise ValueError(f"unknown Maity ellipse geometry: {geometry!r}")
 
     scale = DOMAIN_SIZE
     return ProjectBenchmarkCase(
@@ -175,12 +192,12 @@ def source_case() -> ProjectBenchmarkCase:
                 FIGURE_CENTER_UNIT[0] * scale,
                 FIGURE_CENTER_UNIT[1] * scale,
             ],
-            "major_axis": FIGURE_MAJOR_AXIS_UNIT * scale,
-            "minor_axis": FIGURE_MINOR_AXIS_UNIT * scale,
-            "aspect_ratio": FIGURE_MAJOR_AXIS_UNIT / FIGURE_MINOR_AXIS_UNIT,
+            "major_axis": major_axis_unit * scale,
+            "minor_axis": minor_axis_unit * scale,
+            "aspect_ratio": major_axis_unit / minor_axis_unit,
             "theta": SOURCE_THETA_RADIANS,
-            "benchmark_id": BENCHMARK_ID,
-            "parameter_provenance": "clean values inferred from publisher Figure 10 asset",
+            "benchmark_id": benchmark_id,
+            "parameter_provenance": provenance,
         },
     )
 
@@ -857,6 +874,50 @@ def _write_readme(
     pdfs: Sequence[Path],
 ) -> Path:
     parameters = case.parameters
+    is_equation_geometry = parameters["benchmark_id"] == EQUATION_BENCHMARK_ID
+    if is_equation_geometry:
+        source_fit_note = (
+            "The source-fit overlay documents the separate raster-inferred "
+            "realization; the selected package instead uses the semiaxes stated "
+            "in Section 3.1."
+        )
+        realization_note = (
+            "The source does not identify which random pose supplies its "
+            "representative panels. This package therefore combines the published "
+            "equation-defined semiaxes with a figure-inferred center and angle and "
+            "does not claim a bitwise reproduction of Figure 10."
+        )
+    else:
+        source_fit_note = (
+            "The selected clean values agree closely with the raster fit and "
+            "visually overlay the publisher panel."
+        )
+        realization_note = (
+            "The source does not identify which of its ten random ellipses supplies "
+            "the representative panels, nor the exact center, semiaxes, angle, or "
+            "seed. Consequently this is source-faithful to the published Figure 10 "
+            "geometry, but it is not a bitwise reproduction of an undisclosed "
+            "random realization."
+        )
+    pcic_coarse = next(
+        row
+        for row in summaries
+        if row["method_id"] == "pcic_center" and int(row["resolution"]) == 10
+    )
+    if int(pcic_coarse["unresolved_cells"]) == 0:
+        pcic_note = (
+            "PLVIRA and PCIC remain qualified Cartesian reproductions. With the "
+            "known empty exterior represented by zero-volume-fraction ghost cells, "
+            "PCIC reconstructs every mixed cell at both resolutions."
+        )
+    else:
+        pcic_note = (
+            "PLVIRA and PCIC remain qualified Cartesian reproductions. "
+            "Zero-exterior padding removes PCIC's coarse-grid boundary-halo "
+            "failures. Two `N=10` tip cells remain unresolved because the fitted "
+            "circle does not cross the target-cell boundary, leaving no fitted "
+            "chord for the published center-translation direction."
+        )
     coverage_lines = "\n".join(
         f"- `{row['method_id']}`, `N={row['resolution']}`: "
         f"{row['reconstructed_cells']}/{row['mixed_cells']} mixed cells "
@@ -888,12 +949,13 @@ def _write_readme(
 
 ## Named representative realization
 
-- Benchmark identifier: `{BENCHMARK_ID}`.
+- Benchmark identifier: `{parameters['benchmark_id']}`.
 - Independent pixel fit on the apparent `[0,10]^2` panel grid: center approximately `({DIGITIZED_FIT['center'][0]}, {DIGITIZED_FIT['center'][1]})`, semiaxes `({DIGITIZED_FIT['major_axis']}, {DIGITIZED_FIT['minor_axis']})`, and angle `{DIGITIZED_FIT['theta_degrees']}` degrees.
-- Clean figure-derived parameters used for the static benchmark: center `(0.5, 0.55)`, semiaxes `(0.35, 0.15)`, and `{SOURCE_THETA_DEGREES:g}` degrees counterclockwise in unit-square coordinates.
+- Selected parameters: center `(0.5, 0.55)`, semiaxes `({parameters['major_axis'] / DOMAIN_SIZE:.15g}, {parameters['minor_axis'] / DOMAIN_SIZE:.15g})`, and `{SOURCE_THETA_DEGREES:g}` degrees counterclockwise in unit-square coordinates.
+- Parameter provenance: {parameters['parameter_provenance']}.
 - Scaled project parameters: center `{parameters['center']}`, semiaxes `({parameters['major_axis']:.15g}, {parameters['minor_axis']:.15g})`, and aspect ratio `{parameters['aspect_ratio']:.15g}` on `[0,100]^2`.
-- The clean values agree closely with the raster fit and visually overlay the publisher panel. See `source_reference/maity_fig10_parameter_overlay.png` and `source_reference/maity_fig10_parameter_fit.json`.
-- Section 3.1's equation implies semiaxes `sqrt(0.12) = {math.sqrt(TEXT_A_SQUARED):.15g}` and `sqrt(0.02) = {math.sqrt(TEXT_B_SQUARED):.15g}`. The representative raster is better matched by `0.35` and `0.15`, so this package treats the named case as figure-derived and records the small text/figure ambiguity rather than silently conflating them.
+- {source_fit_note} See `source_reference/maity_fig10_parameter_overlay.png` and `source_reference/maity_fig10_parameter_fit.json`.
+- Section 3.1's equation implies semiaxes `sqrt(0.12) = {math.sqrt(TEXT_A_SQUARED):.15g}` and `sqrt(0.02) = {math.sqrt(TEXT_B_SQUARED):.15g}`. The representative raster is better matched by `0.35` and `0.15`, so the figure-derived and equation-defined packages remain separate rather than silently conflating them.
 
 ## Volume fractions
 
@@ -926,9 +988,9 @@ The gallery does not plot the paper's `E1` area-error aggregate because this tas
 
 {coverage_lines}
 
-- PLVIRA and PCIC remain qualified Cartesian reproductions. Zero-exterior padding removes PCIC's coarse-grid boundary-halo failures. Two `N=10` tip cells remain unresolved because the fitted circle does not cross the target-cell boundary, leaving no fitted chord for the published center-translation direction.
+- {pcic_note}
 - QUASI retains its frozen root, ordering, fallback, and ten-sweep stopping policies; a drawn curve does not imply that the endpoint sweep met its convergence rule.
-- The source does not identify which of its ten random ellipses supplies the representative panels, nor the exact center, semiaxes, angle, or seed. Consequently this is source-faithful to the published Figure 10 geometry and grid, but it is not a bitwise reproduction of an undisclosed random realization.
+- {realization_note}
 - The source Figure 10 compares PLIC, bare PCIC, and C0-corrected PCIC. This package instead holds the source benchmark fixed and evaluates the manuscript's already-approved PLVIRA, PCIC, QUASI, and proposed-method comparison set.
 
 ## Outputs
@@ -974,9 +1036,9 @@ No Overleaf or manuscript file was edited, and no result was promoted.
     return readme
 
 
-def build(output: Path) -> list[Path]:
+def build(output: Path, geometry: str = "figure") -> list[Path]:
     output.mkdir(parents=True, exist_ok=True)
-    case = source_case()
+    case = source_case(geometry)
     source_reference = _preserve_source_reference(output)
     fraction_records = [
         _write_volume_fractions(
@@ -1026,7 +1088,11 @@ def build(output: Path) -> list[Path]:
 
     manifest = {
         "schema_version": 1,
-        "study": "Maity et al. (2020) Figure 10 source-faithful ellipse gallery",
+        "study": (
+            "Maity et al. (2020) equation-defined ellipse gallery"
+            if geometry == "equation"
+            else "Maity et al. (2020) Figure 10 source-faithful ellipse gallery"
+        ),
         "analysis_git_head": _git_head(),
         "source_pdf": {
             "path": str(SOURCE_PDF),
@@ -1044,12 +1110,12 @@ def build(output: Path) -> list[Path]:
             "aggregate_case_count": 100,
         },
         "representative_realization": {
-            "benchmark_id": BENCHMARK_ID,
+            "benchmark_id": case.parameters["benchmark_id"],
             "center_unit": list(FIGURE_CENTER_UNIT),
-            "major_axis_unit": FIGURE_MAJOR_AXIS_UNIT,
-            "minor_axis_unit": FIGURE_MINOR_AXIS_UNIT,
+            "major_axis_unit": case.parameters["major_axis"] / DOMAIN_SIZE,
+            "minor_axis_unit": case.parameters["minor_axis"] / DOMAIN_SIZE,
             "theta_degrees": SOURCE_THETA_DEGREES,
-            "parameter_provenance": "clean values inferred from publisher Figure 10 asset",
+            "parameter_provenance": case.parameters["parameter_provenance"],
             "scaled_project_case": case.to_dict(),
         },
         "boundary_policies": {
@@ -1090,12 +1156,18 @@ def build(output: Path) -> list[Path]:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument(
+        "--geometry",
+        choices=("figure", "equation"),
+        default="figure",
+        help="use raster-inferred axes or the semiaxes stated in Section 3.1",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    pdfs = build(args.output)
+    pdfs = build(args.output, geometry=args.geometry)
     print(f"WROTE {len(pdfs)} PDF artifacts under {args.output}", flush=True)
 
 

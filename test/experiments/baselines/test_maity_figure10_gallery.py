@@ -19,6 +19,22 @@ def test_source_case_matches_clean_figure_derived_parameters_and_scaling():
     assert parameters["benchmark_id"] == gallery.BENCHMARK_ID
 
 
+def test_equation_case_uses_published_semiaxes_with_inferred_pose():
+    case = gallery.source_case("equation")
+    parameters = case.parameters
+
+    assert parameters["center"] == [0.5 * DOMAIN_SIZE, 0.55 * DOMAIN_SIZE]
+    assert parameters["major_axis"] / DOMAIN_SIZE == pytest.approx(math.sqrt(0.12))
+    assert parameters["minor_axis"] / DOMAIN_SIZE == pytest.approx(math.sqrt(0.02))
+    assert parameters["theta"] == pytest.approx(math.radians(40.0))
+    assert parameters["benchmark_id"] == gallery.EQUATION_BENCHMARK_ID
+
+
+def test_source_case_rejects_unknown_geometry():
+    with pytest.raises(ValueError, match="unknown Maity ellipse geometry"):
+        gallery.source_case("unknown")
+
+
 def test_text_equation_and_digitized_fit_remain_explicit_provenance():
     assert gallery.TEXT_A_SQUARED == pytest.approx(0.12)
     assert gallery.TEXT_B_SQUARED == pytest.approx(0.02)
