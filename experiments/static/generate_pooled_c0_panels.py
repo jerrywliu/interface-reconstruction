@@ -232,28 +232,43 @@ def build_benchmark_pages(output_dir: Path) -> tuple[Path, Path]:
         (0.81, 0.11, 0.94, 0.24),
         (0.31, 0.61, 0.44, 0.74),
     )
+    zalesak_panel_boxes = (
+        (0.132, 0.038, 0.460, 0.472),
+        (0.533, 0.038, 0.862, 0.472),
+        (0.132, 0.548, 0.460, 0.979),
+    )
+    zalesak_zoom_boxes = (
+        (0.008, 0.312, 0.116, 0.455),
+        (0.878, 0.312, 0.986, 0.455),
+        (0.008, 0.821, 0.116, 0.965),
+    )
     for stem, metrics, representatives, zoom_source, labels in page_specs:
         if not representatives.is_file():
             raise FileNotFoundError(
                 f"missing representative panel source: {representatives}"
             )
+        if stem.startswith("zalesak"):
+            panel_crops = zalesak_panel_boxes
+            zoom_source = representatives
+            zoom_crops = zalesak_zoom_boxes
+        else:
+            panel_crops = panel_boxes
+            zoom_crops = ellipse_zoom_boxes
         representative_cells = []
-        for index, (label, box) in enumerate(zip(labels, panel_boxes)):
-            if zoom_source is None and index == 2:
-                box = (box[0], 0.56, box[2], box[3])
+        for index, (label, box) in enumerate(zip(labels, panel_crops)):
             main_trim = _trim_for_box(representatives, box)
             if zoom_source is not None:
-                zoom_trim = _trim_for_box(zoom_source, ellipse_zoom_boxes[index])
+                zoom_trim = _trim_for_box(zoom_source, zoom_crops[index])
                 representative_cells.append(
                     rf"\begin{{minipage}}[t]{{2.28in}}\centering"
-                    rf"\fontsize{{8.5}}{{9.2}}\selectfont {label}\\[7pt]"
+                    rf"\fontsize{{8.5}}{{9.2}}\selectfont {label}\\[12pt]"
                     rf"\zoomcell{{{representatives}}}{{{main_trim}}}"
                     rf"{{{zoom_source}}}{{{zoom_trim}}}\end{{minipage}}"
                 )
             else:
                 representative_cells.append(
                     rf"\begin{{minipage}}[t]{{2.28in}}\centering"
-                    rf"\fontsize{{8.5}}{{9.2}}\selectfont {label}\\[7pt]"
+                    rf"\fontsize{{8.5}}{{9.2}}\selectfont {label}\\[12pt]"
                     rf"\includegraphics[width=2.28in,trim={{{main_trim}}},clip]"
                     rf"{{{representatives}}}\end{{minipage}}"
                 )
