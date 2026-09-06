@@ -188,6 +188,20 @@ def plot_resolution_panel(data: dict, experiment: str, output: Path) -> None:
     plt.close(fig)
 
 
+def _focus_box_within_panel(
+    panel_box: tuple[float, float, float, float],
+    focus_box: tuple[float, float, float, float],
+) -> str:
+    """Return TikZ corners for a top-left crop box within a panel crop."""
+    px0, py0, px1, py1 = panel_box
+    fx0, fy0, fx1, fy1 = focus_box
+    x0 = (fx0 - px0) / (px1 - px0)
+    x1 = (fx1 - px0) / (px1 - px0)
+    y0 = 1.0 - (fy1 - py0) / (py1 - py0)
+    y1 = 1.0 - (fy0 - py0) / (py1 - py0)
+    return f"({x0:.4f},{y0:.4f})/({x1:.4f},{y1:.4f})"
+
+
 def build_benchmark_pages(output_dir: Path) -> tuple[Path, Path]:
     ellipse_metrics = output_dir / "ellipses_appendix_c0_resolution.pdf"
     zalesak_metrics = output_dir / "zalesak_appendix_c0_resolution.pdf"
@@ -222,10 +236,10 @@ def build_benchmark_pages(output_dir: Path) -> tuple[Path, Path]:
             ),
         ),
     )
-    panel_boxes = (
-        (0.0, 0.04, 0.5, 0.5),
-        (0.5, 0.04, 1.0, 0.5),
-        (0.0, 0.54, 0.5, 1.0),
+    ellipse_panel_boxes = (
+        (0.008, 0.036, 0.452, 0.496),
+        (0.512, 0.036, 0.956, 0.496),
+        (0.008, 0.532, 0.452, 0.992),
     )
     ellipse_zoom_boxes = (
         (0.31, 0.11, 0.44, 0.24),
@@ -233,14 +247,14 @@ def build_benchmark_pages(output_dir: Path) -> tuple[Path, Path]:
         (0.31, 0.61, 0.44, 0.74),
     )
     zalesak_panel_boxes = (
-        (0.132, 0.038, 0.460, 0.472),
-        (0.533, 0.038, 0.862, 0.472),
-        (0.132, 0.548, 0.460, 0.979),
+        (0.128, 0.034, 0.465, 0.477),
+        (0.529, 0.034, 0.869, 0.477),
+        (0.128, 0.548, 0.465, 0.993),
     )
     zalesak_zoom_boxes = (
-        (0.008, 0.312, 0.116, 0.455),
-        (0.878, 0.312, 0.986, 0.455),
-        (0.008, 0.821, 0.116, 0.965),
+        (0.006, 0.307, 0.119, 0.462),
+        (0.875, 0.307, 0.993, 0.462),
+        (0.006, 0.816, 0.119, 0.972),
     )
     for stem, metrics, representatives, zoom_source, labels in page_specs:
         if not representatives.is_file():
@@ -251,24 +265,38 @@ def build_benchmark_pages(output_dir: Path) -> tuple[Path, Path]:
             panel_crops = zalesak_panel_boxes
             zoom_source = representatives
             zoom_crops = zalesak_zoom_boxes
+            source_has_zoom_annotations = True
         else:
-            panel_crops = panel_boxes
+            panel_crops = ellipse_panel_boxes
             zoom_crops = ellipse_zoom_boxes
+            source_has_zoom_annotations = False
         representative_cells = []
         for index, (label, box) in enumerate(zip(labels, panel_crops)):
             main_trim = _trim_for_box(representatives, box)
             if zoom_source is not None:
                 zoom_trim = _trim_for_box(zoom_source, zoom_crops[index])
+                if source_has_zoom_annotations:
+                    zoom_command = (
+                        rf"\sourcezoomcell{{{representatives}}}{{{main_trim}}}"
+                        rf"{{{zoom_source}}}{{{zoom_trim}}}"
+                    )
+                else:
+                    focus_corners = _focus_box_within_panel(box, zoom_crops[index])
+                    lower_left, upper_right = focus_corners.split("/")
+                    zoom_command = (
+                        rf"\zoomcell{{{representatives}}}{{{main_trim}}}"
+                        rf"{{{zoom_source}}}{{{zoom_trim}}}"
+                        rf"{{{lower_left}}}{{{upper_right}}}"
+                    )
                 representative_cells.append(
                     rf"\begin{{minipage}}[t]{{2.28in}}\centering"
-                    rf"\fontsize{{8.5}}{{9.2}}\selectfont {label}\\[12pt]"
-                    rf"\zoomcell{{{representatives}}}{{{main_trim}}}"
-                    rf"{{{zoom_source}}}{{{zoom_trim}}}\end{{minipage}}"
+                    rf"\fontsize{{8.5}}{{9.2}}\selectfont {label}\\[7pt]"
+                    rf"{zoom_command}\end{{minipage}}"
                 )
             else:
                 representative_cells.append(
                     rf"\begin{{minipage}}[t]{{2.28in}}\centering"
-                    rf"\fontsize{{8.5}}{{9.2}}\selectfont {label}\\[12pt]"
+                    rf"\fontsize{{8.5}}{{9.2}}\selectfont {label}\\[7pt]"
                     rf"\includegraphics[width=2.28in,trim={{{main_trim}}},clip]"
                     rf"{{{representatives}}}\end{{minipage}}"
                 )
@@ -280,7 +308,7 @@ def build_benchmark_pages(output_dir: Path) -> tuple[Path, Path]:
 \usepackage{{tikz}}
 \usetikzlibrary{{calc}}
 \definecolor{{spyglass}}{{RGB}}{{128,28,238}}
-\newcommand{{\zoomcell}}[4]{{%
+\newcommand{{\zoomcell}}[6]{{%
   \begin{{tikzpicture}}[baseline=0pt]
     \path[use as bounding box] (0,-0.79in) rectangle (2.28in,0.79in);
     \node[inner sep=0pt] (main) at (1.39in,0)
@@ -289,11 +317,20 @@ def build_benchmark_pages(output_dir: Path) -> tuple[Path, Path]:
       shift={{(main.south west)}},
       x={{($(main.south east)-(main.south west)$)}},
       y={{($(main.north west)-(main.south west)$)}}]
-      \draw[spyglass,dashed,line width=0.5pt] (0.62,0.565) rectangle (0.88,0.848);
+      \draw[spyglass,dashed,line width=0.5pt] #5 rectangle #6;
     \end{{scope}}
     \node[inner sep=0pt] (zoom) at (0.29in,0)
       {{\includegraphics[width=0.56in,trim={{#4}},clip]{{#3}}}};
     \draw[spyglass,line width=0.75pt] (zoom.south west) rectangle (zoom.north east);
+  \end{{tikzpicture}}%
+}}
+\newcommand{{\sourcezoomcell}}[4]{{%
+  \begin{{tikzpicture}}[baseline=0pt]
+    \path[use as bounding box] (0,-0.79in) rectangle (2.28in,0.79in);
+    \node[inner sep=0pt] at (1.39in,0)
+      {{\includegraphics[height=1.55in,trim={{#2}},clip]{{#1}}}};
+    \node[inner sep=0pt] at (0.29in,0)
+      {{\includegraphics[width=0.56in,trim={{#4}},clip]{{#3}}}};
   \end{{tikzpicture}}%
 }}
 \begin{{document}}
