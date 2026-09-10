@@ -947,12 +947,12 @@ def _save_two_page_metric_gallery(
                     else:
                         axis.tick_params(labelleft=False)
             family = (
-                "Reproduced higher-order methods"
+                "Reproduced higher-order baselines"
                 if page_index == 0
                 else "Proposed circular variants"
             )
             figure.suptitle(
-                f"Maity ellipse reconstruction: {family}",
+                f"Maity et al. ellipse test: {family}",
                 fontsize=9.6,
                 y=0.997,
             )
