@@ -445,7 +445,6 @@ def plot_paper_figure(
     png_path: Path,
     *,
     triangle_anchors: Mapping[str, tuple[float, float]] | None = None,
-    triangle_widths: Mapping[str, float] | None = None,
     methods: Sequence[Mapping[str, Any]] = PAPER_METHODS,
     figure_size: tuple[float, float] = (11.2, 8.2),
     large_text: bool = True,
@@ -584,14 +583,7 @@ def plot_paper_figure(
                 order,
                 order_label=f"{order:g}",
                 anchor=(triangle_anchors or {}).get(metric, anchor),
-                width=(triangle_widths or {}).get(
-                    metric,
-                    {
-                        "native_symmetric_hausdorff": 0.11,
-                        "geometric_curvature_mean_absolute_error": 0.155,
-                        "facet_gap": 0.105,
-                    }.get(metric, 0.11),
-                ),
+                width=0.13,
                 color="#4b5563",
                 fontsize=triangle_fontsize,
             )
