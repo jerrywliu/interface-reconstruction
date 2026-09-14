@@ -177,7 +177,7 @@ REPRESENTATIVE_CASES = {
         "resolution": 0.32,
         "wiggle": 0.10,
         "seed": 0,
-        "case_index": 12,
+        "case_index": 11,
         "methods": [
             ("ELVIRA", "ELVIRA"),
             ("LVIRA", "LVIRA"),
