@@ -146,8 +146,8 @@ ERROR_PANELS = (
     ),
     (
         "geometric_curvature_mean_absolute_error",
-        "(b) Curvature MAE",
-        "Curvature MAE",
+        "(b) Curvature error",
+        "Curvature error",
         1.0,
         (0.45, 0.66),
     ),
@@ -445,6 +445,7 @@ def plot_paper_figure(
     png_path: Path,
     *,
     triangle_anchors: Mapping[str, tuple[float, float]] | None = None,
+    triangle_width: float = 0.13,
     methods: Sequence[Mapping[str, Any]] = PAPER_METHODS,
     figure_size: tuple[float, float] = (11.2, 8.2),
     large_text: bool = True,
@@ -583,7 +584,7 @@ def plot_paper_figure(
                 order,
                 order_label=f"{order:g}",
                 anchor=(triangle_anchors or {}).get(metric, anchor),
-                width=0.13,
+                width=triangle_width,
                 color="#4b5563",
                 fontsize=triangle_fontsize,
             )

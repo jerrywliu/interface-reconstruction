@@ -73,6 +73,7 @@ def main() -> None:
         pdf_path,
         png_path,
         triangle_anchors=CIRCLE_TRIANGLE_ANCHORS,
+        triangle_width=0.11,
     )
     write_csv(win_path, win_counts)
     write_hash_ledger(hash_path, (pdf_path, png_path, win_path))

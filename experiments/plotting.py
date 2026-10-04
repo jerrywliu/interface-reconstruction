@@ -92,7 +92,7 @@ PAPER_HIGH_ORDER_COLORS = {
 PAPER_METRIC_LABELS = {
     "hausdorff": "Hausdorff error",
     "facet_gap": "Facet-gap error",
-    "curvature_error": "Curvature MAE",
+    "curvature_error": "Curvature error",
     "tangent_error": "Tangent error",
 }
 
