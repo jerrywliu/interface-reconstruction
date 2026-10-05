@@ -887,6 +887,83 @@ def _save_two_column_gallery_without_endpoints(
     return pdf, png
 
 
+def _save_one_page_metric_gallery(
+    output: Path,
+    case: ProjectBenchmarkCase,
+    loaded: Mapping[tuple[str, int], Sequence[ExternalPrimitive]],
+    summaries: Mapping[tuple[str, int], Mapping[str, Any]],
+) -> tuple[Path, Path]:
+    """Keep both resolutions adjacent for each method in a 3x4 gallery."""
+    output.mkdir(parents=True, exist_ok=True)
+    truth = case.truth_primitives()
+    with mpl.rc_context():
+        apply_paper_serif_style()
+        figure, axes = plt.subplots(3, 4, figsize=(7.25, 7.8), layout="constrained")
+        figure.set_constrained_layout_pads(w_pad=0.06, h_pad=0.08, wspace=0.04, hspace=0.04)
+        for method_index, method in enumerate(METHODS):
+            pair, row = divmod(method_index, 3)
+            for resolution_index, resolution in enumerate(SOURCE_RESOLUTIONS):
+                column = 2 * pair + resolution_index
+                axis = axes[row, column]
+                summary = summaries[(str(method["id"]), resolution)]
+                metrics = _metric_title(summary).replace(", ", "\n")
+                method_label = str(method["gallery_label"]).replace("C0", "$C^0$")
+                title = (
+                    f"({chr(ord('a') + 4 * row + column)}) {method_label}\n"
+                    f"$N={resolution}$\n{metrics}"
+                )
+                _style_axis(
+                    axis, method=method, resolution=resolution, truth=truth,
+                    primitives=loaded[(str(method["id"]), resolution)],
+                    summary=summary, title=title, endpoints=False,
+                )
+                axis.set_title(title, fontsize=8.8, pad=5.0)
+                axis.set_xticks([0.0, 0.5, 1.0])
+                axis.set_yticks([0.0, 0.5, 1.0])
+                axis.tick_params(labelsize=8.2)
+                if row == 2:
+                    axis.set_xlabel("$x$", fontsize=9.0, labelpad=3.0)
+                else:
+                    axis.tick_params(labelbottom=False)
+                if column == 0:
+                    axis.set_ylabel("$y$", fontsize=9.0, labelpad=3.0)
+                else:
+                    axis.tick_params(labelleft=False)
+        pdf = output / "maity_ellipse_gallery_metrics_1page.pdf"
+        png = pdf.with_suffix(".png")
+        figure.savefig(pdf, bbox_inches="tight", pad_inches=0.08)
+        figure.savefig(png, bbox_inches="tight", pad_inches=0.08, dpi=300)
+        plt.close(figure)
+    return pdf, png
+
+
+def replot_saved_metric_gallery(source: Path, output: Path, geometry: str) -> list[Path]:
+    """Render frozen native geometry and recorded metrics without running solvers."""
+    with (source / "reconstruction_summary.csv").open(newline="") as stream:
+        rows = list(csv.DictReader(stream))
+    summaries = {(row["method_id"], int(row["resolution"])): row for row in rows}
+    loaded = {}
+    for method in METHODS:
+        for resolution in SOURCE_RESOLUTIONS:
+            key = (str(method["id"]), resolution)
+            path = Path(summaries[key]["geometry_path"])
+            if method["family"] == "external":
+                result = ExternalBaselineResult.from_json(path)
+                loaded[key] = tuple(
+                    primitive for cell in result.cells.values()
+                    if cell.status in {
+                        ExternalReconstructionStatus.RECONSTRUCTED,
+                        ExternalReconstructionStatus.PAPER_FALLBACK,
+                    }
+                    for primitive in cell.primitives()
+                )
+            else:
+                import json
+                loaded[key] = tuple(external_primitives_from_facet_metadata(json.loads(path.read_text())))
+    pdf, _ = _save_one_page_metric_gallery(output, source_case(geometry), loaded, summaries)
+    return [pdf]
+
+
 def _save_two_page_metric_gallery(
     output: Path,
     case: ProjectBenchmarkCase,
@@ -1293,12 +1370,17 @@ def parse_args() -> argparse.Namespace:
         default="figure",
         help="use raster-inferred axes or the semiaxes stated in Section 3.1",
     )
+    parser.add_argument("--replot-from", type=Path, help="render the one-page metric gallery from a saved reconstruction_summary.csv package")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    pdfs = build(args.output, geometry=args.geometry)
+    pdfs = (
+        replot_saved_metric_gallery(args.replot_from, args.output, args.geometry)
+        if args.replot_from is not None
+        else build(args.output, geometry=args.geometry)
+    )
     print(f"WROTE {len(pdfs)} PDF artifacts under {args.output}", flush=True)
 
 
