@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from experiments.plotting import (
+    apply_paper_metric_axis_style,
     add_convergence_order_triangle,
     add_shared_vertical_metric_label,
     align_axes_below_figure_legend,
@@ -220,4 +221,26 @@ def test_iqr_crossing_omitted_range_is_visible_in_both_retained_bands():
 
     assert len(upper.collections) == 1
     assert len(lower.collections) == 1
+    plt.close(figure)
+
+
+def test_windowed_fragments_keep_method_style_and_one_legend_entry():
+    figure, axis = plt.subplots()
+    plot_series_in_y_window(
+        axis, [32, 64, 128, 150], [1e-9, 1e-4, 2e-9, 3e-9],
+        [1e-10, 1e-5, 1e-9, 2e-9], [2e-9, 2e-4, 3e-9, 4e-9],
+        y_window=(1e-10, 1e-8), label="Per-cell circular",
+        line_kwargs={"marker": "o", "color": "gold"}, fill_kwargs={},
+    )
+    axis.plot([32, 150], [1e-10, 1e-10], label="Solver floor", linestyle=":")
+    apply_paper_metric_axis_style(
+        axis, "curvature_error", "perturbation",
+        markers_by_label={"Per-cell circular": "^"},
+    )
+    fragments = axis.get_lines()[:2]
+    assert [line.get_marker() for line in fragments] == ["^", "^"]
+    assert [line.get_linewidth() for line in fragments] == [1.2, 1.2]
+    assert [list(line.get_xdata()) for line in fragments] == [[32], [128, 150]]
+    assert axis.get_legend_handles_labels()[1] == ["Per-cell circular", "Solver floor"]
+    assert axis.get_lines()[-1].get_marker() == "None"
     plt.close(figure)

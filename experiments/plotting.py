@@ -247,7 +247,9 @@ def apply_paper_metric_axis_style(
         else []
     )
     for line in axis.get_lines():
-        marker = markers_by_label.get(line.get_label())
+        marker = markers_by_label.get(
+            getattr(line, "_paper_series_label", line.get_label())
+        )
         if marker is None:
             line.set_linewidth(0.9)
             continue
@@ -327,12 +329,14 @@ def plot_series_in_y_window(
     visible = finite & (median >= lower) & (median <= upper)
     labelled = False
     for start, stop in contiguous_true_runs(visible):
-        axis.plot(
+        (line,) = axis.plot(
             x_values[start:stop],
             median[start:stop],
             label=label if not labelled else "_nolegend_",
             **line_kwargs,
         )
+        # Keep the series identity for styling without duplicating legend entries.
+        line._paper_series_label = label
         labelled = True
 
     finite_band = finite & np.isfinite(q25) & np.isfinite(q75)
