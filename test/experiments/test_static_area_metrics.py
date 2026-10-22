@@ -170,7 +170,11 @@ def test_square_driver_uses_active_polygons_returned_by_reconstruction(
     monkeypatch.setattr(squares, "setupOutputDirs", lambda *args, **kwargs: output_dirs)
     monkeypatch.setattr(squares, "write_run_manifest", lambda *args, **kwargs: None)
     monkeypatch.setattr(squares, "make_points_from_config", lambda config: [])
-    monkeypatch.setattr(squares, "MergeMesh", lambda *args, **kwargs: mesh)
+    def make_mesh(*args, **kwargs):
+        return mesh
+
+    make_mesh.default_c0_mode = squares.MergeMesh.default_c0_mode
+    monkeypatch.setattr(squares, "MergeMesh", make_mesh)
     monkeypatch.setattr(squares, "writeMesh", lambda *args, **kwargs: None)
     monkeypatch.setattr(squares, "initializePoly", lambda *args, **kwargs: [])
     monkeypatch.setattr(squares, "plotAreas", lambda *args, **kwargs: None)

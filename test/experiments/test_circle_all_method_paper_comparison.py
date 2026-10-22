@@ -22,8 +22,8 @@ def test_circle_paper_figure_reuses_exact_ellipse_style_contract():
         ),
         (
             "geometric_curvature_mean_absolute_error",
-            "(b) Curvature MAE",
-            "Curvature MAE",
+            "(b) Curvature error",
+            "Curvature error",
             1.0,
             (0.45, 0.66),
         ),

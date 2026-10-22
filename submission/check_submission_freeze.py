@@ -22,12 +22,28 @@ GENERATED_WORKTREE_ROOTS = frozenset(
 )
 
 
-def active_paper_figures() -> set[str]:
+def active_paper_figures(paper: Path = PAPER) -> set[str]:
+    """Follow the manuscript's inputs; exclude dormant and review-only sources."""
     figures: set[str] = set()
-    for tex_path in PAPER.rglob("*.tex"):
-        for raw_line in tex_path.read_text(encoding="utf-8").splitlines():
-            line = raw_line.split("%", 1)[0]
-            figures.update(INCLUDE_RE.findall(line))
+    visited: set[Path] = set()
+
+    def visit(tex_path: Path) -> None:
+        tex_path = tex_path.resolve()
+        if tex_path in visited:
+            return
+        visited.add(tex_path)
+        source = "\n".join(
+            line.split("%", 1)[0]
+            for line in tex_path.read_text(encoding="utf-8").splitlines()
+        )
+        figures.update(INCLUDE_RE.findall(source))
+        for name in re.findall(r"\\input\{([^}]+)\}", source):
+            target = paper / name
+            if not target.suffix:
+                target = target.with_suffix(".tex")
+            visit(target)
+
+    visit(paper / "interface-reconstruction.tex")
     return figures
 
 

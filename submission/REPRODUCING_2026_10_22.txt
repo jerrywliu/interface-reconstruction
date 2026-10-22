@@ -1,0 +1,125 @@
+JCP submission software and data release, 2026-10-22
+=================================================
+
+Release and data:
+https://github.com/jerrywliu/interface-reconstruction/releases/tag/jcp-submission-2026-10-22
+
+This tag preserves the current implementation, including self-contained
+PLVIRA, PCIC, and QUASI comparisons, and the approved manuscript workflows.
+The data archives preserve their original provenance. The primary static
+sweep used commit 505aefa454328d4ba34ade5e7247050a0acfc793; subsequent
+comparisons record their own source commits and parameters. The current tag
+is not a claim that all historical results were generated with today's code.
+
+1. Install and check
+--------------------
+Use Python 3.9 and requirements-test.txt; see docs/DEPENDENCIES.md for the
+validated numerical environment. From the repository root:
+
+  python3.9 -m venv .venv
+  source .venv/bin/activate
+  python -m pip install -r requirements-test.txt
+  MPLBACKEND=Agg python -m pytest -q test
+
+The manuscript-inventory integration check requires the separate paper
+checkout at ../overleaf/interface-reconstruction-paper and is skipped when
+that checkout is absent. Reconstruction and metric tests do not require it.
+No Slack credentials are required. The live Slack integration test is opt-in.
+
+2. Download and verify the saved data
+------------------------------------
+Download the release's *.tar.gz, *-inventory.csv, SHA256SUMS,
+data_manifest.json, and release_audit.txt assets. Verify SHA256SUMS before
+extracting. The supplemental archive is split into numbered parts because of the upload
+limit. First concatenate those parts:
+
+  cat supplemental-data.tar.gz.part-* > supplemental-data.tar.gz
+
+Then extract all four archives at the code repository root; archive paths
+are repository-relative. Inventories give every deposited file's size and
+SHA-256 digest. Do not overwrite an existing research output directory.
+
+primary-static-data.tar.gz contains the COMPLETE sealed primary sweep:
+970 runs, 24,250 cases, original raw bundles, source snapshot, diagnostics,
+environment, resolved configuration, and original full-release SHA256SUMS.
+After extraction, repeat the scientific and full checksum audit:
+
+  python submission/audit_final_release.py \
+    results/static/submission_static_20260731_012430_505aefa45432.sealed \
+    --verify-sha256-manifest
+
+higher-order-comparison-data.tar.gz contains experiments/baselines/results.
+Accepted circle and extended ellipse data are in:
+  circle_all_method_25case_comparison_20260814
+  ellipse_all_method_25case_extended_comparison_20260814
+The Cartesian Zalesak comparison is zalesak_25case_20261004 (1,400 matched
+case rows, 56 summaries, eight resolutions, seven methods). Its original
+review_only flag predates author approval to add the saved gallery to the
+appendix; the data and original manifest have not been rewritten.
+Historical smokes and invalid exploratory comparisons are retained for
+provenance, but are not additional manuscript results. In particular, do not
+use directories marked invalid_centroid_validator as accepted PLVIRA data.
+
+supplemental-data.tar.gz contains the native-curvature replay, topology and
+primitive-incidence diagnostics, joint-C0 runs, accepted figure/review
+provenance, extended line-circle study, and later Zalesak raw project runs.
+project-reconstruction-data.tar.gz contains the circle/ellipse project runs
+underlying the higher-order comparisons, including joint-C0 results.
+Research data are CC-BY-4.0; source/script files remain Apache-2.0.
+
+3. Reproduce figures from saved data
+------------------------------------
+Primary pooled Appendix B panels, with native curvature for curved shapes:
+
+  python -m experiments.static.generate_pooled_perturbed_panels \
+    --output results/reproduced/appendix
+
+Main-text quantitative panels use the same case pooling. The primary sweep's
+raw_runs directory can be supplied directly as --plots_root. For all CLI
+options and the saved-geometry representative panels, inspect:
+
+  python -m experiments.static.generate_section6_maintext_figures --help
+
+Use --resolution_aggregation pooled_cases and --case_metrics_csv pointing to
+the sealed diagnostics/case_metrics.csv, plus --csv pointing to the sealed
+perturbed_sweep.csv. Do not use the historical camera-ready CSV default.
+
+Higher-order circle and extended ellipse panels (saved metrics, no reruns):
+
+  python -m experiments.baselines.plot_circle_all_method_paper_comparison \
+    --output-root results/reproduced/circle
+  python -m experiments.baselines.plot_ellipse_all_method_paper_comparison \
+    --output-root results/reproduced/ellipse
+
+For native geometry, case matching, finite coverage and numerical policy
+qualifications, see docs/baselines/CIRCLE_25CASE_HIGH_ORDER_COMPARISON.md,
+ELLIPSE_25CASE_EXTENDED_PAPER_FIGURE.md, and the individual implementation
+notes. The manuscript reports PCIC center translation consistently.
+
+For joint-C0 pooled panels, use
+experiments/static/generate_pooled_c0_panels.py. For galleries, use
+experiments/baselines/build_maity_figure10_gallery.py (including its
+replot_saved_metric_gallery function). The portable Zalesak builder is:
+
+  python -m experiments.baselines.plot_zalesak_reconstruction_gallery \
+    --output-root results/reproduced/zalesak
+
+It verifies the frozen case-table digest and resolves original workspace paths
+beneath the current clone. The original review scripts remain in the data archive.
+Historical scripts may record the original author's absolute workspace
+prefix. Their CSV/JSON paths are provenance, not portable defaults; resolve
+the portion beginning plots/, results/, or experiments/ beneath your clone.
+
+The separate manuscript repository retains the native TikZ sources and
+figs/tikz/build_dejavu_tikz_figures.py for the explanatory diagrams.
+submission/figure_provenance.csv pins every active manuscript PDF by hash.
+Exact PDF hashes pin the approved layout; scientific numerical reproduction
+should compare saved observables within the stated solver tolerances.
+
+4. Rerun the full scientific sweep only when needed
+--------------------------------------------------
+The original full sweep is not the quick start. Its exact source snapshot is
+inside the sealed release. Reconstruct the recorded Python environment and
+use submission/submission_config.json from that snapshot to reproduce it.
+Do not relabel a run with newer defaults as the original frozen result.
+The current README quick start runs one deterministic circle case.

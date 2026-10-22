@@ -2,6 +2,10 @@
 
 An example implementation in Python of an interface reconstruction method, using linear/circular elements and cusps.
 
+## Submission code and data
+
+The [versioned JCP submission release](https://github.com/jerrywliu/interface-reconstruction/releases/tag/jcp-submission-2026-10-22) contains the complete audited primary benchmark data and the later higher-order comparisons, with file inventories and SHA-256 checksums. See [reproduction instructions](submission/REPRODUCING_2026_10_22.txt) for installation, data extraction, and figure regeneration. Source code is Apache-2.0; research data are CC-BY-4.0 (see `LICENSE`, `DATA_LICENSE`, and `NOTICE`).
+
 ## Quick Start
 
 This repository includes current paper workflows alongside historical research
@@ -66,6 +70,7 @@ Our algorithms consist of two main features:
 - **Youngs**
 - **ELVIRA**
 - **LVIRA**
+- **PLVIRA**, **PCIC**, and **QUASI** on Cartesian meshes; see `docs/baselines/` for implementation and reproduction qualifications.
 
 #### Our Algorithms
 

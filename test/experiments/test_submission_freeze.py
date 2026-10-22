@@ -2,10 +2,12 @@ import csv
 import json
 import subprocess
 import sys
+import pytest
 
 from submission.check_submission_freeze import (
     CONFIG_PATH,
     PROVENANCE_PATH,
+    PAPER,
     REPO,
     active_paper_figures,
     expected_run_count,
@@ -21,6 +23,7 @@ def test_submission_scope_matches_machine_readable_totals():
     assert runs * config["benchmark_grid"]["trials_per_setting"] == 24250
 
 
+@pytest.mark.skipif(not PAPER.is_dir(), reason="requires the separate manuscript checkout")
 def test_all_active_paper_figures_have_provenance_rows():
     with PROVENANCE_PATH.open(newline="", encoding="utf-8") as stream:
         recorded = {row["paper_file"] for row in csv.DictReader(stream)}
